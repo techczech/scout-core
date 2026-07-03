@@ -1,1 +1,2 @@
-// scout-archive: filled in Task 3
+pub mod idempotency;
+pub mod markdown;
