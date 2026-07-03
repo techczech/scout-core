@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/scout-index", "crates/scout-archive"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/techczech/scout-core"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "=0.31.0", features = ["bundled"] }
+regex = "1.12.4"
+slug = "0.1.6"
+sha1 = "0.11.0"

@@ -1,0 +1,24 @@
+{
+  "name": "@scout/query",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "./packages/scout-query/dist/index.js",
+  "types": "./packages/scout-query/dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./packages/scout-query/dist/index.d.ts",
+      "default": "./packages/scout-query/dist/index.js"
+    }
+  },
+  "files": ["packages/scout-query/dist", "packages/scout-query/src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2",
+    "vitest": "^2.1.4"
+  }
+}
