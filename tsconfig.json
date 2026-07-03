@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "declaration": true,
+    "outDir": "packages/scout-query/dist",
+    "rootDir": "packages/scout-query/src",
+    "skipLibCheck": true
+  },
+  "include": ["packages/scout-query/src"]
+}
