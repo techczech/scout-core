@@ -330,7 +330,7 @@ impl Hits {
             );
             let line = rec.line_start as usize + original[..ns].matches('\n').count();
             let doc = self.doc(h);
-            let abs = c.config.root().join(&rec.rel);
+            let abs = c.config.source_path(&rec.rel);
             out.push(KwicLine {
                 corpus: c.id().to_string(),
                 passage_id: format!("{}:{}:{}", c.id(), rec.rel, rec.line_start),
@@ -346,11 +346,7 @@ impl Hits {
                 node: original[ns..ne].to_string(),
                 right: original[ne..re].to_string(),
                 node_offset: ns,
-                link: c
-                    .config
-                    .link
-                    .as_deref()
-                    .map(|t| cite::render_link(t, &abs, line)),
+                link: c.config.link_for(&rec.rel, line),
             });
         }
         Ok(out)

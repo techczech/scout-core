@@ -4,9 +4,10 @@
 //! platform data dir, never inside a source folder, and a `--force` rebuild
 //! deletes the file and builds from scratch.
 
+use crate::adapter::{self, DocRecord};
 use crate::markdown::{self, SourceFile};
 use crate::normalize;
-use crate::registry::{CorpusConfig, CorpusKind};
+use crate::registry::CorpusConfig;
 use crate::tokenize::{tokenize, IdentityLemmatizer};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -18,7 +19,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/4";
+pub const ENGINE_VERSION: &str = "scout-corpus/5";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.
@@ -117,6 +118,7 @@ fn fingerprint(cfg: &CorpusConfig) -> String {
         "field_map": cfg.field_map,
         "default_author": cfg.default_author,
         "boilerplate": cfg.boilerplate,
+        "document_unit": cfg.document_unit,
     });
     hex_sha1(v.to_string().as_bytes())
 }
@@ -148,6 +150,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
             summary TEXT,
             author TEXT,
             public_url TEXT,
+            kind TEXT,
+            source TEXT,
+            date_source TEXT,
+            handle TEXT,
             passages INTEGER NOT NULL,
             tokens INTEGER NOT NULL
         );
@@ -159,7 +165,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
             line_end INTEGER NOT NULL,
             original TEXT NOT NULL,
             normalized TEXT NOT NULL,
-            tokens INTEGER NOT NULL
+            tokens INTEGER NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]',
+            color TEXT,
+            saved_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_passages_doc ON passages(rel_path, line_start);
         CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(tokens, tokenize = \"{FTS_TOKENIZE}\");
@@ -226,14 +235,27 @@ pub struct IndexStatus {
     pub stale: Option<StaleFiles>,
 }
 
+/// SQL matching the document keys of one source file: the file itself, or
+/// `<file>#<fragment>` when it holds several documents.
+const OF_FILE: &str = "(rel_path = ?1 OR substr(rel_path, 1, length(?1) + 1) = ?1 || '#')";
+
+/// Remove a source file and every document it produced.
 fn delete_doc(conn: &Connection, rel_path: &str) -> Result<()> {
     conn.execute(
-        "DELETE FROM passages_fts WHERE rowid IN (SELECT id FROM passages WHERE rel_path = ?1)",
+        &format!(
+            "DELETE FROM passages_fts WHERE rowid IN (SELECT id FROM passages WHERE {OF_FILE})"
+        ),
         [rel_path],
     )?;
-    conn.execute("DELETE FROM passages WHERE rel_path = ?1", [rel_path])?;
-    conn.execute("DELETE FROM documents WHERE rel_path = ?1", [rel_path])?;
-    conn.execute("DELETE FROM titles_fts WHERE rel_path = ?1", [rel_path])?;
+    conn.execute(&format!("DELETE FROM passages WHERE {OF_FILE}"), [rel_path])?;
+    conn.execute(
+        &format!("DELETE FROM documents WHERE {OF_FILE}"),
+        [rel_path],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM titles_fts WHERE {OF_FILE}"),
+        [rel_path],
+    )?;
     conn.execute("DELETE FROM files WHERE rel_path = ?1", [rel_path])?;
     Ok(())
 }
@@ -246,26 +268,35 @@ fn index_file(
     text: &str,
     hash: &str,
 ) -> Result<bool> {
-    let parsed = markdown::parse_file(text);
-    let is_doc = markdown::is_document(cfg, &parsed);
+    let docs = adapter::records(cfg, &f.rel_path, text);
+    let is_doc = !docs.is_empty();
     conn.execute(
         "INSERT INTO files (rel_path, mtime_ns, size, hash, is_doc) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![f.rel_path, f.mtime_ns, f.size, hash, is_doc as i64],
     )?;
-    if !is_doc {
-        return Ok(false);
+    for d in &docs {
+        index_doc(conn, rules, f, d)?;
     }
-    let meta = markdown::doc_meta(cfg, &parsed);
+    Ok(is_doc)
+}
+
+fn index_doc(
+    conn: &Connection,
+    rules: &[regex::Regex],
+    f: &SourceFile,
+    d: &DocRecord,
+) -> Result<()> {
+    let meta = &d.meta;
     let lang = meta.lang.clone();
     let mut ins_p = conn.prepare_cached(
-        "INSERT INTO passages (rel_path, ord, line_start, line_end, original, normalized, tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO passages (rel_path, ord, line_start, line_end, original, normalized, tokens, tags, color, saved_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
     let mut ins_f =
         conn.prepare_cached("INSERT INTO passages_fts (rowid, tokens) VALUES (?1, ?2)")?;
     let mut n_pass = 0i64;
     let mut n_tok = 0i64;
-    for p in markdown::split_passages(&parsed) {
+    for p in &d.passages {
         let m = normalize::normalize(&p.original, rules);
         let toks = tokenize(&m.text, &IdentityLemmatizer, lang.as_deref());
         if toks.is_empty() {
@@ -277,13 +308,16 @@ fn index_file(
             .collect::<Vec<_>>()
             .join(" ");
         ins_p.execute(params![
-            f.rel_path,
+            d.key,
             n_pass,
             p.line_start as i64,
             p.line_end as i64,
             p.original,
             m.text,
-            toks.len() as i64
+            toks.len() as i64,
+            serde_json::to_string(&p.tags)?,
+            p.color,
+            p.saved_at
         ])?;
         let id = conn.last_insert_rowid();
         ins_f.execute(params![id, joined])?;
@@ -297,10 +331,10 @@ fn index_file(
             .unwrap_or_default()
     });
     conn.execute(
-        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, public_url, passages, tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, public_url, kind, source, date_source, handle, passages, tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
-            f.rel_path,
+            d.key,
             title,
             meta.date,
             meta.genre,
@@ -309,22 +343,28 @@ fn index_file(
             meta.summary,
             meta.author,
             meta.public_url,
+            meta.kind,
+            meta.source,
+            meta.date_source,
+            meta.handle,
             n_pass,
             n_tok
         ],
     )?;
-    let title_norm = normalize::normalize(&title, &[]);
-    let title_toks = tokenize(&title_norm.text, &IdentityLemmatizer, lang.as_deref());
-    let joined = title_toks
-        .iter()
-        .map(|t| t.lemma.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    conn.execute(
-        "INSERT INTO titles_fts (rel_path, tokens) VALUES (?1, ?2)",
-        params![f.rel_path, joined],
-    )?;
-    Ok(true)
+    if d.index_title {
+        let title_norm = normalize::normalize(&title, &[]);
+        let title_toks = tokenize(&title_norm.text, &IdentityLemmatizer, lang.as_deref());
+        let joined = title_toks
+            .iter()
+            .map(|t| t.lemma.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        conn.execute(
+            "INSERT INTO titles_fts (rel_path, tokens) VALUES (?1, ?2)",
+            params![d.key, joined],
+        )?;
+    }
+    Ok(())
 }
 
 fn totals(conn: &Connection) -> Result<(i64, i64, i64)> {
@@ -337,13 +377,6 @@ fn totals(conn: &Connection) -> Result<(i64, i64, i64)> {
 
 /// Build or update the index at `path` for `cfg`.
 pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport> {
-    if cfg.kind != CorpusKind::MarkdownFolder {
-        bail!(
-            "corpus {:?}: kind {} is not indexable yet (planned for a later release)",
-            cfg.id,
-            cfg.kind.as_str()
-        );
-    }
     let started = Instant::now();
     let root = cfg.root();
     if let (Ok(r), Some(dir)) = (root.canonicalize(), path.parent()) {
@@ -438,7 +471,9 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
         )?;
     }
     let (docs, passages, tokens) = totals(&conn)?;
-    let not_docs: i64 = conn.query_row("SELECT COUNT(*) FROM files WHERE is_doc = 0", [], |r| r.get(0))?;
+    let not_docs: i64 = conn.query_row("SELECT COUNT(*) FROM files WHERE is_doc = 0", [], |r| {
+        r.get(0)
+    })?;
     let not_docs = not_docs as usize;
     Ok(BuildReport {
         corpus: cfg.id.clone(),
@@ -505,7 +540,7 @@ pub fn status(cfg: &CorpusConfig, path: &Path) -> Result<IndexStatus> {
     st.built_at = meta_get(&conn, "built_at")?;
     st.config_current =
         meta_get(&conn, "fingerprint")?.as_deref() == Some(fingerprint(cfg).as_str());
-    if cfg.kind == CorpusKind::MarkdownFolder && cfg.root().is_dir() {
+    if cfg.root().is_dir() {
         let mut existing: BTreeMap<String, (i64, i64)> = BTreeMap::new();
         let mut q = conn.prepare("SELECT rel_path, mtime_ns, size FROM files")?;
         for row in q.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?))))? {

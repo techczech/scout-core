@@ -1,16 +1,30 @@
-//! Plain search (T1): words are prefix-matched and ANDed; `"quoted phrases"`
-//! match consecutive tokens. Bare stopwords are dropped unless every word is
-//! one. Hits are passages grouped by document; quotes are original text.
+//! Search with the `@scout/query` grammar (T2), over passages, grouped by
+//! document. Quotes are original text.
+//!
+//! - Plain text keeps T1's behaviour: every bare word is prefix-matched and
+//!   the words are ANDed (also for three or more words, unlike Highlight
+//!   Scout's OR-by-coverage); bare stopwords are dropped unless every term is
+//!   one; `"quoted phrases"` match consecutive tokens exactly.
+//! - `OR` / `|` separates AND-groups (AND binds tighter); `AND` is the
+//!   default; `-x` excludes passages with a token starting `x`; `x*` is an
+//!   explicit prefix; `/regex/i` must match the passage's original text.
+//! - Document fields: `in: after: before: y: lang: genre: source: zo: ty:
+//!   au: ti:` ([`crate::filter::apply_query_fields`]). Passage fields:
+//!   `tag:` (a highlight's tags or a document's topics) and `co:` (a
+//!   highlight's colour).
+//! - A query with no positive term but with filters or a regex lists every
+//!   passage that passes them (score 0).
 
 use crate::cite::{self, CiteFormat, CiteSource};
+use crate::filter::{DocFilter, DocInfo};
 use crate::normalize;
 use crate::registry::CorpusConfig;
 use crate::stopwords::is_stopword;
 use crate::tokenize::{tokenize, words, IdentityLemmatizer};
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -37,7 +51,8 @@ impl SearchRequest {
     }
 }
 
-/// One query term: a prefix-matched word or an exact phrase of tokens.
+/// One query term over index tokens: a prefix-matched word or an exact
+/// phrase of tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "tokens", rename_all = "snake_case")]
 pub enum Term {
@@ -48,54 +63,192 @@ pub enum Term {
 impl Term {
     fn fts(&self) -> String {
         match self {
-            Term::Prefix(t) => format!("\"{t}\"*"),
-            Term::Phrase(ts) => format!("\"{}\"", ts.join(" ")),
+            Term::Prefix(t) => format!("\"{}\"*", t.replace('"', "\"\"")),
+            Term::Phrase(ts) => format!("\"{}\"", ts.join(" ").replace('"', "\"\"")),
         }
+    }
+
+    fn from_free(t: &scout_query::FreeTerm) -> Vec<Term> {
+        let toks = words(&normalize::normalize(&t.text, &[]).text);
+        match t.form {
+            scout_query::TermForm::Phrase if !toks.is_empty() => vec![Term::Phrase(toks)],
+            scout_query::TermForm::Phrase => vec![],
+            // A bare word or `x*`: each token prefix-matched (a hyphenated
+            // word gives several, ANDed), as in T1.
+            _ => toks.into_iter().map(Term::Prefix).collect(),
+        }
+    }
+
+    fn is_stop(&self) -> bool {
+        matches!(self, Term::Prefix(t) if is_stopword(t))
     }
 }
 
-/// Parse a plain query into terms.
+/// A query compiled for the index: positive AND-groups joined by OR, the
+/// excluded terms, and the filters.
+#[derive(Debug, Clone, Serialize)]
+pub struct Plan {
+    pub any_of: Vec<Vec<Term>>,
+    pub not: Vec<Term>,
+    #[serde(rename = "filters")]
+    pub filter: DocFilter,
+    /// `in:` corpus ids.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corpora: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub regexes: Vec<String>,
+    /// Grammar fields this engine cannot apply (`i:`), named so a caller
+    /// can say so.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
+    #[serde(skip)]
+    compiled: Vec<regex::Regex>,
+}
+
+impl Plan {
+    pub fn parse(query: &str) -> Result<Plan> {
+        let q = scout_query::parse_query(&normalize::unify_quotes_str(query));
+        let mut any_of: Vec<Vec<Term>> = q
+            .any_of
+            .iter()
+            .map(|g| {
+                let mut terms: Vec<Term> = Vec::new();
+                for t in g.iter().flat_map(Term::from_free) {
+                    if !terms.contains(&t) {
+                        terms.push(t);
+                    }
+                }
+                terms
+            })
+            .collect();
+        // T1: bare stopwords go unless every positive term is one.
+        if any_of.iter().flatten().any(|t| !t.is_stop()) {
+            for g in any_of.iter_mut() {
+                g.retain(|t| !t.is_stop());
+            }
+        }
+        any_of.retain(|g| !g.is_empty());
+        let not = q.not.iter().flat_map(Term::from_free).collect();
+        let p = &q.parsed;
+        let mut filter = DocFilter::default();
+        let corpora = crate::filter::apply_query_fields(p, &mut filter)?;
+        let mut compiled = Vec::new();
+        let mut regexes = Vec::new();
+        for r in &p.regexes {
+            let mut b = regex::RegexBuilder::new(&r.source);
+            b.case_insensitive(r.flags.contains('i'))
+                .multi_line(r.flags.contains('m'))
+                .dot_matches_new_line(r.flags.contains('s'));
+            compiled.push(
+                b.build()
+                    .map_err(|e| anyhow!("bad regex /{}/{}: {e}", r.source, r.flags))?,
+            );
+            regexes.push(format!("/{}/{}", r.source, r.flags));
+        }
+        let mut ignored = Vec::new();
+        if p.has_image {
+            ignored.push("i:".to_string());
+        }
+        let nonempty = |v: &Option<String>| v.clone().filter(|v| !v.trim().is_empty());
+        Ok(Plan {
+            any_of,
+            not,
+            filter,
+            corpora,
+            tag: nonempty(&p.tag),
+            color: nonempty(&p.color),
+            regexes,
+            ignored,
+            compiled,
+        })
+    }
+
+    /// Every positive term, in order (for locating the quote).
+    pub fn terms(&self) -> Vec<Term> {
+        let mut out: Vec<Term> = Vec::new();
+        for t in self.any_of.iter().flatten() {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+        }
+        out
+    }
+
+    pub fn has_positive(&self) -> bool {
+        !self.any_of.is_empty()
+    }
+
+    /// Anything that selects passages without a positive term.
+    fn has_selector(&self) -> bool {
+        !self.filter.is_empty()
+            || self.tag.is_some()
+            || self.color.is_some()
+            || !self.compiled.is_empty()
+            || !self.not.is_empty()
+    }
+
+    fn positive_fts(&self) -> String {
+        self.any_of
+            .iter()
+            .map(|g| {
+                let inner = g.iter().map(Term::fts).collect::<Vec<_>>().join(" AND ");
+                if self.any_of.len() > 1 && g.len() > 1 {
+                    format!("({inner})")
+                } else {
+                    inner
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    }
+
+    /// The FTS5 expression for the positive part and the exclusions.
+    pub fn fts(&self) -> String {
+        let pos = self.positive_fts();
+        if self.not.is_empty() {
+            return pos;
+        }
+        let mut out = format!("({pos})");
+        for n in &self.not {
+            out.push_str(&format!(" NOT {}", n.fts()));
+        }
+        out
+    }
+
+    fn passage_ok(
+        &self,
+        doc: &DocInfo,
+        tags: &[String],
+        color: Option<&str>,
+        original: &str,
+    ) -> bool {
+        if let Some(t) = &self.tag {
+            let hit = |s: &String| s.eq_ignore_ascii_case(t.trim());
+            if !tags.iter().any(hit) && !doc.topics.iter().any(hit) {
+                return false;
+            }
+        }
+        if let Some(c) = &self.color {
+            if !color.is_some_and(|x| x.eq_ignore_ascii_case(c.trim())) {
+                return false;
+            }
+        }
+        self.compiled.iter().all(|r| r.is_match(original))
+    }
+}
+
+/// The positive terms of a query (T1's name for them).
 pub fn parse_terms(query: &str) -> Vec<Term> {
-    let q = normalize::unify_quotes_str(query);
-    let mut raw: Vec<(bool, String)> = Vec::new();
-    let mut rest = q.as_str();
-    while let Some(i) = rest.find('"') {
-        raw.push((false, rest[..i].to_string()));
-        let after = &rest[i + 1..];
-        match after.find('"') {
-            Some(j) => {
-                raw.push((true, after[..j].to_string()));
-                rest = &after[j + 1..];
-            }
-            None => {
-                rest = after;
-            }
-        }
-    }
-    raw.push((false, rest.to_string()));
-    let mut terms = Vec::new();
-    let mut bare = Vec::new();
-    for (quoted, s) in raw {
-        let toks = words(&s);
-        if quoted {
-            if !toks.is_empty() {
-                terms.push(Term::Phrase(toks));
-            }
-        } else {
-            bare.extend(toks);
-        }
-    }
-    let has_content = bare.iter().any(|t| !is_stopword(t)) || !terms.is_empty();
-    for t in bare {
-        if has_content && is_stopword(&t) {
-            continue;
-        }
-        let term = Term::Prefix(t);
-        if !terms.contains(&term) {
-            terms.push(term);
-        }
-    }
-    terms
+    Plan::parse(query).map(|p| p.terms()).unwrap_or_default()
+}
+
+/// The corpus ids a query names with `in:` (empty when it names none).
+pub fn query_corpora(query: &str) -> Result<Vec<String>> {
+    Ok(Plan::parse(query)?.corpora)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,7 +259,8 @@ pub struct Citation {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PassageHit {
-    /// `<corpus>:<rel_path>:<line_start>`, stable across rebuilds.
+    /// `<corpus>:<doc key>:<line_start>`, stable across rebuilds (the id
+    /// `scout cite` takes).
     pub passage_id: String,
     pub line_start: usize,
     pub line_end: usize,
@@ -116,23 +270,46 @@ pub struct PassageHit {
     pub quote: String,
     pub score: f64,
     pub link: Option<String>,
+    /// Highlights: the highlight's tags, colour and highlight date.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DocResult {
     pub corpus: String,
+    /// The document key: the source path relative to the corpus root, plus
+    /// `#<tweet id>` for a tweet.
     pub rel_path: String,
+    /// The absolute source file.
     pub path: String,
     pub title: String,
     pub author: Option<String>,
-    /// The public URL from frontmatter (`field_map.public_url`), if any.
+    /// The public URL (frontmatter, a tweet's x.com URL, a work's `url`).
     pub public_url: Option<String>,
     pub date: Option<String>,
     pub date_display: Option<String>,
+    /// `published`, or `saved` when a highlight's work has no publication
+    /// date and `date` is the day it was first highlighted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_source: Option<String>,
     pub genre: Option<String>,
     pub lang: Option<String>,
+    /// The document type (`tweet`, `article`, `book` …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The source system (`readwise`, `x`, `zotero`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Best passage score, plus the title score when the title matches.
     pub score: f64,
+    /// `score` divided by the best score in the same corpus: the merge key
+    /// across corpora (BM25 scores of different corpora do not compare).
+    pub rank: f64,
     pub title_match: bool,
     pub passage_count: usize,
     pub hits: Vec<PassageHit>,
@@ -144,6 +321,8 @@ pub struct SearchResults {
     pub schema_version: u32,
     pub query: String,
     pub terms: Vec<Term>,
+    /// The compiled query: AND-groups, exclusions and filters.
+    pub plan: Plan,
     pub corpora: Vec<String>,
     pub total_documents: usize,
     pub total_passages: usize,
@@ -244,18 +423,51 @@ pub fn locate(
 }
 
 struct Row {
+    id: i64,
     rel_path: String,
     line_start: i64,
     score: f64,
 }
 
-struct DocRow {
-    title: String,
-    date: Option<String>,
-    genre: Option<String>,
-    lang: Option<String>,
-    author: Option<String>,
-    public_url: Option<String>,
+/// The sentence holding the first match of a regex (regex-only queries).
+fn locate_regex(original: &str, re: &regex::Regex, whole_passage: bool) -> Located {
+    let at = re.find(original).map(|m| m.start()).unwrap_or(0);
+    let spans = cite::sentence_spans(original);
+    let span = if whole_passage {
+        None
+    } else {
+        spans.iter().find(|(s, e)| at >= *s && at < *e).copied()
+    };
+    let (s, e) = span.unwrap_or((0, original.trim_end().len()));
+    let s2 = cite::skip_block_marker(original, s, e);
+    Located {
+        start: s2,
+        end: e,
+        first_match: at.max(s2),
+    }
+}
+
+/// The citation metadata of a document.
+fn cite_source<'a>(cfg: &CorpusConfig, d: &'a DocInfo, link: Option<&'a str>) -> CiteSource<'a> {
+    CiteSource {
+        style: cfg.cite_style(),
+        author: d.author.as_deref(),
+        title: &d.title,
+        date: d.date.as_deref(),
+        link,
+        public_url: d.public_url.as_deref(),
+        handle: d.handle.as_deref(),
+        date_source: d.date_source.as_deref(),
+    }
+}
+
+/// Both citation forms of an original-text quote from a document.
+pub fn citation(cfg: &CorpusConfig, d: &DocInfo, quote: &str, link: Option<&str>) -> Citation {
+    let src = cite_source(cfg, d, link);
+    Citation {
+        markdown: cite::render_citation(quote, &src, CiteFormat::Markdown),
+        plain: cite::render_citation(quote, &src, CiteFormat::Plain),
+    }
 }
 
 /// Search one corpus's index.
@@ -264,38 +476,101 @@ pub fn search_corpus(
     cfg: &CorpusConfig,
     req: &SearchRequest,
 ) -> Result<SearchResults> {
-    let terms = parse_terms(&req.query);
+    let plan = Plan::parse(&req.query)?;
+    let terms = plan.terms();
     let mut res = SearchResults {
         schema_version: SCHEMA_VERSION,
         query: req.query.clone(),
         terms: terms.clone(),
+        plan: plan.clone(),
         corpora: vec![cfg.id.clone()],
         total_documents: 0,
         total_passages: 0,
         results: vec![],
     };
-    if terms.is_empty() {
+    if !plan.has_positive() && !plan.has_selector() {
         return Ok(res);
     }
-    let fts = terms
-        .iter()
-        .map(|t| t.fts())
-        .collect::<Vec<_>>()
-        .join(" AND ");
-    let mut st = conn.prepare(
-        "SELECT p.rel_path, p.line_start, bm25(passages_fts) AS s
-         FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
-         WHERE passages_fts MATCH ?1",
-    )?;
-    let rows: Vec<Row> = st
-        .query_map([&fts], |r| {
-            Ok(Row {
-                rel_path: r.get(0)?,
-                line_start: r.get(1)?,
-                score: round6(-r.get::<_, f64>(2)?),
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
+    let need_passage = plan.tag.is_some() || plan.color.is_some() || !plan.compiled.is_empty();
+    let cols =
+        "p.id, p.rel_path, p.line_start, p.tags, p.color, CASE WHEN ?2 THEN p.original ELSE '' END";
+    let mut rows: Vec<Row> = Vec::new();
+    let mut keep = |id: i64,
+                    rel: String,
+                    line_start: i64,
+                    score: f64,
+                    tags: String,
+                    color: Option<String>,
+                    original: String| {
+        let Some(doc) = docs.get(&rel) else { return };
+        if need_passage {
+            let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+            if !plan.passage_ok(doc, &tags, color.as_deref(), &original) {
+                return;
+            }
+        }
+        rows.push(Row {
+            id,
+            rel_path: rel,
+            line_start,
+            score,
+        });
+    };
+    if plan.has_positive() {
+        let fts = plan.fts();
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols}, bm25(passages_fts) FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
+             WHERE passages_fts MATCH ?1"
+        ))?;
+        let mut q = st.query(params![fts, need_passage])?;
+        while let Some(r) = q.next()? {
+            keep(
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                round6(-r.get::<_, f64>(6)?),
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            );
+        }
+    } else {
+        // Filters or a regex alone: every passage that passes them.
+        let mut excluded: BTreeSet<i64> = BTreeSet::new();
+        if !plan.not.is_empty() {
+            let any = plan
+                .not
+                .iter()
+                .map(Term::fts)
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let mut st =
+                conn.prepare("SELECT rowid FROM passages_fts WHERE passages_fts MATCH ?1")?;
+            for id in st.query_map([any], |r| r.get::<_, i64>(0))? {
+                excluded.insert(id?);
+            }
+        }
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols} FROM passages p WHERE ?1 = ?1 ORDER BY p.rel_path, p.line_start"
+        ))?;
+        let mut q = st.query(params![0, need_passage])?;
+        while let Some(r) = q.next()? {
+            let id: i64 = r.get(0)?;
+            if excluded.contains(&id) {
+                continue;
+            }
+            keep(
+                id,
+                r.get(1)?,
+                r.get(2)?,
+                0.0,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            );
+        }
+    }
     res.total_passages = rows.len();
 
     // Group by document; order passages by score desc, then line.
@@ -303,22 +578,22 @@ pub fn search_corpus(
     for r in rows {
         by_doc.entry(r.rel_path.clone()).or_default().push(r);
     }
-    let mut docs: Vec<(String, Vec<Row>)> = by_doc.into_iter().collect();
-    for (_, ps) in docs.iter_mut() {
+    let mut groups: Vec<(String, Vec<Row>)> = by_doc.into_iter().collect();
+    for (_, ps) in groups.iter_mut() {
         ps.sort_by(|a, b| {
             b.score
                 .total_cmp(&a.score)
                 .then(a.line_start.cmp(&b.line_start))
         });
     }
-    // A document whose title matches every term gets its title's score added
-    // to its best passage score.
+    // A document whose title matches the positive query gets its title's
+    // score added to its best passage score.
     let mut title_scores: BTreeMap<String, f64> = BTreeMap::new();
-    {
+    if plan.has_positive() {
         let mut tq = conn.prepare(
             "SELECT rel_path, bm25(titles_fts) FROM titles_fts WHERE titles_fts MATCH ?1",
         )?;
-        for row in tq.query_map([&fts], |r| {
+        for row in tq.query_map([plan.positive_fts()], |r| {
             Ok((r.get::<_, String>(0)?, round6(-r.get::<_, f64>(1)?)))
         })? {
             let (k, v) = row?;
@@ -327,37 +602,38 @@ pub fn search_corpus(
     }
     let doc_score =
         |rel: &str, ps: &[Row]| round6(ps[0].score + title_scores.get(rel).copied().unwrap_or(0.0));
-    docs.sort_by(|a, b| {
+    groups.sort_by(|a, b| {
         doc_score(&b.0, &b.1)
             .total_cmp(&doc_score(&a.0, &a.1))
             .then(a.0.cmp(&b.0))
     });
-    res.total_documents = docs.len();
+    res.total_documents = groups.len();
+    let top = groups
+        .first()
+        .map(|(r, ps)| doc_score(r, ps))
+        .unwrap_or(0.0);
 
     let rules = normalize::compile_rules(&cfg.boilerplate)?;
-    let root = cfg.root();
-    let mut get_doc =
-        conn.prepare("SELECT title, date, genre, lang, author, public_url FROM documents WHERE rel_path = ?1")?;
-    let mut get_pass = conn.prepare(
-        "SELECT line_end, original FROM passages WHERE rel_path = ?1 AND line_start = ?2",
-    )?;
-    for (rel, ps) in docs.into_iter().take(req.limit) {
-        let d: DocRow = get_doc.query_row([&rel], |r| {
-            Ok(DocRow {
-                title: r.get(0)?,
-                date: r.get(1)?,
-                genre: r.get(2)?,
-                lang: r.get(3)?,
-                author: r.get(4)?,
-                public_url: r.get(5)?,
-            })
-        })?;
-        let abs = root.join(&rel);
+    let mut get_pass = conn
+        .prepare("SELECT line_end, original, tags, color, saved_at FROM passages WHERE id = ?1")?;
+    for (rel, ps) in groups.into_iter().take(req.limit) {
+        let d = &docs[&rel];
+        let abs = cfg.source_path(&rel);
         let mut hits = Vec::new();
         for p in ps.iter().take(req.hits_per_doc.max(1)) {
-            let (line_end, original): (i64, String) =
-                get_pass.query_row(params![rel, p.line_start], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            let loc = locate(&original, &rules, &terms, req.whole_passage);
+            let (line_end, original, tags, color, saved_at): (
+                i64,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            ) = get_pass.query_row(params![p.id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?;
+            let loc = match (terms.is_empty(), plan.compiled.first()) {
+                (true, Some(re)) => locate_regex(&original, re, req.whole_passage),
+                _ => locate(&original, &rules, &terms, req.whole_passage),
+            };
             let line = p.line_start as usize + original[..loc.first_match].matches('\n').count();
             hits.push(PassageHit {
                 passage_id: format!("{}:{}:{}", cfg.id, rel, p.line_start),
@@ -366,36 +642,31 @@ pub fn search_corpus(
                 line,
                 quote: original[loc.start..loc.end].to_string(),
                 score: p.score,
-                link: cfg
-                    .link
-                    .as_deref()
-                    .map(|t| cite::render_link(t, &abs, line)),
+                link: cfg.link_for(&rel, line),
+                tags: serde_json::from_str(&tags).unwrap_or_default(),
+                color,
+                saved_at,
             });
         }
         let best = &hits[0];
-        let src = CiteSource {
-            author: d.author.as_deref(),
-            title: &d.title,
-            date: d.date.as_deref(),
-            link: best.link.as_deref(),
-            public_url: d.public_url.as_deref(),
-        };
-        let citation = Citation {
-            markdown: cite::render_citation(&best.quote, &src, CiteFormat::Markdown),
-            plain: cite::render_citation(&best.quote, &src, CiteFormat::Plain),
-        };
+        let citation = citation(cfg, d, &best.quote, best.link.as_deref());
+        let score = doc_score(&rel, &ps);
         res.results.push(DocResult {
             corpus: cfg.id.clone(),
             rel_path: rel.clone(),
             path: abs.display().to_string(),
             date_display: d.date.as_deref().and_then(cite::format_date),
-            title: d.title,
-            author: d.author,
-            public_url: d.public_url,
-            date: d.date,
-            genre: d.genre,
-            lang: d.lang,
-            score: doc_score(&rel, &ps),
+            title: d.title.clone(),
+            author: d.author.clone(),
+            public_url: d.public_url.clone(),
+            date: d.date.clone(),
+            date_source: d.date_source.clone(),
+            genre: d.genre.clone(),
+            lang: d.lang.clone(),
+            kind: d.kind.clone(),
+            source: d.source.clone(),
+            score,
+            rank: if top > 0.0 { round6(score / top) } else { 0.0 },
             title_match: title_scores.contains_key(&rel),
             passage_count: ps.len(),
             hits,
@@ -405,12 +676,15 @@ pub fn search_corpus(
     Ok(res)
 }
 
-/// Merge per-corpus results: score desc, then corpus, then path.
-pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> SearchResults {
+/// Merge per-corpus results: rank desc (score / the corpus's best score),
+/// then score desc, corpus, path. With one corpus this is score order.
+pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> Result<SearchResults> {
+    let plan = Plan::parse(query)?;
     let mut out = SearchResults {
         schema_version: SCHEMA_VERSION,
         query: query.to_string(),
-        terms: parse_terms(query),
+        terms: plan.terms(),
+        plan,
         corpora: vec![],
         total_documents: 0,
         total_passages: 0,
@@ -423,13 +697,14 @@ pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> SearchResu
         out.results.extend(p.results);
     }
     out.results.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
+        b.rank
+            .total_cmp(&a.rank)
+            .then(b.score.total_cmp(&a.score))
             .then(a.corpus.cmp(&b.corpus))
             .then(a.rel_path.cmp(&b.rel_path))
     });
     out.results.truncate(limit);
-    out
+    Ok(out)
 }
 
 /// Helper for tests and callers holding a path.
@@ -441,4 +716,117 @@ pub fn quote_is_original(abs_path: &Path, hit: &PassageHit) -> Result<bool> {
         .collect();
     let block = lines[hit.line_start - 1..hit.line_end].join("\n");
     Ok(block.contains(&hit.quote))
+}
+
+/// A parsed passage id: `<corpus>:<doc key>:<line_start>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassageId {
+    pub corpus: String,
+    pub doc_key: String,
+    pub line_start: usize,
+}
+
+impl std::str::FromStr for PassageId {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        let bad = || anyhow!("bad passage id {s:?}: expected <corpus>:<path>:<line>");
+        let (corpus, rest) = s.trim().split_once(':').ok_or_else(bad)?;
+        let (key, line) = rest.rsplit_once(':').ok_or_else(bad)?;
+        if corpus.is_empty() || key.is_empty() {
+            return Err(bad());
+        }
+        Ok(PassageId {
+            corpus: corpus.to_string(),
+            doc_key: key.to_string(),
+            line_start: line.parse().map_err(|_| bad())?,
+        })
+    }
+}
+
+/// Raised when a passage id names no indexed passage.
+#[derive(Debug)]
+pub struct PassageNotFound(pub String);
+
+impl std::fmt::Display for PassageNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no passage {:?} in the index", self.0)
+    }
+}
+impl std::error::Error for PassageNotFound {}
+
+/// `scout cite`: one passage, quoted whole, with both citation forms.
+#[derive(Debug, Clone, Serialize)]
+pub struct CitedPassage {
+    pub schema_version: u32,
+    pub passage_id: String,
+    pub corpus: String,
+    pub rel_path: String,
+    pub path: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    /// The passage's original text (block markers at its start skipped).
+    pub quote: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub date: Option<String>,
+    pub date_display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_source: Option<String>,
+    pub link: Option<String>,
+    pub public_url: Option<String>,
+    pub citation: Citation,
+}
+
+/// Look up a passage by id in its corpus's index and cite it.
+pub fn cite_passage(conn: &Connection, cfg: &CorpusConfig, id: &PassageId) -> Result<CitedPassage> {
+    if id.corpus != cfg.id {
+        bail!(
+            "passage {:?} belongs to corpus {:?}, not {:?}",
+            id.doc_key,
+            id.corpus,
+            cfg.id
+        );
+    }
+    let pid = format!("{}:{}:{}", id.corpus, id.doc_key, id.line_start);
+    let row: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT line_end, original FROM passages WHERE rel_path = ?1 AND line_start = ?2",
+            params![id.doc_key, id.line_start as i64],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    let Some((line_end, original)) = row else {
+        return Err(PassageNotFound(pid).into());
+    };
+    let docs = crate::filter::load_docs(conn)?;
+    let d = docs
+        .get(&id.doc_key)
+        .ok_or_else(|| PassageNotFound(pid.clone()))?;
+    let s = cite::skip_block_marker(&original, 0, original.len());
+    let quote = original[s..].trim_end().to_string();
+    let line = id.line_start + original[..s].matches('\n').count();
+    let link = cfg.link_for(&id.doc_key, line);
+    let citation = citation(cfg, d, &quote, link.as_deref());
+    Ok(CitedPassage {
+        schema_version: SCHEMA_VERSION,
+        passage_id: pid,
+        corpus: cfg.id.clone(),
+        rel_path: id.doc_key.clone(),
+        path: cfg.source_path(&id.doc_key).display().to_string(),
+        line_start: id.line_start,
+        line_end: line_end as usize,
+        quote,
+        title: d.title.clone(),
+        author: d.author.clone(),
+        date: d.date.clone(),
+        date_display: d.date.as_deref().and_then(cite::format_date),
+        date_source: d.date_source.clone(),
+        link,
+        public_url: d.public_url.clone(),
+        citation,
+    })
 }

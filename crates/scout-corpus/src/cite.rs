@@ -1,6 +1,7 @@
 //! Citations (J1): British dates, per-corpus links, sentence selection and the
 //! markdown / plain citation forms. Quotes are always original text.
 
+use crate::registry::CiteStyle;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Serialize;
 use std::path::Path;
@@ -59,6 +60,16 @@ pub fn render_link(template: &str, abs_path: &Path, line: usize) -> String {
     template
         .replace("{path}", &enc)
         .replace("{line}", &line.to_string())
+}
+
+/// Path segments keep `/`; everything else outside the unreserved set is
+/// percent-encoded.
+const PATH_SEGMENTS: &AsciiSet = &QUERY_VALUE.remove(b'/');
+
+/// A `file://` URL for an absolute path.
+pub fn file_url(abs_path: &Path) -> String {
+    let path = abs_path.to_string_lossy();
+    format!("file://{}", utf8_percent_encode(&path, PATH_SEGMENTS))
 }
 
 /// Byte spans `[start, end)` of sentences in `text`. A sentence ends after
@@ -153,8 +164,9 @@ pub fn skip_block_marker(text: &str, start: usize, end: usize) -> usize {
 }
 
 /// The metadata a citation needs.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CiteSource<'a> {
+    pub style: CiteStyle,
     pub author: Option<&'a str>,
     pub title: &'a str,
     pub date: Option<&'a str>,
@@ -162,6 +174,10 @@ pub struct CiteSource<'a> {
     pub link: Option<&'a str>,
     /// The document's public URL, when its frontmatter has one.
     pub public_url: Option<&'a str>,
+    /// Tweets: the account handle, without `@`.
+    pub handle: Option<&'a str>,
+    /// Highlights: `published` or `saved` (the date is a save date).
+    pub date_source: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,10 +186,85 @@ pub enum CiteFormat {
     Plain,
 }
 
+fn push_links(out: &mut String, links: &[(&str, Option<&str>)], md: bool) {
+    for (label, url) in links {
+        if let Some(u) = url.filter(|u| !u.trim().is_empty()) {
+            if md {
+                out.push_str(&format!(" · [{label}]({u})"));
+            } else {
+                out.push_str(&format!(" · {label}: {u}"));
+            }
+        }
+    }
+}
+
+/// `— Dominik Lukeš (@techczech), tweet, 26 July 2025 · [public](…)`; the
+/// archive link stands in when there is no public URL.
+fn tweet_attribution(src: &CiteSource, md: bool) -> String {
+    let mut who = src
+        .author
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or("")
+        .to_string();
+    if let Some(h) = src.handle.filter(|h| !h.is_empty()) {
+        who = if who.is_empty() {
+            format!("@{h}")
+        } else {
+            format!("{who} (@{h})")
+        };
+    }
+    let mut parts = Vec::new();
+    if !who.is_empty() {
+        parts.push(who);
+    }
+    parts.push("tweet".to_string());
+    if let Some(d) = src.date.and_then(format_date) {
+        parts.push(d);
+    }
+    let mut out = format!("— {}", parts.join(", "));
+    let link = if src.public_url.is_some_and(|u| !u.trim().is_empty()) {
+        ("public", src.public_url)
+    } else {
+        ("archive", src.link)
+    };
+    push_links(&mut out, &[link], md);
+    out
+}
+
+/// `— Author, *Title*, 2019 · [highlight](…)`: the year of the work's
+/// publication; a save date (no publication date known) reads `saved 2021`.
+fn highlight_attribution(src: &CiteSource, md: bool) -> String {
+    let mut parts = Vec::new();
+    if let Some(a) = src.author.filter(|a| !a.trim().is_empty()) {
+        parts.push(a.to_string());
+    }
+    parts.push(if md {
+        format!("*{}*", src.title)
+    } else {
+        src.title.to_string()
+    });
+    if let Some(y) = src.date.and_then(crate::filter::year_of) {
+        if src.date_source == Some("saved") {
+            parts.push(format!("saved {y}"));
+        } else {
+            parts.push(y.to_string());
+        }
+    }
+    let mut out = format!("— {}", parts.join(", "));
+    push_links(&mut out, &[("highlight", src.link)], md);
+    out
+}
+
 /// `— Author, *Title*, 23 June 2016 · [archive](…) · [public](…)`; the
 /// plain form drops the Markdown (`· archive: … · public: …`). The title is
-/// always the full frontmatter title.
+/// always the full frontmatter title. Tweets and highlights have their own
+/// forms ([`CiteStyle`]).
 fn attribution(src: &CiteSource, md: bool) -> String {
+    match src.style {
+        CiteStyle::Tweet => return tweet_attribution(src, md),
+        CiteStyle::Highlight => return highlight_attribution(src, md),
+        CiteStyle::Writing => {}
+    }
     let mut parts = Vec::new();
     if let Some(a) = src.author.filter(|a| !a.trim().is_empty()) {
         parts.push(a.to_string());
@@ -187,15 +278,11 @@ fn attribution(src: &CiteSource, md: bool) -> String {
         parts.push(d);
     }
     let mut out = format!("— {}", parts.join(", "));
-    for (label, url) in [("archive", src.link), ("public", src.public_url)] {
-        if let Some(u) = url.filter(|u| !u.trim().is_empty()) {
-            if md {
-                out.push_str(&format!(" · [{label}]({u})"));
-            } else {
-                out.push_str(&format!(" · {label}: {u}"));
-            }
-        }
-    }
+    push_links(
+        &mut out,
+        &[("archive", src.link), ("public", src.public_url)],
+        md,
+    );
     out
 }
 
@@ -251,10 +338,12 @@ mod tests {
     fn citation_carries_archive_and_public_links() {
         let mut src = CiteSource {
             author: Some("Dominik Lukeš"),
-            title: "Repaved paths and generative metaphors: Expressing human purposes with technology",
+            title:
+                "Repaved paths and generative metaphors: Expressing human purposes with technology",
             date: Some("2016-06-23"),
             link: Some("writeflex://open?path=%2Fa.md&line=3"),
             public_url: Some("https://medium.com/x/repaved"),
+            ..CiteSource::default()
         };
         assert_eq!(
             render_citation("Q.", &src, CiteFormat::Markdown),
@@ -275,6 +364,49 @@ mod tests {
             render_citation("Q.", &src, CiteFormat::Plain),
             "“Q.”\n— Dominik Lukeš, Repaved paths and generative metaphors: Expressing human purposes with technology\n"
         );
+    }
+
+    #[test]
+    fn tweet_and_highlight_citations() {
+        let t = CiteSource {
+            style: CiteStyle::Tweet,
+            author: Some("Dominik Lukeš"),
+            title: "ignored",
+            date: Some("2025-07-26T10:12:00Z"),
+            link: Some("writeflex://open?path=%2Ft.md&line=9"),
+            public_url: Some("https://x.com/techczech/status/1"),
+            handle: Some("techczech"),
+            date_source: Some("published"),
+        };
+        assert_eq!(
+            render_citation("Q", &t, CiteFormat::Markdown),
+            "> Q\n\n— Dominik Lukeš (@techczech), tweet, 26 July 2025 · [public](https://x.com/techczech/status/1)\n"
+        );
+        assert_eq!(
+            render_citation("Q", &t, CiteFormat::Plain),
+            "“Q”\n— Dominik Lukeš (@techczech), tweet, 26 July 2025 · public: https://x.com/techczech/status/1\n"
+        );
+        let mut h = CiteSource {
+            style: CiteStyle::Highlight,
+            author: Some("George Lakoff"),
+            title: "Metaphors We Live By",
+            date: Some("1980-00"),
+            link: Some("file:///a/b%20c.md"),
+            date_source: Some("published"),
+            ..CiteSource::default()
+        };
+        h.date = Some("1980");
+        assert_eq!(
+            render_citation("Q", &h, CiteFormat::Markdown),
+            "> Q\n\n— George Lakoff, *Metaphors We Live By*, 1980 · [highlight](file:///a/b%20c.md)\n"
+        );
+        h.date = Some("2021-04-03");
+        h.date_source = Some("saved");
+        assert_eq!(
+            render_citation("Q", &h, CiteFormat::Plain),
+            "“Q”\n— George Lakoff, Metaphors We Live By, saved 2021 · highlight: file:///a/b%20c.md\n"
+        );
+        assert_eq!(file_url(Path::new("/a b/č.md")), "file:///a%20b/%C4%8D.md");
     }
 
     #[test]

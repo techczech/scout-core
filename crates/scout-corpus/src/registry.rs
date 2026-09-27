@@ -23,6 +23,38 @@ impl CorpusKind {
     }
 }
 
+/// What one document is inside a markdown-folder corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DocumentUnit {
+    /// One file = one document.
+    #[default]
+    File,
+    /// One tweet = one document: files hold `## <timestamp> — tweet <id>`
+    /// sections with the text in a `~~~` fence (the Twitter-archive import
+    /// of the writing repo). Each tweet keeps its own date and public URL.
+    Tweet,
+}
+
+impl DocumentUnit {
+    fn is_file(&self) -> bool {
+        *self == DocumentUnit::File
+    }
+}
+
+/// How a corpus's citations read (derived from kind and document unit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiteStyle {
+    /// `— Author, *Title*, 23 June 2016 · [archive](…) · [public](…)`
+    #[default]
+    Writing,
+    /// `— Author (@handle), tweet, 26 July 2025 · [public](…)`
+    Tweet,
+    /// `— Author, *Title*, 2019 · [highlight](…)`
+    Highlight,
+}
+
 fn d_title() -> String {
     "title".into()
 }
@@ -131,15 +163,49 @@ pub struct CorpusConfig {
     #[serde(default)]
     pub boilerplate: Vec<String>,
     /// Link template; `{path}` is the URL-encoded absolute file path and
-    /// `{line}` the 1-based source line.
+    /// `{line}` the 1-based source line. A highlight-scout-archive corpus
+    /// without one links to the work file (`file://…`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// markdown-folder only: `file` (default) or `tweet`.
+    #[serde(default, skip_serializing_if = "DocumentUnit::is_file")]
+    pub document_unit: DocumentUnit,
 }
 
 impl CorpusConfig {
     /// The corpus root with `~/` expanded.
     pub fn root(&self) -> PathBuf {
         expand_home(&self.path)
+    }
+
+    /// The source file of a document key: keys are the file's relative path,
+    /// plus `#<fragment>` when one file holds several documents (tweets).
+    pub fn source_rel<'a>(&self, doc_key: &'a str) -> &'a str {
+        doc_key.split_once('#').map(|(f, _)| f).unwrap_or(doc_key)
+    }
+
+    /// The absolute source file of a document key.
+    pub fn source_path(&self, doc_key: &str) -> PathBuf {
+        self.root().join(self.source_rel(doc_key))
+    }
+
+    /// The archive link for a line of a document (the `link` template, or
+    /// the work file's `file://` URL for a highlights archive).
+    pub fn link_for(&self, doc_key: &str, line: usize) -> Option<String> {
+        let path = self.source_path(doc_key);
+        match (&self.link, self.kind) {
+            (Some(t), _) => Some(crate::cite::render_link(t, &path, line)),
+            (None, CorpusKind::HighlightScoutArchive) => Some(crate::cite::file_url(&path)),
+            (None, _) => None,
+        }
+    }
+
+    pub fn cite_style(&self) -> CiteStyle {
+        match (self.kind, self.document_unit) {
+            (CorpusKind::HighlightScoutArchive, _) => CiteStyle::Highlight,
+            (_, DocumentUnit::Tweet) => CiteStyle::Tweet,
+            _ => CiteStyle::Writing,
+        }
     }
 }
 
@@ -262,6 +328,7 @@ impl Registry {
                 default_author: Some("Dominik Lukeš".into()),
                 boilerplate: vec![],
                 link: Some(WRITEFLEX_LINK.into()),
+                document_unit: DocumentUnit::File,
             },
             CorpusConfig {
                 id: "tweets".into(),
@@ -279,6 +346,7 @@ impl Registry {
                 default_author: Some("Dominik Lukeš".into()),
                 boilerplate: vec![],
                 link: Some(WRITEFLEX_LINK.into()),
+                document_unit: DocumentUnit::Tweet,
             },
         ];
         if let Some(archive) = highlight_scout_archive_path() {
@@ -294,6 +362,7 @@ impl Registry {
                 default_author: None,
                 boilerplate: vec![],
                 link: None,
+                document_unit: DocumentUnit::File,
             });
         }
         Registry { corpora }

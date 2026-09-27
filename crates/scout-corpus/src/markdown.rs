@@ -1,7 +1,7 @@
 //! Markdown-folder adapter: file discovery, frontmatter, document metadata and
 //! passage splitting. Read-only over the source folder (invariant 1).
 
-use crate::registry::CorpusConfig;
+use crate::registry::{CorpusConfig, CorpusKind};
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
@@ -37,7 +37,11 @@ pub fn discover(cfg: &CorpusConfig) -> Result<Vec<SourceFile>> {
         );
     }
     let include = if cfg.include.is_empty() {
-        build_globs(&["**/*.md".to_string()])?
+        let default = match cfg.kind {
+            CorpusKind::MarkdownFolder => "**/*.md",
+            CorpusKind::HighlightScoutArchive => "readings/works/*.md",
+        };
+        build_globs(&[default.to_string()])?
     } else {
         build_globs(&cfg.include)?
     };
@@ -262,6 +266,14 @@ pub struct DocMeta {
     pub author: Option<String>,
     /// The first `http(s)://` value among `field_map.public_url` keys.
     pub public_url: Option<String>,
+    /// The document type (`tweet`, `article`, `book` …), for `ty:`.
+    pub kind: Option<String>,
+    /// The source system (`readwise`, `x`, `zotero`), for `source:`.
+    pub source: Option<String>,
+    /// `published` or `saved` when the adapter knows which date it holds.
+    pub date_source: Option<String>,
+    /// Tweets: the account handle, without `@`.
+    pub handle: Option<String>,
 }
 
 /// Does the file count as a document under `require_frontmatter`?
@@ -310,6 +322,7 @@ pub fn doc_meta(cfg: &CorpusConfig, parsed: &ParsedFile) -> DocMeta {
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
         }),
+        ..DocMeta::default()
     }
 }
 

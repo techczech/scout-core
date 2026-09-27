@@ -18,8 +18,15 @@ use std::collections::BTreeMap;
 ///   period, as in the `@scout/query` grammar (`after:2016` = from 1 Jan 2016;
 ///   `before:2016` = up to 31 Dec 2015).
 /// - `year`: the document's year equals it.
+/// - `source`: any-of the document's source system (`readwise`, `x`,
+///   `zotero`), case-insensitive.
+/// - `kind`: any-of the document type (`tweet`, `article`, `book` …); a
+///   trailing plural `s` is ignored on both sides, so `ty:articles` (the
+///   `@scout/query` shortcut form) matches `article`.
+/// - `author`, `title`: case-insensitive substring.
 ///
-/// A document without a parseable date fails every date filter.
+/// A document without a parseable date fails every date filter; one
+/// without the field fails the field's filter.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DocFilter {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -32,6 +39,14 @@ pub struct DocFilter {
     pub before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kind: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// One indexed document's metadata.
@@ -45,6 +60,11 @@ pub struct DocInfo {
     pub author: Option<String>,
     pub public_url: Option<String>,
     pub tokens: i64,
+    pub topics: Vec<String>,
+    pub kind: Option<String>,
+    pub source: Option<String>,
+    pub date_source: Option<String>,
+    pub handle: Option<String>,
 }
 
 impl DocInfo {
@@ -130,6 +150,21 @@ impl DocFilter {
         if !self.genre.is_empty() {
             t.push(format!("genre:{}", self.genre.join(",")));
         }
+        if !self.source.is_empty() {
+            t.push(format!("source:{}", self.source.join(",")));
+        }
+        if !self.kind.is_empty() {
+            t.push(format!("ty:{}", self.kind.join(",")));
+        }
+        for (k, v) in [("au", &self.author), ("ti", &self.title)] {
+            if let Some(v) = v {
+                if v.contains(char::is_whitespace) {
+                    t.push(format!("{k}:\"{v}\""));
+                } else {
+                    t.push(format!("{k}:{v}"));
+                }
+            }
+        }
         t.join(" ")
     }
 
@@ -140,7 +175,26 @@ impl DocFilter {
                     .as_deref()
                     .is_some_and(|h| want.iter().any(|w| w.eq_ignore_ascii_case(h)))
         };
-        if !any_of(&self.lang, &d.lang) || !any_of(&self.genre, &d.genre) {
+        if !any_of(&self.lang, &d.lang)
+            || !any_of(&self.genre, &d.genre)
+            || !any_of(&self.source, &d.source)
+        {
+            return false;
+        }
+        if !self.kind.is_empty() {
+            let sing = |s: &str| s.trim().to_lowercase().trim_end_matches('s').to_string();
+            let Some(k) = d.kind.as_deref() else {
+                return false;
+            };
+            if !self.kind.iter().any(|w| sing(w) == sing(k)) {
+                return false;
+            }
+        }
+        let contains = |want: &Option<String>, have: Option<&str>| match want {
+            None => true,
+            Some(w) => have.is_some_and(|h| h.to_lowercase().contains(&w.to_lowercase())),
+        };
+        if !contains(&self.author, d.author.as_deref()) || !contains(&self.title, Some(&d.title)) {
             return false;
         }
         if let Some(y) = self.year {
@@ -187,63 +241,116 @@ pub struct SliceSpec {
     pub filter: DocFilter,
 }
 
+/// Split a comma list.
+fn list(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Apply the document-level fields of a parsed `@scout/query` query to a
+/// filter: `after: before: y: lang: genre: source: zo: ty: au: ti:`.
+/// `y:2016` sets the year; `y:2010-2015` (and every other `y:` / `date:`
+/// form) becomes the `after` / `before` range of the grammar's `dateRange`.
+/// Returns the corpus ids of `in:`.
+pub fn apply_query_fields(p: &scout_query::ParsedQuery, f: &mut DocFilter) -> Result<Vec<String>> {
+    let nonempty = |name: &str, v: &Option<String>| -> Result<Option<String>> {
+        match v {
+            Some(v) if v.trim().is_empty() => bail!("{name}: needs a value"),
+            Some(v) => Ok(Some(v.trim().to_string())),
+            None => Ok(None),
+        }
+    };
+    if let Some(v) = nonempty("after", &p.after)? {
+        f.after = Some(v);
+    }
+    if let Some(v) = nonempty("before", &p.before)? {
+        f.before = Some(v);
+    }
+    if let Some(v) = nonempty("y", &p.date)? {
+        let year = |s: &str| {
+            (s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()))
+                .then(|| s.parse::<i32>().ok())
+                .flatten()
+        };
+        if let Some(y) = year(&v) {
+            f.year = Some(y);
+        } else if p.after.is_some() || p.before.is_some() {
+            bail!("a y: range cannot combine with after: or before:");
+        } else if let Some((a, b)) = v
+            .split_once('-')
+            .and_then(|(a, b)| Some((year(a)?, year(b)?)))
+        {
+            if b < a {
+                bail!("y:{v} is not a range like 2010-2015");
+            }
+            // Inclusive years: y:2010-2015 = after:2010 before:2016.
+            f.after = Some(format!("{a:04}"));
+            f.before = Some(format!("{:04}", b + 1));
+        } else {
+            let r = scout_query::date_range(&v)
+                .ok_or_else(|| anyhow::anyhow!("y:{v} is not a date or range like 2010-2015"))?;
+            f.after = r.start;
+            f.before = r.end;
+        }
+    }
+    if let Some(v) = nonempty("lang", &p.lang)? {
+        f.lang.extend(list(&v));
+    }
+    if let Some(v) = nonempty("genre", &p.genre)? {
+        f.genre.extend(list(&v));
+    }
+    if let Some(v) = nonempty("source", &p.source)? {
+        f.source.extend(list(&v));
+    } else if p.zotero {
+        f.source.push("zotero".into());
+    }
+    if let Some(v) = nonempty("ty", &p.type_)? {
+        f.kind.extend(list(&v));
+    }
+    f.author = nonempty("au", &p.author)?;
+    f.title = nonempty("ti", &p.title)?;
+    let corpora = match nonempty("in", &p.in_)? {
+        Some(v) => list(&v),
+        None => vec![],
+    };
+    f.validate()?;
+    Ok(corpora)
+}
+
 impl SliceSpec {
+    /// Parse with the `@scout/query` grammar; bare words are corpus ids.
+    /// Free-text search terms (`-x`, `"phrase"`, `prefix*`, `/regex/`) and
+    /// the passage-level fields `tag:` and `co:` are refused.
     pub fn parse(spec: &str) -> Result<SliceSpec> {
         let mut out = SliceSpec {
             spec: spec.trim().to_string(),
             ..SliceSpec::default()
         };
-        let list = |v: &str| -> Vec<String> {
-            v.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
+        let q = scout_query::parse_query(spec);
+        let p = &q.parsed;
+        let fail = |why: &str| -> Result<SliceSpec> {
+            bail!("slice {spec:?}: {why} (use in: after: before: y: lang: genre: source: ty: au: ti: or a corpus id)")
         };
-        let mut year_range = false;
-        for term in spec.split_whitespace() {
-            let Some((k, v)) = term.split_once(':') else {
-                out.corpora.push(term.to_string());
-                continue;
-            };
-            if v.is_empty() {
-                bail!("slice {spec:?}: {k}: needs a value");
-            }
-            let f = &mut out.filter;
-            match k.to_ascii_lowercase().as_str() {
-                "in" => out.corpora.extend(list(v)),
-                "after" => f.after = Some(v.to_string()),
-                "before" => f.before = Some(v.to_string()),
-                "lang" => f.lang.extend(list(v)),
-                "genre" => f.genre.extend(list(v)),
-                "y" | "year" => match v.split_once('-') {
-                    None => {
-                        f.year = Some(v.parse().map_err(|_| {
-                            anyhow::anyhow!("slice {spec:?}: y:{v} is not a year")
-                        })?)
-                    }
-                    Some((a, b)) => {
-                        let (a, b): (i32, i32) = match (a.parse(), b.parse()) {
-                            (Ok(a), Ok(b)) if a <= b => (a, b),
-                            _ => bail!("slice {spec:?}: y:{v} is not a range like 2010-2015"),
-                        };
-                        f.after = Some(format!("{a:04}"));
-                        f.before = Some(format!("{:04}", b + 1));
-                        year_range = true;
-                    }
-                },
-                _ => bail!(
-                    "slice {spec:?}: unknown field {k}: (use in: after: before: y: lang: genre: or a corpus id)"
-                ),
+        if !p.regexes.is_empty() || !q.not.is_empty() {
+            return fail("a slice takes no search terms");
+        }
+        if p.tag.is_some() || p.color.is_some() || p.has_image {
+            return fail("tag:, co: and i: select highlights, not documents");
+        }
+        for g in &q.any_of {
+            for t in g {
+                if t.form != scout_query::TermForm::Word || t.text.contains(':') {
+                    return fail(&format!("unknown term {:?}", t.text));
+                }
+                out.corpora.extend(list(&t.text));
             }
         }
-        if year_range && spec.split_whitespace().any(|t| {
-            let k = t.split_once(':').map(|(k, _)| k.to_ascii_lowercase());
-            matches!(k.as_deref(), Some("after") | Some("before"))
-        }) {
-            bail!("slice {spec:?}: a y: range cannot combine with after: or before:");
-        }
-        out.filter.validate()?;
+        let ins = apply_query_fields(p, &mut out.filter)
+            .map_err(|e| anyhow::anyhow!("slice {spec:?}: {e}"))?;
+        out.corpora.extend(ins);
         if out.corpora.is_empty() && out.filter.is_empty() {
             bail!("empty slice {spec:?}: give a corpus id or a filter such as before:2015");
         }
@@ -253,9 +360,11 @@ impl SliceSpec {
 
 /// Every document in an index, keyed by `rel_path`.
 pub fn load_docs(conn: &Connection) -> Result<BTreeMap<String, DocInfo>> {
-    let mut st =
-        conn.prepare("SELECT rel_path, title, date, genre, lang, author, public_url, tokens FROM documents")?;
+    let mut st = conn.prepare(
+        "SELECT rel_path, title, date, genre, lang, author, public_url, tokens, topics, kind, source, date_source, handle FROM documents",
+    )?;
     let rows = st.query_map([], |r| {
+        let topics: String = r.get(8)?;
         Ok(DocInfo {
             rel_path: r.get(0)?,
             title: r.get(1)?,
@@ -265,6 +374,11 @@ pub fn load_docs(conn: &Connection) -> Result<BTreeMap<String, DocInfo>> {
             author: r.get(5)?,
             public_url: r.get(6)?,
             tokens: r.get(7)?,
+            topics: serde_json::from_str(&topics).unwrap_or_default(),
+            kind: r.get(9)?,
+            source: r.get(10)?,
+            date_source: r.get(11)?,
+            handle: r.get(12)?,
         })
     })?;
     let mut out = BTreeMap::new();
@@ -303,6 +417,17 @@ mod tests {
         assert!(SliceSpec::parse("y:2015-2010").is_err());
         assert!(SliceSpec::parse("y:2010-2015 after:2011").is_err());
         assert!(SliceSpec::parse("colour:red").is_err());
+        assert!(SliceSpec::parse("metaphor*").is_err());
+        assert!(SliceSpec::parse("-writing").is_err());
+        assert!(SliceSpec::parse("foo:bar").is_err());
+        let s = SliceSpec::parse("highlights source:zotero ty:books au:\"George Lakoff\"").unwrap();
+        assert_eq!(s.corpora, vec!["highlights"]);
+        assert_eq!(s.filter.source, vec!["zotero"]);
+        assert_eq!(s.filter.kind, vec!["books"]);
+        assert_eq!(s.filter.author.as_deref(), Some("George Lakoff"));
+        let s = SliceSpec::parse("y:2016-05").unwrap();
+        assert_eq!(s.filter.after.as_deref(), Some("2016-05-01"));
+        assert_eq!(s.filter.before.as_deref(), Some("2016-06-01"));
         assert!(SliceSpec::parse("after:soon").is_err());
         assert!(SliceSpec::parse("  ").is_err());
     }

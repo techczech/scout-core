@@ -25,6 +25,7 @@ fn cfg(root: &Path, id: &str) -> CorpusConfig {
         default_author: Some("Dominik Lukeš".into()),
         boilerplate: vec![r"^Originally published at ".into()],
         link: Some(WRITEFLEX_LINK.into()),
+        document_unit: Default::default(),
     }
 }
 

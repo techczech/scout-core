@@ -48,7 +48,6 @@ pub fn verify_quote(corpora: &[Corpus], quote: &str) -> Result<VerifyResult> {
     for c in corpora {
         let conn = crate::index::open_existing(&c.config, c.index_path())?;
         let docs = crate::filter::load_docs(&conn)?;
-        let root = c.config.root();
         let mut st = conn.prepare(
             "SELECT rel_path, line_start, original FROM passages ORDER BY rel_path, line_start",
         )?;
@@ -61,7 +60,7 @@ pub fn verify_quote(corpora: &[Corpus], quote: &str) -> Result<VerifyResult> {
             let rel: String = r.get(0)?;
             let line_start: i64 = r.get(1)?;
             let m = normalize::unify_quotes(&Mapped::identity(&original));
-            let abs = root.join(&rel);
+            let abs = c.config.source_path(&rel);
             let doc = docs.get(&rel);
             for (ns, _) in m.text.match_indices(&needle) {
                 let (os, oe) = m.original_range(ns, ns + needle.len());
@@ -75,11 +74,7 @@ pub fn verify_quote(corpora: &[Corpus], quote: &str) -> Result<VerifyResult> {
                     date: doc.and_then(|d| d.date.clone()),
                     line,
                     original: original[os..oe].to_string(),
-                    link: c
-                        .config
-                        .link
-                        .as_deref()
-                        .map(|t| crate::cite::render_link(t, &abs, line)),
+                    link: c.config.link_for(&rel, line),
                 });
             }
         }
