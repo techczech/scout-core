@@ -1,0 +1,27 @@
+[package]
+name = "scout-corpus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Corpus engine: registry, adapters, normalisation, tokeniser, passages and FTS index (Scout family)"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+regex.workspace = true
+sha1.workspace = true
+scout-index = { path = "../scout-index" }
+toml.workspace = true
+dirs.workspace = true
+unicode-segmentation.workspace = true
+unicode-normalization.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+percent-encoding.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
