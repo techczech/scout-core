@@ -1,0 +1,17 @@
+[package]
+name = "scout-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The `scout` command-line interface over the Scout corpus engine"
+
+[[bin]]
+name = "scout"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+scout-corpus = { path = "../scout-corpus" }
