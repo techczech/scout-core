@@ -4,17 +4,27 @@
 //! Sources are read-only; indexes are disposable and live in the platform
 //! data dir; quotes are always original text; output is deterministic.
 //!
-//! Entry point: [`Corpus`]. The CLI and the apps call these same functions.
+//! Entry point: [`Corpus`]. Multi-corpus forms of every view take
+//! `&[Corpus]`: [`search_all`], [`concord::kwic`], [`concord::distribution`],
+//! [`concord::profile`], [`ngrams::ngrams`], [`verify::verify_quote`]. The CLI and the apps call these same functions.
 
 pub mod cite;
+pub mod concord;
+pub mod filter;
 pub mod index;
 pub mod markdown;
+pub mod ngrams;
 pub mod normalize;
 pub mod registry;
 pub mod search;
 pub mod stopwords;
 pub mod tokenize;
+pub mod verify;
 
+pub use concord::{DistBy, Distribution, KwicRequest, KwicResults, KwicSort, Profile};
+pub use filter::DocFilter;
+pub use ngrams::{NgramRequest, NgramResults};
+pub use verify::VerifyResult;
 pub use index::{BuildReport, IndexMissing, IndexStatus};
 pub use registry::{CorpusConfig, CorpusKind, Registry, RegistryMissing};
 pub use search::{SearchRequest, SearchResults};
@@ -66,6 +76,29 @@ impl Corpus {
     pub fn search(&self, req: &SearchRequest) -> Result<SearchResults> {
         let conn = index::open_existing(&self.config, &self.index_path)?;
         search::search_corpus(&conn, &self.config, req)
+    }
+
+    /// Key-word-in-context lines for a word or phrase.
+    pub fn kwic(&self, req: &KwicRequest) -> Result<KwicResults> {
+        concord::kwic(std::slice::from_ref(self), req)
+    }
+
+    /// Hit counts by year, corpus, genre or lang.
+    pub fn distribution(&self, term: &str, by: DistBy, filter: &DocFilter) -> Result<Distribution> {
+        concord::distribution(std::slice::from_ref(self), term, by, filter)
+    }
+
+    /// Word profile: frequency, per million, pieces, first use, per-year.
+    pub fn profile(&self, word: &str, filter: &DocFilter) -> Result<Profile> {
+        concord::profile(std::slice::from_ref(self), word, filter)
+    }
+
+    pub fn ngrams(&self, req: &NgramRequest) -> Result<NgramResults> {
+        ngrams::ngrams(std::slice::from_ref(self), req)
+    }
+
+    pub fn verify_quote(&self, text: &str) -> Result<VerifyResult> {
+        verify::verify_quote(std::slice::from_ref(self), text)
     }
 }
 
