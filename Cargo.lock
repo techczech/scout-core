@@ -679,6 +679,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "scout-index",
+ "scout-query",
  "serde",
  "serde_json",
  "sha1",
@@ -696,6 +697,16 @@ dependencies = [
  "anyhow",
  "regex",
  "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "scout-query"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
  "serde",
  "serde_json",
 ]

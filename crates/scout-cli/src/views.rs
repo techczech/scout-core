@@ -80,7 +80,11 @@ pub fn print_kwic(r: &KwicResults) {
     for l in &r.lines {
         let left = pad_left(&keep_tail(&flat(&l.left), SIDE), SIDE);
         let right = pad_right(&keep_head(&flat(&l.right), SIDE), SIDE);
-        let date = l.date.as_deref().unwrap_or("—");
+        let date = l
+            .date
+            .as_deref()
+            .map(|d| d.get(..10).unwrap_or(d))
+            .unwrap_or("—");
         println!(
             "{left}  [{}]  {right}  {:<10} {}:{}",
             flat(&l.node),

@@ -13,8 +13,11 @@ Values in the examples are illustrative. Every `--json` document is one pretty-p
 
 - **Original text.** Every text field that quotes a source (`quote`, `left`, `node`, `right`, `original`) is ORIGINAL source text: Markdown, entities and curly quotes as written. Normalised text never appears.
 - **Lines.** `line` is 1-based in the source file.
-- **Passage id.** `passage_id` = `<corpus>:<rel_path>:<passage line_start>`. It is stable across rebuilds and is what `scout cite` takes.
-- **Dates.** `date` is the raw frontmatter value (`2016`, `2016-06` or `2016-06-23`). `date_display` is British style ("23 June 2016"), or `null` when unparseable. An unknown date is `null`, never guessed.
+- **Documents and keys.** `rel_path` is the document key: the source path relative to the corpus root, plus `#<tweet id>` for a tweet (`stream/2025-07.md#1939901126326764018`; a tweets corpus has `document_unit = "tweet"`, one document per tweet). A highlights archive (`highlight-scout-archive`) has one document per work file (`readings/works/<slug>.md`) and one passage per highlight. `path` is always the absolute source FILE.
+- **Passage id.** `passage_id` = `<corpus>:<rel_path>:<passage line_start>`. It is stable across rebuilds and is what `scout cite` takes (the line is split off at the last `:`).
+- **Dates.** `date` is the raw value: the frontmatter date (`2016`, `2016-06` or `2016-06-23`), a tweet's UTC timestamp (`2025-07-26T10:12:00Z`), or a highlight work's publication date. `date_display` is British style ("23 June 2016"), or `null` when unparseable. An unknown date is `null`, never guessed.
+- **`date_source`** (tweets and highlights; absent for writing): `published`, or `saved` when a highlight's work has no publication date and `date` is the earliest `highlighted_at` of its highlights. Publication dates: Zotero's `date` field (cut to its known precision), or a tweet's time decoded from its id; Readwise works carry none, so they are `saved`.
+- **Highlight text.** A highlight's `quote` / `original` is its blockquote text with the `> ` markers removed; line numbers are the file's. Notes after a highlight (Dominik's own) and image/LaTeX records are not indexed.
 - **Determinism.** Every list has an explicit order whose last tie-breaks are corpus, then path, then line (invariant 6). The same query over the same index gives byte-identical output.
 - **Counts agree** (invariant 3). For the same term and filters: `kwic.total` = the n=1 (or n=phrase length) `ngrams` count = `profile.frequency` = the sum of `dist.buckets[].hits`; a collocate row's `count` = `kwic.total` of its `kwic.command` (`scout kwic <node> --near <collocate> --window W` over the same corpora and filters).
 - **Default corpora.** Without `--in`, a command runs over every corpus whose index opens and prints one line on stderr naming the rest: `scout: note: using writing; not indexed: tweets, highlights`. `corpora` in the JSON lists the ones used. An `--in` naming an unindexed corpus is exit 3.
@@ -31,22 +34,30 @@ Only the set keys appear; `{}` means unfiltered.
 | `after` | string | inclusive lower bound; `YYYY`/`YYYY-MM` mean the first day of that period |
 | `before` | string | exclusive upper bound; `--before 2016` = up to 31 Dec 2015 |
 | `year` | int | the document's year (`--y 2016`) |
+| `source` | string[] | any-of the source system: `readwise`, `x`, `zotero` (`--source x`); Dominik's own tweets are `x` |
+| `kind` | string[] | any-of the document type (`tweet`, `article`, `book` …); a plural `s` is ignored (`ty:articles` matches `article`) |
+| `author` | string | case-insensitive substring of the author |
+| `title` | string | case-insensitive substring of the title |
 
-A document without a parseable date fails every date filter.
+A document without a parseable date fails every date filter. `source`, `kind`, `author` and `title` come from query fields (`source: ty: au: ti:`) and slices; the analytics commands take `--source`.
 
 ### Slice expressions (`collocates --compare`, `keyness --a/--b`)
 
-One quoted string of whitespace-separated terms, in the `@scout/query` field syntax:
+One quoted string, parsed by the `@scout/query` grammar (`crates/scout-query`); bare words are corpus ids:
 
 | term | meaning |
 |---|---|
 | `writing`, `in:writing,tweets` | the corpora; a slice without one uses the command's `--in` (default: every indexed corpus) |
-| `after:2020`, `before:2015` | as `--after` / `--before` |
+| `after:2020`, `before:2015` (`since:`/`from:`, `until:`/`to:`) | as `--after` / `--before` |
 | `y:2016` | one year |
 | `y:2010-2015` | inclusive range = `after:2010 before:2016`; cannot combine with `after:`/`before:` |
+| `y:2016-05`, `y:2016-`, `y:-2016` | the grammar's other date forms, as a range |
 | `lang:en,cs`, `genre:essay,note` | as `--lang` / `--genre` |
+| `source:zotero`, `zo:`, `ty:books`, `au:lakoff`, `ti:"metaphors we"` | the document fields above |
 
-A slice carries only its own terms; it does not inherit the command's filter flags. So `scout collocates metaphor --after 2020 --compare "before:2015"` compares after-2020 writing (A) with before-2015 writing (B), and `--compare highlights` will compare the same filters' writing with the highlights corpus once T2 indexes it. The echoed `spec` is the slice as given; for the main side of `--compare` it is the filter flags written as a slice (`after:2020`, or `all`).
+A slice refuses search terms (`-x`, `"phrase"`, `x*`, `/re/`) and the highlight fields `tag:`, `co:`, `i:`.
+
+A slice carries only its own terms; it does not inherit the command's filter flags. So `scout collocates metaphor --after 2020 --compare "before:2015"` compares after-2020 writing (A) with before-2015 writing (B), and `--compare highlights` compares the same filters' writing with the highlights corpus. The echoed `spec` is the slice as given; for the main side of `--compare` it is the filter flags written as a slice (`after:2020`, or `all`).
 
 ### Row distribution object (`--dist year|doc|corpus` on `ngrams` and `collocates`)
 
@@ -64,35 +75,86 @@ A slice carries only its own terms; it does not inherit the command's filter fla
 - `corpus`: every corpus in scope, zero counts included, by count desc, then key.
 - Without `--dist` the field is absent.
 
-## `scout search` — schema_version 1
+## `scout search <query>` — schema_version 1
+
+The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates/scout-query`, one shared fixture file `packages/scout-query/fixtures/grammar-cases.json`):
+
+| syntax | meaning in `scout search` |
+|---|---|
+| `generative metaphor` | every bare word prefix-matched, ANDed (T1 behaviour; also for 3+ words, unlike Highlight Scout's OR ranking); bare stopwords dropped unless every term is one |
+| `"conceptual metaphor"` | consecutive tokens, exact |
+| `metaph*` | explicit prefix |
+| `a b OR c`, `a \| c` | OR of AND-groups (AND binds tighter); `AND` is the default |
+| `-lakoff` | exclude passages with a token starting `lakoff` |
+| `/metaphor(s\|ic)/i` | the passage's ORIGINAL text must match (Rust regex syntax; flags `i m s`) |
+| `in:highlights` | corpora (narrows `--in`; alone it selects them) |
+| `after: before: y: lang: genre: source: zo: ty: tw: bo: … au: ti:` | document filters (the `filters` object) |
+| `tag:linguistics` | the highlight's tags, or the document's `topics` |
+| `co:yellow` | the highlight's colour |
+
+`i:` (has image) has no meaning here and is listed in `plan.ignored`. A query with filters or a regex but no positive term lists every passage that passes them (score 0).
 
 ```json
 {
   "schema_version": 1,
-  "query": "generative metaphor",
-  "terms": [{"kind": "prefix", "tokens": "generative"}, {"kind": "phrase", "tokens": ["a", "b"]}],
-  "corpora": ["writing"],
+  "query": "metaphor in:highlights -dead",
+  "terms": [{"kind": "prefix", "tokens": "metaphor"}, {"kind": "phrase", "tokens": ["a", "b"]}],
+  "plan": {
+    "any_of": [[{"kind": "prefix", "tokens": "metaphor"}]],
+    "not": [{"kind": "prefix", "tokens": "dead"}],
+    "filters": {},
+    "corpora": ["highlights"],
+    "tag": "linguistics", "color": "yellow", "regexes": ["/x/i"], "ignored": ["i:"]
+  },
+  "corpora": ["highlights"],
   "total_documents": 12,
   "total_passages": 30,
   "results": [{
     "corpus": "writing", "rel_path": "…", "path": "/abs/…", "title": "…",
     "author": "Dominik Lukeš", "date": "2016-06-23", "date_display": "23 June 2016",
-    "genre": "essay", "lang": "en",
+    "date_source": "published",
+    "genre": "essay", "lang": "en", "kind": "book", "source": "zotero",
     "public_url": "https://medium.com/…",
-    "score": 12.3, "title_match": true, "passage_count": 3,
+    "score": 12.3, "rank": 1.0, "title_match": true, "passage_count": 3,
     "hits": [{
       "passage_id": "writing:…:12", "line_start": 12, "line_end": 13, "line": 12,
-      "quote": "original sentence or passage", "score": 11.1, "link": "writeflex://open?path=…&line=12"
+      "quote": "original sentence or passage", "score": 11.1, "link": "writeflex://open?path=…&line=12",
+      "tags": ["linguistics"], "color": "yellow", "saved_at": "2024-01-15"
     }],
     "citation": {"markdown": "> …\n\n— Author, *Full Title*, 23 June 2016 · [archive](writeflex://…) · [public](https://…)\n", "plain": "“…”\n— Author, Full Title, 23 June 2016 · archive: writeflex://… · public: https://…\n"}
   }]
 }
 ```
 
-Order: `results` by score desc, then corpus, then path; `hits` by score desc, then line.
+`plan` keys other than `any_of`, `not` and `filters` appear only when set; so do `date_source`, `kind`, `source` and the hit's `tags`, `color`, `saved_at` (highlights).
 
-- `public_url` is the first `http(s)://` value among the frontmatter keys in the corpus's `field_map.public_url` (writing: `published_url`, then `source_url`, then `canonical_url`); `null` when none.
-- Citation line: author, the full frontmatter title, the British date, then `· [archive](<link>)` and `· [public](<url>)` when each exists. `plain` writes `· archive: <link> · public: <url>`. An unknown date is left out.
+Order: `results` by `rank` desc, then `score` desc, corpus, path; `hits` by score desc, then line. `score` is BM25 (plus the title's score when the title matches); `rank` = `score` / the best `score` in the same corpus, so each corpus's best document has rank 1 and `--in a,b,c` interleaves the corpora instead of letting one corpus's BM25 scale win. With one corpus, rank order = score order.
+
+- `public_url`: writing, the first `http(s)://` value among the frontmatter keys in `field_map.public_url` (`published_url`, then `source_url`, then `canonical_url`); a tweet, `https://x.com/<handle>/status/<id>` (the handle from the file's `venue`); a highlight work, its `url`. `null` when none.
+- `link`: writing and tweets, the corpus `link` template (`writeflex://open?path=<file>&line=<n>`); highlights, the work file as `file:///…` (Highlight Scout registers no URL scheme, so there is no deep link).
+- Citation lines by corpus:
+  - writing: `— Author, *Full Title*, 23 June 2016 · [archive](<link>) · [public](<url>)` (each link when it exists);
+  - tweets: `— Dominik Lukeš (@techczech), tweet, 26 July 2025 · [public](https://x.com/…)` (the archive link only when there is no public URL);
+  - highlights: `— Author, *Title*, 1980 · [highlight](file:///…)`: the publication year, or `saved 2021` when `date_source` is `saved`.
+  - `plain` writes `· archive: <link>`, `· public: <url>`, `· highlight: <link>`. An unknown date is left out.
+
+## `scout cite <passage-id> [--format markdown|plain] [--json]` — schema_version 1
+
+Prints the citation of one passage (the `passage_id` of search, kwic or verify-quote), quoting the whole passage. Default `--format markdown`. Exit 1 when the index has no such passage; 2 for a malformed id.
+
+```json
+{
+  "schema_version": 1,
+  "passage_id": "tweets:stream/2025-07.md#1940162082952905136:78",
+  "corpus": "tweets", "rel_path": "stream/2025-07.md#1940162082952905136", "path": "/abs/…/stream/2025-07.md",
+  "line_start": 78, "line_end": 78,
+  "quote": "original passage text",
+  "title": "…", "author": "Dominik Lukeš", "date": "2025-07-01T21:34:21Z", "date_display": "1 July 2025",
+  "date_source": "published",
+  "link": "writeflex://open?path=…&line=78", "public_url": "https://x.com/techczech/status/1940162082952905136",
+  "citation": {"markdown": "> …\n\n— Dominik Lukeš (@techczech), tweet, 1 July 2025 · [public](https://x.com/…)\n", "plain": "“…”\n— …\n"}
+}
+```
 
 ## `scout kwic <term>` — schema_version 1
 

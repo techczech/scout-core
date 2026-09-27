@@ -1,0 +1,15 @@
+[package]
+name = "scout-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust port of the @scout/query search grammar (Scout family)"
+
+[dependencies]
+serde.workspace = true
+regex.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

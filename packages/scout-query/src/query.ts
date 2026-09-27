@@ -32,6 +32,8 @@ const FILTER_TOKENS = [
   "author", "au", "title", "ti", "type", "ty", "tag", "date", "d",
   "year", "y", "after", "since", "from", "before", "until", "to",
   "i", "zo", "source", "color", "colour", "co",
+  // Corpus-engine fields (scout-corpus): corpus id, language, genre.
+  "in", "lang", "genre",
   ...Object.keys(TYPE_SHORTCUTS),
 ];
 
@@ -56,9 +58,18 @@ export interface ParsedQuery {
   favorite: boolean;
   zotero: boolean;
   has_image: boolean;
+  /** `in:` corpus id(s), comma-separated (scout-corpus). */
+  in: string | null;
+  /** `lang:` language code(s), comma-separated. */
+  lang: string | null;
+  /** `genre:` genre(s), comma-separated. */
+  genre: string | null;
+  /** `source:` value as typed (readwise, x, zotero); `zotero` is also set for zotero. */
+  source: string | null;
 }
 
-export interface SearchQueryPayload extends Omit<ParsedQuery, "date"> {
+export interface SearchQueryPayload
+  extends Omit<ParsedQuery, "date" | "in" | "lang" | "genre" | "source"> {
   /** Combinable work-type filter (OR across the list). */
   types: string[];
   source: string | null;
@@ -102,7 +113,9 @@ function canonical(key: string): keyof ParsedQuery | "after" | "before" {
   }
 }
 
-function dateRange(value: string): { start?: string; end?: string } | null {
+/** A `y:` / `date:` value as a half-open ISO range: `start` inclusive, `end`
+ * exclusive. `null` when the value is not a date form. */
+export function dateRange(value: string): { start?: string; end?: string } | null {
   const clean = value.trim();
   const year = clean.match(/^(\d{4})$/);
   if (year) {
@@ -236,6 +249,7 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     fts: "", has_positive: false, positive_terms: [], negatives: [], regexes: [],
     author: null, title: null, type: null, tag: null, color: null,
     date: null, after: null, before: null, favorite: false, zotero: false, has_image: false,
+    in: null, lang: null, genre: null, source: null,
   };
 
   let rest = raw.replace(REGEX_RE, (_m, source: string, flags: string) => {
@@ -251,6 +265,7 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     if (key === "i") { parsed.has_image = true; return " "; }
     if (key === "zo") { parsed.zotero = true; return " "; }
     if (key === "source") {
+      parsed.source = value;
       if (value.toLowerCase().includes("zotero")) parsed.zotero = true;
       return " ";
     }

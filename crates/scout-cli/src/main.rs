@@ -8,8 +8,8 @@ mod views;
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use scout_corpus::{
-    index, registry, search_all, Corpus, CorpusKind, DocFilter, IndexMissing, NoIndexedCorpus,
-    Registry, RegistryMissing, SearchRequest, Slice, SliceSpec,
+    index, registry, search_all, Corpus, DocFilter, IndexMissing, NoIndexedCorpus, PassageId,
+    PassageNotFound, Registry, RegistryMissing, SearchRequest, Slice, SliceSpec,
 };
 use std::process::ExitCode;
 
@@ -38,7 +38,9 @@ enum Cmd {
     },
     /// Full-text search; hits are passages grouped by document.
     Search {
-        /// Words are prefix-matched and ANDed; "quoted phrases" match exactly.
+        /// The @scout/query grammar: words are prefix-matched and ANDed;
+        /// "quoted phrases" match exactly; OR, -exclude, prefix*, /regex/i;
+        /// fields in: au: ti: ty: tag: co: after: before: y: lang: genre: source:.
         query: Vec<String>,
         /// Comma-separated corpus ids (default: every indexable corpus).
         #[arg(long = "in", value_delimiter = ',')]
@@ -170,6 +172,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Cite one passage by its id (the passage_id of search, kwic, verify-quote).
+    Cite {
+        /// <corpus>:<path>:<line>, e.g. writing:blogs/2016-essay.md:12
+        passage_id: String,
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: CiteArg,
+        #[arg(long)]
+        json: bool,
+    },
     /// Is this exact text in a source? (Only quote and apostrophe forms are unified.)
     VerifyQuote {
         text: Vec<String>,
@@ -201,6 +212,9 @@ pub struct Scope {
     /// Only this year.
     #[arg(long = "y", alias = "year")]
     pub year: Option<i32>,
+    /// Source system(s), comma-separated: readwise, x, zotero.
+    #[arg(long, value_delimiter = ',')]
+    pub source: Vec<String>,
 }
 
 impl Scope {
@@ -211,6 +225,8 @@ impl Scope {
             after: self.after.clone(),
             before: self.before.clone(),
             year: self.year,
+            source: self.source.clone(),
+            ..DocFilter::default()
         }
     }
 }
@@ -255,6 +271,9 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("scout: {e:#}");
+            if e.downcast_ref::<PassageNotFound>().is_some() {
+                return ExitCode::from(1);
+            }
             if e.downcast_ref::<IndexMissing>().is_some()
                 || e.downcast_ref::<RegistryMissing>().is_some()
                 || e.downcast_ref::<NoIndexedCorpus>().is_some()
@@ -268,10 +287,7 @@ fn main() -> ExitCode {
 }
 
 fn indexable(reg: &Registry) -> Vec<&scout_corpus::CorpusConfig> {
-    reg.corpora
-        .iter()
-        .filter(|c| c.kind == CorpusKind::MarkdownFolder)
-        .collect()
+    reg.corpora.iter().collect()
 }
 
 fn select(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
@@ -411,7 +427,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let req = scout_corpus::KeynessRequest { top, min_freq: min };
             let res = scout_corpus::keyness::keyness(&sa, &sb, &req)?;
             views::emit(json, &res, || views::print_keyness(&res))?;
-            Ok(views::code(!res.a_keys.is_empty() || !res.b_keys.is_empty()))
+            Ok(views::code(
+                !res.a_keys.is_empty() || !res.b_keys.is_empty(),
+            ))
         }
         Cmd::Dist {
             term,
@@ -486,6 +504,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
             views::emit(json, &res, || views::print_verify(&res))?;
             Ok(views::code(res.found))
         }
+        Cmd::Cite {
+            passage_id,
+            format,
+            json,
+        } => {
+            let id: PassageId = passage_id.parse()?;
+            let reg = Registry::load()?;
+            let c = Corpus::from_config(reg.get(&id.corpus)?.clone(), &index::index_dir());
+            let res = c.cite(&id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&res)?);
+            } else {
+                match format {
+                    CiteArg::Markdown => print!("{}", res.citation.markdown),
+                    CiteArg::Plain => print!("{}", res.citation.plain),
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Cmd::Corpora { cmd } => corpora(cmd),
         Cmd::Index { cmd } => index_cmd(cmd),
         Cmd::Search {
@@ -501,7 +538,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Err(anyhow!("empty query"));
             }
             let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &in_)?;
+            // `in:` in the query selects corpora when --in does not.
+            let ids = if in_.is_empty() {
+                scout_corpus::search::query_corpora(&query)?
+            } else {
+                in_
+            };
+            let corpora = scope_corpora(&reg, &ids)?;
             let mut req = SearchRequest::new(query);
             req.limit = limit;
             req.whole_passage = passage;
@@ -538,11 +581,21 @@ fn print_hits(res: &scout_corpus::SearchResults) {
         res.query,
         res.corpora.join(", ")
     );
+    if !res.plan.ignored.is_empty() {
+        println!("(not applied here: {})", res.plan.ignored.join(" "));
+    }
     for (i, d) in res.results.iter().enumerate() {
         let hit = &d.hits[0];
         println!();
-        println!("{:>3}. {}", i + 1, d.title);
-        let date = d.date.clone().unwrap_or_else(|| "—".into());
+        println!("{:>3}. [{}] {}", i + 1, d.corpus, d.title);
+        let mut date = d
+            .date
+            .as_deref()
+            .map(|s| s.get(..10).unwrap_or(s).to_string())
+            .unwrap_or_else(|| "—".into());
+        if d.date_source.as_deref() == Some("saved") {
+            date.push_str(" (saved)");
+        }
         let genre = d.genre.clone().unwrap_or_else(|| "—".into());
         println!(
             "     {date:<10}  {genre:<10}  {}:{}  ({} passages)",
@@ -644,11 +697,7 @@ fn index_cmd(cmd: IndexCmd) -> Result<ExitCode> {
                 let corpus = Corpus::from_config(c.clone(), &dir);
                 let s = corpus.status()?;
                 if !s.exists {
-                    let note = if c.kind == CorpusKind::MarkdownFolder {
-                        format!("no index; run `scout index build {}`", c.id)
-                    } else {
-                        format!("{} not indexable yet", c.kind.as_str())
-                    };
+                    let note = format!("no index; run `scout index build {}`", c.id);
                     println!(
                         "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
                         c.id, "—", "—", "—", "—", note

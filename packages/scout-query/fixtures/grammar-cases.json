@@ -1,0 +1,2789 @@
+{
+  "about": "Shared @scout/query grammar cases: parseSearch(input, partial) and dateRange(input). The TS package (grammar.test.ts) and the Rust port (crates/scout-query) must both reproduce every expected value. Expected values are generated from the TS implementation: SCOUT_WRITE_FIXTURES=1 npx vitest run packages/scout-query/grammar.test.ts",
+  "parse": [
+    {
+      "input": "",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "ty:tweets",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "tweets",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "i:",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": true,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "i: karpathy",
+      "partial": false,
+      "expected": {
+        "fts": "\"karpathy\"",
+        "has_positive": true,
+        "positive_terms": [
+          "karpathy"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": true,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "karpathy",
+      "partial": false,
+      "expected": {
+        "fts": "\"karpathy\"",
+        "has_positive": true,
+        "positive_terms": [
+          "karpathy"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor",
+      "partial": true,
+      "expected": {
+        "fts": "metaphor*",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "generative metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"generative\" \"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "generative",
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "generative metaphor",
+      "partial": true,
+      "expected": {
+        "fts": "generative* metaphor*",
+        "has_positive": true,
+        "positive_terms": [
+          "generative",
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "generative metaphor theory",
+      "partial": false,
+      "expected": {
+        "fts": "\"generative\" OR \"metaphor\" OR \"theory\"",
+        "has_positive": true,
+        "positive_terms": [
+          "generative",
+          "metaphor",
+          "theory"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "the metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "the of",
+      "partial": false,
+      "expected": {
+        "fts": "\"the\" \"of\"",
+        "has_positive": true,
+        "positive_terms": [
+          "the",
+          "of"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "the",
+      "partial": false,
+      "expected": {
+        "fts": "\"the\"",
+        "has_positive": true,
+        "positive_terms": [
+          "the"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "and",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "or",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "|",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "\"generative metaphor\"",
+      "partial": false,
+      "expected": {
+        "fts": "\"generative metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "generative metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "\"the\"",
+      "partial": false,
+      "expected": {
+        "fts": "\"the\"",
+        "has_positive": true,
+        "positive_terms": [
+          "the"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "\"\"",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "\" \"",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "\"half open",
+      "partial": false,
+      "expected": {
+        "fts": "\"half\" \"open\"",
+        "has_positive": true,
+        "positive_terms": [
+          "half",
+          "open"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaph*",
+      "partial": false,
+      "expected": {
+        "fts": "metaph*",
+        "has_positive": true,
+        "positive_terms": [
+          "metaph"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaph* theory",
+      "partial": true,
+      "expected": {
+        "fts": "metaph* theory*",
+        "has_positive": true,
+        "positive_terms": [
+          "metaph",
+          "theory"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "cat dog",
+      "partial": true,
+      "expected": {
+        "fts": "cat* dog*",
+        "has_positive": true,
+        "positive_terms": [
+          "cat",
+          "dog"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "don't",
+      "partial": false,
+      "expected": {
+        "fts": "\"don't\"",
+        "has_positive": true,
+        "positive_terms": [
+          "don't"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "don't",
+      "partial": true,
+      "expected": {
+        "fts": "\"don't\"",
+        "has_positive": true,
+        "positive_terms": [
+          "don't"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "AI-generated",
+      "partial": false,
+      "expected": {
+        "fts": "\"AI-generated\"",
+        "has_positive": true,
+        "positive_terms": [
+          "AI-generated"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "AI-generated",
+      "partial": true,
+      "expected": {
+        "fts": "\"AI-generated\"",
+        "has_positive": true,
+        "positive_terms": [
+          "AI-generated"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "příklad metafora",
+      "partial": false,
+      "expected": {
+        "fts": "\"příklad\" \"metafora\"",
+        "has_positive": true,
+        "positive_terms": [
+          "příklad",
+          "metafora"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "příklad metafora",
+      "partial": true,
+      "expected": {
+        "fts": "příklad* metafora*",
+        "has_positive": true,
+        "positive_terms": [
+          "příklad",
+          "metafora"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor OR simile",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" OR \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "simile"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor or simile",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" OR \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "simile"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor | simile",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" OR \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "simile"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor AND simile",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "simile"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor and simile",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "simile"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor OR",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "OR metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "a OR OR b",
+      "partial": false,
+      "expected": {
+        "fts": "\"b\"",
+        "has_positive": true,
+        "positive_terms": [
+          "b"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "alpha OR OR beta",
+      "partial": false,
+      "expected": {
+        "fts": "\"alpha\" \"beta\"",
+        "has_positive": true,
+        "positive_terms": [
+          "alpha",
+          "beta"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "alpha beta OR gamma",
+      "partial": false,
+      "expected": {
+        "fts": "\"alpha\" \"beta\" OR \"gamma\"",
+        "has_positive": true,
+        "positive_terms": [
+          "alpha",
+          "beta",
+          "gamma"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "alpha AND beta OR gamma",
+      "partial": false,
+      "expected": {
+        "fts": "\"alpha\" \"beta\" OR \"gamma\"",
+        "has_positive": true,
+        "positive_terms": [
+          "alpha",
+          "beta",
+          "gamma"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor -simile",
+      "partial": false,
+      "expected": {
+        "fts": "(\"metaphor\") NOT \"simile\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [
+          "simile"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "-simile",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [
+          "simile"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "-the metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "-",
+      "partial": false,
+      "expected": {
+        "fts": "\"-\"",
+        "has_positive": true,
+        "positive_terms": [
+          "-"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "--x",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [
+          "-x"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor -simile -dead",
+      "partial": true,
+      "expected": {
+        "fts": "(metaphor*) NOT \"simile\" NOT \"dead\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [
+          "simile",
+          "dead"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "-\"dead metaphor\" metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "(\"metaphor\" \"metaphor\") NOT \"dead\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "metaphor"
+        ],
+        "negatives": [
+          "dead"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "/metaph(or|ors)/i",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "metaph(or|ors)",
+            "flags": "i"
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "/a\\/b/ word",
+      "partial": false,
+      "expected": {
+        "fts": "\"word\"",
+        "has_positive": true,
+        "positive_terms": [
+          "word"
+        ],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "a\\/b",
+            "flags": ""
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "/x/ /y/g metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "x",
+            "flags": ""
+          },
+          {
+            "source": "y",
+            "flags": "g"
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "/unclosed",
+      "partial": false,
+      "expected": {
+        "fts": "\"/unclosed\"",
+        "has_positive": true,
+        "positive_terms": [
+          "/unclosed"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "au:lakoff metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": "lakoff",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "au:\"George Lakoff\" metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": "George Lakoff",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "AU:Lakoff",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": "Lakoff",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "author:Lakoff",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": "Lakoff",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "ti:metaphors we live by",
+      "partial": false,
+      "expected": {
+        "fts": "\"live\"",
+        "has_positive": true,
+        "positive_terms": [
+          "live"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": "metaphors",
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "title:\"Metaphors We Live By\"",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": "Metaphors We Live By",
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "ty:books",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "books",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "type:article",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "article",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "tw:karpathy",
+      "partial": false,
+      "expected": {
+        "fts": "\"karpathy\"",
+        "has_positive": true,
+        "positive_terms": [
+          "karpathy"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "tweets",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "bo:",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "books",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "articles:llm agents",
+      "partial": false,
+      "expected": {
+        "fts": "\"agents\" \"llm\"",
+        "has_positive": true,
+        "positive_terms": [
+          "agents",
+          "llm"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "articles",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "tag:linguistics co:yellow",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": "linguistics",
+        "color": "yellow",
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "colour:blue",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": "blue",
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "color:\"light blue\"",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": "light blue",
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "after:2016 before:2020",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": "2016",
+        "before": "2020",
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "since:2016-05 until:2017",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": "2016-05",
+        "before": "2017",
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "from:2010 to:2012",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": "2010",
+        "before": "2012",
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "y:2016 metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": "2016",
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "year:2010-2015",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": "2010-2015",
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "d:2016-06-23",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": "2016-06-23",
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "date:2016-",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": "2016-",
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "in:writing metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "writing",
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "in:writing,tweets lang:cs genre:essay metafora",
+      "partial": false,
+      "expected": {
+        "fts": "\"metafora\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metafora"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "writing,tweets",
+        "lang": "cs",
+        "genre": "essay",
+        "source": null
+      }
+    },
+    {
+      "input": "IN:highlights",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "highlights",
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "lang:",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": "",
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "lang: en",
+      "partial": false,
+      "expected": {
+        "fts": "\"en\"",
+        "has_positive": true,
+        "positive_terms": [
+          "en"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": "",
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "genre:\"blog post\" x",
+      "partial": false,
+      "expected": {
+        "fts": "\"x\"",
+        "has_positive": true,
+        "positive_terms": [
+          "x"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": "blog post",
+        "source": null
+      }
+    },
+    {
+      "input": "zo: metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": true,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "source:zotero",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": true,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": "zotero"
+      }
+    },
+    {
+      "input": "source:readwise",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": "readwise"
+      }
+    },
+    {
+      "input": "source:x metaphor",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": "x"
+      }
+    },
+    {
+      "input": "metaphor in:highlights -dead \"conceptual metaphor\" y:2020",
+      "partial": false,
+      "expected": {
+        "fts": "(\"metaphor\" \"conceptual metaphor\") NOT \"dead\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "conceptual metaphor"
+        ],
+        "negatives": [
+          "dead"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": "2020",
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "highlights",
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "email:foo",
+      "partial": false,
+      "expected": {
+        "fts": "\"email:foo\"",
+        "has_positive": true,
+        "positive_terms": [
+          "email:foo"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "multi:foo",
+      "partial": false,
+      "expected": {
+        "fts": "\"multi:foo\"",
+        "has_positive": true,
+        "positive_terms": [
+          "multi:foo"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "https://x.com/a/status/1",
+      "partial": false,
+      "expected": {
+        "fts": "\"https:/\" \"1\"",
+        "has_positive": true,
+        "positive_terms": [
+          "https:/",
+          "1"
+        ],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "x.com",
+            "flags": "a"
+          },
+          {
+            "source": "status",
+            "flags": ""
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "in: in",
+      "partial": false,
+      "expected": {
+        "fts": "\"in\"",
+        "has_positive": true,
+        "positive_terms": [
+          "in"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "",
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "tag:ai tag:ml",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": "ml",
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "au:a au:b",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": "b",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "   spaced    out   ",
+      "partial": false,
+      "expected": {
+        "fts": "\"spaced\"",
+        "has_positive": true,
+        "positive_terms": [
+          "spaced"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "metaphor*  * ",
+      "partial": false,
+      "expected": {
+        "fts": "metaphor* \"*\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "*"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "ÉAU:x",
+      "partial": false,
+      "expected": {
+        "fts": "\"É\"",
+        "has_positive": true,
+        "positive_terms": [
+          "É"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": "x",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    },
+    {
+      "input": "x au:y z",
+      "partial": true,
+      "expected": {
+        "fts": "x* z*",
+        "has_positive": true,
+        "positive_terms": [
+          "x",
+          "z"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": "y",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null
+      }
+    }
+  ],
+  "date_range": [
+    {
+      "input": "2016",
+      "expected": {
+        "start": "2016-01-01",
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": " 2016 ",
+      "expected": {
+        "start": "2016-01-01",
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": "2010-2015",
+      "expected": {
+        "start": "2010-01-01",
+        "end": "2016-01-01"
+      }
+    },
+    {
+      "input": "2015-2010",
+      "expected": null
+    },
+    {
+      "input": "2016-2016",
+      "expected": {
+        "start": "2016-01-01",
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": "2016-",
+      "expected": {
+        "start": "2016-01-01"
+      }
+    },
+    {
+      "input": "-2016",
+      "expected": {
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": "2016-05",
+      "expected": {
+        "start": "2016-05-01",
+        "end": "2016-06-01"
+      }
+    },
+    {
+      "input": "2016-12",
+      "expected": {
+        "start": "2016-12-01",
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": "2016-13",
+      "expected": null
+    },
+    {
+      "input": "2016-00",
+      "expected": null
+    },
+    {
+      "input": "2016-06-23",
+      "expected": {
+        "start": "2016-06-23",
+        "end": "2016-06-24"
+      }
+    },
+    {
+      "input": "2016-12-31",
+      "expected": {
+        "start": "2016-12-31",
+        "end": "2017-01-01"
+      }
+    },
+    {
+      "input": "2016-02-29",
+      "expected": {
+        "start": "2016-02-29",
+        "end": "2016-03-01"
+      }
+    },
+    {
+      "input": "2016-02-30",
+      "expected": {
+        "start": "2016-02-30",
+        "end": "2016-03-02"
+      }
+    },
+    {
+      "input": "2016-02-31",
+      "expected": {
+        "start": "2016-02-31",
+        "end": "2016-03-03"
+      }
+    },
+    {
+      "input": "2016-04-31",
+      "expected": {
+        "start": "2016-04-31",
+        "end": "2016-05-02"
+      }
+    },
+    {
+      "input": "abc",
+      "expected": null
+    },
+    {
+      "input": "",
+      "expected": null
+    },
+    {
+      "input": "20160",
+      "expected": null
+    },
+    {
+      "input": "2016-01-32",
+      "expected": null
+    },
+    {
+      "input": "2016-01-00",
+      "expected": null
+    },
+    {
+      "input": "2016-00-10",
+      "expected": null
+    },
+    {
+      "input": "2016-13-01",
+      "expected": null
+    },
+    {
+      "input": "2015-02-29",
+      "expected": {
+        "start": "2015-02-29",
+        "end": "2015-03-02"
+      }
+    },
+    {
+      "input": "2016-1-05",
+      "expected": null
+    }
+  ]
+}

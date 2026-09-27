@@ -11,11 +11,13 @@
 //! [`keyness::keyness`] take [`Slice`]s. The CLI and the apps call these same
 //! functions.
 
+pub mod adapter;
 pub mod cite;
 pub mod colloc;
 pub mod concord;
 pub mod filter;
 pub mod freq;
+pub mod highlights;
 pub mod index;
 pub mod keyness;
 pub mod markdown;
@@ -27,6 +29,7 @@ pub mod rowdist;
 pub mod search;
 pub mod stopwords;
 pub mod tokenize;
+pub mod tweets;
 pub mod verify;
 
 pub use colloc::{CollocRequest, CollocResults, CompareResults, Score};
@@ -34,13 +37,13 @@ pub use concord::{
     DistBy, Distribution, KwicRequest, KwicResults, KwicSort, Near, Profile, ProfileOptions,
 };
 pub use filter::{DocFilter, SliceSpec};
-pub use keyness::{KeynessRequest, KeynessResults};
-pub use rowdist::RowDistBy;
-pub use ngrams::{NgramRequest, NgramResults};
-pub use verify::VerifyResult;
 pub use index::{BuildReport, IndexMissing, IndexStatus, NoIndexedCorpus};
-pub use registry::{CorpusConfig, CorpusKind, Registry, RegistryMissing};
-pub use search::{SearchRequest, SearchResults};
+pub use keyness::{KeynessRequest, KeynessResults};
+pub use ngrams::{NgramRequest, NgramResults};
+pub use registry::{CiteStyle, CorpusConfig, CorpusKind, DocumentUnit, Registry, RegistryMissing};
+pub use rowdist::RowDistBy;
+pub use search::{CitedPassage, PassageId, PassageNotFound, SearchRequest, SearchResults};
+pub use verify::VerifyResult;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -124,18 +127,36 @@ impl Corpus {
         ngrams::ngrams(std::slice::from_ref(self), req)
     }
 
+    /// `scout cite`: a passage by id, quoted whole, with both citations.
+    pub fn cite(&self, id: &search::PassageId) -> Result<search::CitedPassage> {
+        let conn = index::open_existing(&self.config, &self.index_path)?;
+        search::cite_passage(&conn, &self.config, id)
+    }
+
     pub fn verify_quote(&self, text: &str) -> Result<VerifyResult> {
         verify::verify_quote(std::slice::from_ref(self), text)
     }
 }
 
-/// Search several corpora and merge the results deterministically.
+/// Search several corpora and merge the results deterministically. A
+/// query's `in:` narrows `corpora` to the ids it names.
 pub fn search_all(corpora: &[Corpus], req: &SearchRequest) -> Result<SearchResults> {
+    let named = search::query_corpora(&req.query)?;
     let mut parts = Vec::new();
     for c in corpora {
-        parts.push(c.search(req)?);
+        if named.is_empty() || named.iter().any(|n| n == c.id()) {
+            parts.push(c.search(req)?);
+        }
     }
-    Ok(search::merge(&req.query, parts, req.limit))
+    if parts.is_empty() {
+        let have: Vec<&str> = corpora.iter().map(|c| c.id()).collect();
+        anyhow::bail!(
+            "in:{} names none of the searched corpora ({})",
+            named.join(","),
+            have.join(", ")
+        );
+    }
+    search::merge(&req.query, parts, req.limit)
 }
 
 /// A slice of the archive for the two-slice views: corpora plus a filter.
@@ -164,9 +185,7 @@ pub fn indexed_corpora(reg: &Registry, index_dir: &Path) -> (Vec<Corpus>, Vec<St
     let mut missing = Vec::new();
     for cfg in &reg.corpora {
         let c = Corpus::from_config(cfg.clone(), index_dir);
-        if cfg.kind == CorpusKind::MarkdownFolder
-            && index::open_existing(&c.config, c.index_path()).is_ok()
-        {
+        if index::open_existing(&c.config, c.index_path()).is_ok() {
             ok.push(c);
         } else {
             missing.push(cfg.id.clone());

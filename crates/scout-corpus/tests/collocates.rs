@@ -26,6 +26,7 @@ fn cfg(root: &Path, id: &str) -> CorpusConfig {
         default_author: Some("Dominik Lukeš".into()),
         boilerplate: vec![],
         link: Some(WRITEFLEX_LINK.into()),
+        document_unit: Default::default(),
     }
 }
 
@@ -595,7 +596,27 @@ fn citation_carries_the_public_url_when_frontmatter_has_one() {
 #[test]
 #[ignore]
 fn real_writing_collocate_counts_equal_concordance_lines() {
-    let c = Corpus::open("writing").expect("writing corpus registered");
+    real_corpus_counts_agree("writing");
+}
+
+/// The same over the real tweets index (one document per tweet).
+#[test]
+#[ignore]
+fn real_tweets_collocate_counts_equal_concordance_lines() {
+    real_corpus_counts_agree("tweets");
+}
+
+/// The same over the real highlights index (one passage per highlight).
+#[test]
+#[ignore]
+fn real_highlights_collocate_counts_equal_concordance_lines() {
+    real_corpus_counts_agree("highlights");
+}
+
+/// Collocate row counts = `kwic --near` lines, and for each word
+/// kwic total = n-gram count = profile frequency.
+fn real_corpus_counts_agree(id: &str) {
+    let c = Corpus::open(id).expect("corpus registered");
     let words = scout_corpus::ngrams::ngrams(
         std::slice::from_ref(&c),
         &NgramRequest {
@@ -619,6 +640,11 @@ fn real_writing_collocate_counts_equal_concordance_lines() {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         let w = pool[(seed >> 33) as usize % pool.len()];
+        let k = c.kwic(&KwicRequest::new(w)).unwrap();
+        let p = c.profile(w, &DocFilter::default()).unwrap();
+        let uni = words.iter().find(|g| g.gram == w).unwrap().count;
+        assert_eq!(k.total as u64, uni, "{w}: kwic vs n-gram");
+        assert_eq!(k.total, p.frequency, "{w}: kwic vs profile");
         let mut req = CollocRequest::new(w);
         req.top = 5;
         let r = c.collocates(&req).unwrap();

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/scout-index", "crates/scout-archive", "crates/scout-corpus", "crates/scout-cli"]
+members = ["crates/scout-index", "crates/scout-archive", "crates/scout-query", "crates/scout-corpus", "crates/scout-cli"]
 
 [workspace.package]
 version = "0.1.0"
