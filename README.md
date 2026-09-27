@@ -7,6 +7,7 @@ It contains three parts:
 - `scout-index`: a Rust FTS5 index and search layer for container/record archives.
 - `scout-archive`: Rust Markdown archive rendering and content-hash idempotency helpers.
 - `@scout/query`: the TypeScript search-query grammar exposed from the repository root package.
+- `scout-query`: the Rust port of `@scout/query`. Both implementations must pass one shared fixture file, `packages/scout-query/fixtures/grammar-cases.json` (regenerate it from the TS package with `SCOUT_WRITE_FIXTURES=1 npx vitest run packages/scout-query/grammar.test.ts`).
 
 ## Schema Freeze
 
