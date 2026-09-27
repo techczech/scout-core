@@ -83,8 +83,8 @@ The initial registry is written by `scout corpora init-defaults` with three entr
   - `min_freq` defaults to 5.
   - Each row carries a count equal to its concordance lines (invariant 3).
 - **Compare** (J5-A, writing vs highlights): the same node, window and score computed over two corpora or filters, returned side by side, plus a per-collocate ratio.
-- **N-grams:** n in a range (default 3–5), within a passage. By default, grams made entirely of stopwords are removed, and grams with ≥ n−1 stopwords are dropped. `--since/--until` gives counts per period.
-- **Profile** (J5-B): frequency plus per-year distribution, the top collocates (logDice), the top n-grams containing the word, and the top documents by relative frequency.
+- **N-grams:** n in a range (default 3–5), within a passage. By default, only grams made entirely of stopwords are removed. The stricter rule (drop grams with ≥ n−1 stopwords) is the opt-in `--strict-stopwords`, because the default must keep real phrases such as "at the same time" and "the difference between" (amended 2026-09-27 after the mockup round). `--since/--until` gives counts per period.
+- **Profile** (J5-B): collocates are a plain logDice list; collocates by grammatical relation are handed to Sketch Engine (amended 2026-09-27). The profile shows frequency plus per-year distribution, the top collocates (logDice), the top n-grams containing the word, and the top documents by relative frequency.
 - **Distribution:** hit counts by year, corpus, genre or lang.
 - **verify_quote:** is the exact string (after quote and apostrophe unification only) found in the original text of any passage? Returns the document, the line and the matched original text. This is what the report recipe (J8-B) uses to machine-verify every quote.
 
