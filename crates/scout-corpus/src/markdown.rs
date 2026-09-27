@@ -260,6 +260,8 @@ pub struct DocMeta {
     pub lang: Option<String>,
     pub summary: Option<String>,
     pub author: Option<String>,
+    /// The first `http(s)://` value among `field_map.public_url` keys.
+    pub public_url: Option<String>,
 }
 
 /// Does the file count as a document under `require_frontmatter`?
@@ -303,6 +305,11 @@ pub fn doc_meta(cfg: &CorpusConfig, parsed: &ParsedFile) -> DocMeta {
         lang: get(&fmap.lang),
         summary: get(&fmap.summary),
         author: get(&fmap.author).or_else(|| cfg.default_author.clone()),
+        public_url: fmap.public_url.iter().find_map(|k| {
+            get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
+        }),
     }
 }
 

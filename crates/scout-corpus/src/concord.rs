@@ -14,7 +14,9 @@
 //! Rendering: left / node / right are slices of the ORIGINAL passage text,
 //! found by mapping token spans of the normalised copy back through the
 //! offset map (invariant 2). `left + node + right` is one contiguous original
-//! substring.
+//! substring. Only the lines a view returns are rendered: counting runs over
+//! the stored token streams, so `kwic --limit 200` renders 200 passages, not
+//! every hit.
 
 use crate::cite;
 use crate::filter::{DocFilter, DocInfo};
@@ -25,7 +27,7 @@ use anyhow::{anyhow, bail, Result};
 use rusqlite::params;
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -109,24 +111,61 @@ pub struct KwicLine {
     /// Byte offset of `node` inside the passage's original text.
     pub node_offset: usize,
     pub link: Option<String>,
-    #[serde(skip)]
-    left_keys: Vec<String>,
-    #[serde(skip)]
-    right_keys: Vec<String>,
-    #[serde(skip)]
-    date_floor: Option<String>,
 }
 
-/// Everything [`find`] returns: the matched lines (unsorted) and the filtered
-/// documents they were counted over (the denominators).
-pub struct Found {
+/// A collocate restriction for KWIC: keep only lines where the single token
+/// `word` occurs within `window` tokens left or right of the node, inside the
+/// passage (the node's own tokens do not count). This is exactly the
+/// co-occurrence a collocate row counts, so a row's count equals the lines of
+/// its concordance link (invariant 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Near {
+    pub word: String,
+    pub window: usize,
+}
+
+/// One indexed passage holding at least one hit, as interned token ids.
+pub(crate) struct PassageRec {
+    /// Index into [`Hits::corpora`].
+    pub corpus: usize,
+    pub rowid: i64,
+    pub rel: String,
+    pub line_start: i64,
+    pub toks: Vec<u32>,
+    pub(crate) date_floor: Option<String>,
+}
+
+/// One node occurrence: passage index and the node's first token index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hit {
+    pub p: u32,
+    pub i: u32,
+}
+
+/// Every occurrence of a term, found over the stored token streams. Text is
+/// rendered from the original only for the lines a view returns
+/// ([`Hits::lines`]), so counting views never touch the original text.
+pub struct Hits {
     pub node: Vec<String>,
-    pub lines: Vec<KwicLine>,
-    /// Per corpus id: its documents passing the filter.
+    pub(crate) corpora: Vec<Corpus>,
+    pub(crate) vocab: Vec<String>,
+    pub(crate) ids: HashMap<String, u32>,
+    pub(crate) passages: Vec<PassageRec>,
+    /// In source order (corpus as given, then path, line, offset).
+    pub(crate) hits: Vec<Hit>,
+    /// Per corpus id: its documents passing the filter (the denominators).
     pub docs: BTreeMap<String, BTreeMap<String, DocInfo>>,
 }
 
-impl Found {
+impl Hits {
+    pub fn len(&self) -> usize {
+        self.hits.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hits.is_empty()
+    }
+
     pub fn total_tokens(&self) -> i64 {
         self.docs
             .values()
@@ -135,12 +174,217 @@ impl Found {
             .sum()
     }
 
+    pub fn corpus_ids(&self) -> Vec<String> {
+        self.corpora.iter().map(|c| c.id().to_string()).collect()
+    }
+
+    pub(crate) fn corpus_id(&self, h: Hit) -> &str {
+        self.corpora[self.passages[h.p as usize].corpus].id()
+    }
+
+    pub(crate) fn doc(&self, h: Hit) -> &DocInfo {
+        let rec = &self.passages[h.p as usize];
+        &self.docs[self.corpora[rec.corpus].id()][&rec.rel]
+    }
+
     pub fn pieces(&self) -> usize {
-        self.lines
-            .iter()
-            .map(|l| (l.corpus.as_str(), l.rel_path.as_str()))
-            .collect::<BTreeSet<_>>()
-            .len()
+        let mut seen: BTreeSet<(usize, &str)> = BTreeSet::new();
+        for h in &self.hits {
+            let rec = &self.passages[h.p as usize];
+            seen.insert((rec.corpus, rec.rel.as_str()));
+        }
+        seen.len()
+    }
+
+    /// The token ids within `w` tokens left and right of the node.
+    pub(crate) fn window(&self, h: Hit, w: usize) -> (&[u32], &[u32]) {
+        let toks = &self.passages[h.p as usize].toks;
+        let i = h.i as usize;
+        let last = i + self.node.len(); // one past the node
+        let ls = i.saturating_sub(w);
+        let re = (last + w).min(toks.len());
+        (&toks[ls..i], &toks[last..re])
+    }
+
+    fn tok(&self, rec: &PassageRec, j: Option<usize>) -> &str {
+        j.and_then(|j| rec.toks.get(j))
+            .map(|&id| self.vocab[id as usize].as_str())
+            .unwrap_or("")
+    }
+
+    fn cmp_side(&self, a: Hit, b: Hit, left: bool, from: usize) -> Ordering {
+        let (ra, rb) = (&self.passages[a.p as usize], &self.passages[b.p as usize]);
+        let n = self.node.len();
+        for k in from..=KEY_SPAN {
+            let pos = |h: Hit| {
+                if left {
+                    (h.i as usize).checked_sub(k)
+                } else {
+                    Some(h.i as usize + n - 1 + k)
+                }
+            };
+            match self.tok(ra, pos(a)).cmp(self.tok(rb, pos(b))) {
+                Ordering::Equal => continue,
+                o => return o,
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Corpus id, path, passage line, token index: the same order as corpus,
+    /// path, node line, byte offset.
+    pub(crate) fn cmp_source(&self, a: Hit, b: Hit) -> Ordering {
+        let (ra, rb) = (&self.passages[a.p as usize], &self.passages[b.p as usize]);
+        self.corpora[ra.corpus]
+            .id()
+            .cmp(self.corpora[rb.corpus].id())
+            .then_with(|| ra.rel.cmp(&rb.rel))
+            .then(ra.line_start.cmp(&rb.line_start))
+            .then(a.i.cmp(&b.i))
+    }
+
+    pub(crate) fn cmp_date(&self, a: Hit, b: Hit) -> Ordering {
+        let (x, y) = (
+            &self.passages[a.p as usize].date_floor,
+            &self.passages[b.p as usize].date_floor,
+        );
+        match (x, y) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+    }
+
+    /// The hits in `sort` order; every order ends with the source tie-break.
+    pub(crate) fn sorted(&self, sort: KwicSort) -> Vec<Hit> {
+        let mut v = self.hits.clone();
+        v.sort_by(|&a, &b| {
+            let primary = match sort {
+                KwicSort::Left(k) => self.cmp_side(a, b, true, k),
+                KwicSort::Right(k) => self.cmp_side(a, b, false, k),
+                KwicSort::Date => self.cmp_date(a, b),
+                KwicSort::Source => Ordering::Equal,
+            };
+            primary.then_with(|| self.cmp_source(a, b))
+        });
+        v
+    }
+
+    /// Render `hits` as concordance lines from the ORIGINAL passage text,
+    /// with `width` tokens either side (invariant 2).
+    pub(crate) fn lines(&self, hits: &[Hit], width: usize) -> Result<Vec<KwicLine>> {
+        struct Rendered {
+            rowid: i64,
+            original: String,
+            spans: Vec<(usize, usize)>,
+        }
+        let mut conns: BTreeMap<usize, (rusqlite::Connection, Vec<regex::Regex>)> = BTreeMap::new();
+        let mut cache: Option<Rendered> = None;
+        let mut out = Vec::with_capacity(hits.len());
+        for &h in hits {
+            let rec = &self.passages[h.p as usize];
+            let c = &self.corpora[rec.corpus];
+            if cache.as_ref().map(|r| r.rowid) != Some(rec.rowid) {
+                if let std::collections::btree_map::Entry::Vacant(e) = conns.entry(rec.corpus) {
+                    let conn = crate::index::open_existing(&c.config, c.index_path())?;
+                    let rules = normalize::compile_rules(&c.config.boilerplate)?;
+                    e.insert((conn, rules));
+                }
+                let (conn, rules) = &conns[&rec.corpus];
+                let original: String = conn.query_row(
+                    "SELECT original FROM passages WHERE id = ?1",
+                    params![rec.rowid],
+                    |r| r.get(0),
+                )?;
+                let m = normalize::normalize(&original, rules);
+                let toks = tokenize(&m.text, &IdentityLemmatizer, None);
+                if toks.len() != rec.toks.len() {
+                    bail!(
+                        "index for {:?} is out of date ({}); run `scout index build {} --force`",
+                        c.id(),
+                        rec.rel,
+                        c.id()
+                    );
+                }
+                let spans = toks
+                    .iter()
+                    .map(|t| m.original_range(t.start, t.end))
+                    .collect();
+                cache = Some(Rendered {
+                    rowid: rec.rowid,
+                    original,
+                    spans,
+                });
+            }
+            let r = cache.as_ref().unwrap();
+            let (original, spans) = (&r.original, &r.spans);
+            let i = h.i as usize;
+            let last = i + self.node.len() - 1;
+            let ns = spans[i].0;
+            let ne = spans[last].1.max(ns);
+            let ls = extend_left(original, spans[i.saturating_sub(width)].0.min(ns));
+            let re = extend_right(
+                original,
+                spans[(last + width).min(spans.len() - 1)].1.max(ne),
+            );
+            let line = rec.line_start as usize + original[..ns].matches('\n').count();
+            let doc = self.doc(h);
+            let abs = c.config.root().join(&rec.rel);
+            out.push(KwicLine {
+                corpus: c.id().to_string(),
+                passage_id: format!("{}:{}:{}", c.id(), rec.rel, rec.line_start),
+                rel_path: rec.rel.clone(),
+                path: abs.display().to_string(),
+                title: doc.title.clone(),
+                date: doc.date.clone(),
+                date_display: doc.date.as_deref().and_then(cite::format_date),
+                genre: doc.genre.clone(),
+                lang: doc.lang.clone(),
+                line,
+                left: original[ls..ns].to_string(),
+                node: original[ns..ne].to_string(),
+                right: original[ne..re].to_string(),
+                node_offset: ns,
+                link: c
+                    .config
+                    .link
+                    .as_deref()
+                    .map(|t| cite::render_link(t, &abs, line)),
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Punctuation glued to the context edge belongs to the context: extend `end`
+/// over the characters up to the next whitespace (or the passage end) when
+/// they are all non-alphanumeric, so "(building scaffolding)" keeps its ")".
+/// A run that reaches into letters (a stripped URL, say) is left out.
+fn extend_right(text: &str, end: usize) -> usize {
+    let rest = &text[end..];
+    let run = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    if run > 0 && !rest[..run].chars().any(char::is_alphanumeric) {
+        end + run
+    } else {
+        end
+    }
+}
+
+/// The left-hand mirror of [`extend_right`]: an opening "(" or "“" glued to
+/// the first context token is kept.
+fn extend_left(text: &str, start: usize) -> usize {
+    let before = &text[..start];
+    let from = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    if from < start && !before[from..].chars().any(char::is_alphanumeric) {
+        from
+    } else {
+        start
     }
 }
 
@@ -148,135 +392,114 @@ fn fts_phrase(node: &[String]) -> String {
     format!("\"{}\"", node.join(" ").replace('"', "\"\""))
 }
 
-/// Every occurrence of `term` in `corpora` under `filter`, with `width`
-/// tokens of original-text context either side.
-pub fn find(corpora: &[Corpus], term: &str, filter: &DocFilter, width: usize) -> Result<Found> {
+/// Every occurrence of `term` in `corpora` under `filter`, optionally only
+/// those with `near` inside the window.
+///
+/// Matching runs over the stored token streams (the same tokens the n-gram
+/// view counts); the FTS index only preselects candidate passages.
+pub fn find(
+    corpora: &[Corpus],
+    term: &str,
+    filter: &DocFilter,
+    near: Option<&Near>,
+) -> Result<Hits> {
     filter.validate()?;
     let node = node_tokens(term);
     if node.is_empty() {
         bail!("empty term {term:?}: it has no word tokens");
     }
-    let mut found = Found {
+    let near_tok = match near {
+        None => None,
+        Some(n) => {
+            let t = node_tokens(&n.word);
+            if t.len() != 1 {
+                bail!("--near {:?}: give exactly one word", n.word);
+            }
+            Some((t[0].clone(), n.window))
+        }
+    };
+    let mut ids: HashMap<String, u32> = HashMap::new();
+    let mut vocab: Vec<String> = Vec::new();
+    fn intern(t: &str, ids: &mut HashMap<String, u32>, vocab: &mut Vec<String>) -> u32 {
+        if let Some(&id) = ids.get(t) {
+            return id;
+        }
+        let id = vocab.len() as u32;
+        ids.insert(t.to_string(), id);
+        vocab.push(t.to_string());
+        id
+    }
+    let node_ids: Vec<u32> = node
+        .iter()
+        .map(|t| intern(t, &mut ids, &mut vocab))
+        .collect();
+    let near_id = near_tok
+        .as_ref()
+        .map(|(t, w)| (intern(t, &mut ids, &mut vocab), *w));
+    let mut out = Hits {
         node: node.clone(),
-        lines: Vec::new(),
+        corpora: corpora.to_vec(),
+        vocab: Vec::new(),
+        ids: HashMap::new(),
+        passages: Vec::new(),
+        hits: Vec::new(),
         docs: BTreeMap::new(),
     };
     let fts = fts_phrase(&node);
-    for c in corpora {
+    let n = node.len();
+    for (ci, c) in corpora.iter().enumerate() {
         let conn = crate::index::open_existing(&c.config, c.index_path())?;
         let docs = crate::filter::filtered_docs(&conn, filter)?;
-        let rules = normalize::compile_rules(&c.config.boilerplate)?;
-        let root = c.config.root();
         let mut st = conn.prepare(
-            "SELECT p.rel_path, p.line_start, p.original
+            "SELECT p.id, p.rel_path, p.line_start, passages_fts.tokens
              FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
              WHERE passages_fts MATCH ?1
              ORDER BY p.rel_path, p.line_start",
         )?;
-        let rows = st.query_map(params![fts], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
-        for row in rows {
-            let (rel, line_start, original) = row?;
+        let mut rows = st.query(params![fts])?;
+        while let Some(r) = rows.next()? {
+            let rel: String = r.get(1)?;
             let Some(doc) = docs.get(&rel) else { continue };
-            let m = normalize::normalize(&original, &rules);
-            let toks = tokenize(&m.text, &IdentityLemmatizer, None);
-            if toks.len() < node.len() {
+            let text: String = r.get(3)?;
+            let toks: Vec<u32> = text
+                .split(' ')
+                .filter(|t| !t.is_empty())
+                .map(|t| intern(t, &mut ids, &mut vocab))
+                .collect();
+            if toks.len() < n {
                 continue;
             }
-            // Original byte span of each token.
-            let spans: Vec<(usize, usize)> = toks
-                .iter()
-                .map(|t| m.original_range(t.start, t.end))
-                .collect();
-            let abs = root.join(&rel);
-            for i in 0..=toks.len() - node.len() {
-                if !node.iter().enumerate().all(|(k, w)| toks[i + k].text == *w) {
+            let p = out.passages.len() as u32;
+            let before = out.hits.len();
+            for i in 0..=toks.len() - n {
+                if toks[i..i + n] != node_ids[..] {
                     continue;
                 }
-                let last = i + node.len() - 1;
-                let ns = spans[i].0;
-                let ne = spans[last].1.max(ns);
-                let ls = spans[i.saturating_sub(width)].0.min(ns);
-                let re = spans[(last + width).min(toks.len() - 1)].1.max(ne);
-                let line = line_start as usize + original[..ns].matches('\n').count();
-                let left_keys = (1..=KEY_SPAN)
-                    .map_while(|k| i.checked_sub(k).map(|j| toks[j].text.clone()))
-                    .collect();
-                let right_keys = (1..=KEY_SPAN)
-                    .map_while(|k| toks.get(last + k).map(|t| t.text.clone()))
-                    .collect();
-                found.lines.push(KwicLine {
-                    corpus: c.id().to_string(),
-                    passage_id: format!("{}:{}:{}", c.id(), rel, line_start),
-                    rel_path: rel.clone(),
-                    path: abs.display().to_string(),
-                    title: doc.title.clone(),
-                    date: doc.date.clone(),
-                    date_display: doc.date.as_deref().and_then(cite::format_date),
-                    genre: doc.genre.clone(),
-                    lang: doc.lang.clone(),
-                    line,
-                    left: original[ls..ns].to_string(),
-                    node: original[ns..ne].to_string(),
-                    right: original[ne..re].to_string(),
-                    node_offset: ns,
-                    link: c
-                        .config
-                        .link
-                        .as_deref()
-                        .map(|t| cite::render_link(t, &abs, line)),
-                    left_keys,
-                    right_keys,
+                if let Some((nid, w)) = near_id {
+                    let ls = i.saturating_sub(w);
+                    let re = (i + n + w).min(toks.len());
+                    if !toks[ls..i].contains(&nid) && !toks[i + n..re].contains(&nid) {
+                        continue;
+                    }
+                }
+                out.hits.push(Hit { p, i: i as u32 });
+            }
+            if out.hits.len() > before {
+                out.passages.push(PassageRec {
+                    corpus: ci,
+                    rowid: r.get(0)?,
+                    rel,
+                    line_start: r.get(2)?,
+                    toks,
                     date_floor: doc.date_floor(),
                 });
             }
         }
-        found.docs.insert(c.id().to_string(), docs);
+        out.docs.insert(c.id().to_string(), docs);
     }
-    Ok(found)
-}
-
-fn cmp_keys(a: &[String], b: &[String], from: usize) -> Ordering {
-    for k in from..=KEY_SPAN {
-        let x = a.get(k - 1).map(String::as_str).unwrap_or("");
-        let y = b.get(k - 1).map(String::as_str).unwrap_or("");
-        match x.cmp(y) {
-            Ordering::Equal => continue,
-            o => return o,
-        }
-    }
-    Ordering::Equal
-}
-
-fn cmp_source(a: &KwicLine, b: &KwicLine) -> Ordering {
-    a.corpus
-        .cmp(&b.corpus)
-        .then_with(|| a.rel_path.cmp(&b.rel_path))
-        .then(a.line.cmp(&b.line))
-        .then(a.node_offset.cmp(&b.node_offset))
-}
-
-/// Sort lines in place; every order ends with the source tie-break.
-pub fn sort_lines(lines: &mut [KwicLine], sort: KwicSort) {
-    lines.sort_by(|a, b| {
-        let primary = match sort {
-            KwicSort::Left(k) => cmp_keys(&a.left_keys, &b.left_keys, k),
-            KwicSort::Right(k) => cmp_keys(&a.right_keys, &b.right_keys, k),
-            KwicSort::Date => match (&a.date_floor, &b.date_floor) {
-                (Some(x), Some(y)) => x.cmp(y),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => Ordering::Equal,
-            },
-            KwicSort::Source => Ordering::Equal,
-        };
-        primary.then_with(|| cmp_source(a, b))
-    });
+    out.vocab = vocab;
+    out.ids = ids;
+    Ok(out)
 }
 
 // ---------- KWIC ----------
@@ -288,6 +511,9 @@ pub struct KwicRequest {
     pub sort: KwicSort,
     pub limit: usize,
     pub filter: DocFilter,
+    /// Keep only lines with this collocate in the window (a collocate row's
+    /// concordance link).
+    pub near: Option<Near>,
 }
 
 impl KwicRequest {
@@ -298,6 +524,7 @@ impl KwicRequest {
             sort: KwicSort::Right(1),
             limit: 200,
             filter: DocFilter::default(),
+            near: None,
         }
     }
 }
@@ -309,6 +536,8 @@ pub struct KwicResults {
     pub node_tokens: Vec<String>,
     pub corpora: Vec<String>,
     pub filters: DocFilter,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub near: Option<Near>,
     pub width: usize,
     pub sort: String,
     /// All matching lines, before `limit`.
@@ -320,23 +549,23 @@ pub struct KwicResults {
 }
 
 pub fn kwic(corpora: &[Corpus], req: &KwicRequest) -> Result<KwicResults> {
-    let mut f = find(corpora, &req.term, &req.filter, req.width)?;
-    sort_lines(&mut f.lines, req.sort);
-    let total = f.lines.len();
-    let pieces = f.pieces();
-    f.lines.truncate(req.limit);
+    let f = find(corpora, &req.term, &req.filter, req.near.as_ref())?;
+    let mut order = f.sorted(req.sort);
+    order.truncate(req.limit);
+    let lines = f.lines(&order, req.width)?;
     Ok(KwicResults {
         schema_version: SCHEMA_VERSION,
         term: req.term.clone(),
         node_tokens: f.node.clone(),
-        corpora: corpora.iter().map(|c| c.id().to_string()).collect(),
+        corpora: f.corpus_ids(),
         filters: req.filter.clone(),
+        near: req.near.clone(),
         width: req.width,
         sort: req.sort.to_string(),
-        total,
-        pieces,
-        returned: f.lines.len(),
-        lines: f.lines,
+        total: f.len(),
+        pieces: f.pieces(),
+        returned: lines.len(),
+        lines,
     })
 }
 
@@ -413,7 +642,7 @@ pub struct Distribution {
     pub buckets: Vec<DistBucket>,
 }
 
-fn per_million(hits: usize, tokens: i64) -> f64 {
+pub(crate) fn per_million(hits: usize, tokens: i64) -> f64 {
     if tokens <= 0 {
         return 0.0;
     }
@@ -423,18 +652,18 @@ fn per_million(hits: usize, tokens: i64) -> f64 {
 /// Per bucket: hits, the (corpus, path) documents with hits, tokens.
 type BucketAcc = (usize, BTreeSet<(String, String)>, i64);
 
-fn buckets_of(f: &Found, by: DistBy) -> Vec<DistBucket> {
+pub(crate) fn buckets_of(f: &Hits, by: DistBy) -> Vec<DistBucket> {
     let mut acc: BTreeMap<String, BucketAcc> = BTreeMap::new();
     for (corpus, docs) in &f.docs {
         for d in docs.values() {
             acc.entry(bucket_key(by, corpus, d)).or_default().2 += d.tokens;
         }
     }
-    for l in &f.lines {
-        let d = &f.docs[&l.corpus][&l.rel_path];
-        let e = acc.entry(bucket_key(by, &l.corpus, d)).or_default();
+    for &h in &f.hits {
+        let (corpus, d) = (f.corpus_id(h), f.doc(h));
+        let e = acc.entry(bucket_key(by, corpus, d)).or_default();
         e.0 += 1;
-        e.1.insert((l.corpus.clone(), l.rel_path.clone()));
+        e.1.insert((corpus.to_string(), d.rel_path.clone()));
     }
     let mut out: Vec<DistBucket> = acc
         .into_iter()
@@ -463,15 +692,15 @@ pub fn distribution(
     by: DistBy,
     filter: &DocFilter,
 ) -> Result<Distribution> {
-    let f = find(corpora, term, filter, 0)?;
+    let f = find(corpora, term, filter, None)?;
     Ok(Distribution {
         schema_version: SCHEMA_VERSION,
         term: term.to_string(),
         node_tokens: f.node.clone(),
-        corpora: corpora.iter().map(|c| c.id().to_string()).collect(),
+        corpora: f.corpus_ids(),
         filters: filter.clone(),
         by,
-        total: f.lines.len(),
+        total: f.len(),
         pieces: f.pieces(),
         buckets: buckets_of(&f, by),
     })
@@ -479,133 +708,8 @@ pub fn distribution(
 
 // ---------- profile ----------
 
-#[derive(Debug, Clone, Serialize)]
-pub struct FirstUse {
-    pub corpus: String,
-    pub passage_id: String,
-    pub rel_path: String,
-    pub title: String,
-    pub date: Option<String>,
-    pub date_display: Option<String>,
-    pub line: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DocFreq {
-    pub corpus: String,
-    pub rel_path: String,
-    pub title: String,
-    pub date: Option<String>,
-    pub hits: usize,
-    pub tokens: i64,
-    pub per_million: f64,
-}
-
-/// A profile section whose content arrives in a later ticket.
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingSection {
-    pub status: &'static str,
-    pub arrives_in: &'static str,
-    pub items: Vec<serde_json::Value>,
-}
-
-impl PendingSection {
-    fn t4() -> Self {
-        PendingSection {
-            status: "pending",
-            arrives_in: "T4",
-            items: vec![],
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Profile {
-    pub schema_version: u32,
-    pub word: String,
-    pub node_tokens: Vec<String>,
-    pub corpora: Vec<String>,
-    pub filters: DocFilter,
-    /// Equals the KWIC total for the same word and filters.
-    pub frequency: usize,
-    pub total_tokens: i64,
-    pub per_million: f64,
-    pub pieces: usize,
-    /// The earliest dated occurrence (date, then corpus, path, line).
-    pub first_used: Option<FirstUse>,
-    /// Per-year distribution; the same buckets as `scout dist --by year`.
-    pub by_year: Vec<DistBucket>,
-    /// Top documents by relative frequency (per million), then hits, then
-    /// corpus and path.
-    pub top_documents: Vec<DocFreq>,
-    /// Plain logDice list (T4).
-    pub collocates: PendingSection,
-    /// Top n-grams containing the word (T4).
-    pub ngrams: PendingSection,
-}
-
-pub const PROFILE_TOP_DOCUMENTS: usize = 10;
-
-pub fn profile(corpora: &[Corpus], word: &str, filter: &DocFilter) -> Result<Profile> {
-    let mut f = find(corpora, word, filter, 0)?;
-    sort_lines(&mut f.lines, KwicSort::Date);
-    let total_tokens = f.total_tokens();
-    let first_used = f
-        .lines
-        .iter()
-        .find(|l| l.date_floor.is_some())
-        .map(|l| FirstUse {
-            corpus: l.corpus.clone(),
-            passage_id: l.passage_id.clone(),
-            rel_path: l.rel_path.clone(),
-            title: l.title.clone(),
-            date: l.date.clone(),
-            date_display: l.date_display.clone(),
-            line: l.line,
-        });
-    let mut per_doc: BTreeMap<(String, String), usize> = BTreeMap::new();
-    for l in &f.lines {
-        *per_doc
-            .entry((l.corpus.clone(), l.rel_path.clone()))
-            .or_default() += 1;
-    }
-    let mut top: Vec<DocFreq> = per_doc
-        .into_iter()
-        .map(|((corpus, rel), hits)| {
-            let d = &f.docs[&corpus][&rel];
-            DocFreq {
-                title: d.title.clone(),
-                date: d.date.clone(),
-                tokens: d.tokens,
-                per_million: per_million(hits, d.tokens),
-                hits,
-                corpus,
-                rel_path: rel,
-            }
-        })
-        .collect();
-    top.sort_by(|a, b| {
-        b.per_million
-            .total_cmp(&a.per_million)
-            .then(b.hits.cmp(&a.hits))
-            .then_with(|| a.corpus.cmp(&b.corpus))
-            .then_with(|| a.rel_path.cmp(&b.rel_path))
-    });
-    top.truncate(PROFILE_TOP_DOCUMENTS);
-    Ok(Profile {
-        schema_version: SCHEMA_VERSION,
-        word: word.to_string(),
-        node_tokens: f.node.clone(),
-        corpora: corpora.iter().map(|c| c.id().to_string()).collect(),
-        filters: filter.clone(),
-        frequency: f.lines.len(),
-        total_tokens,
-        per_million: per_million(f.lines.len(), total_tokens),
-        pieces: f.pieces(),
-        first_used,
-        by_year: buckets_of(&f, DistBy::Year),
-        top_documents: top,
-        collocates: PendingSection::t4(),
-        ngrams: PendingSection::t4(),
-    })
-}
+/// The profile lives in [`crate::profile`]; re-exported here, where T3 put it.
+pub use crate::profile::{
+    profile, profile_with, DocFreq, FirstUse, Profile, ProfileCollocates, ProfileNgrams,
+    ProfileOptions, PROFILE_SCHEMA_VERSION, PROFILE_TOP_DOCUMENTS,
+};

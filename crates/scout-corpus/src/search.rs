@@ -125,6 +125,8 @@ pub struct DocResult {
     pub path: String,
     pub title: String,
     pub author: Option<String>,
+    /// The public URL from frontmatter (`field_map.public_url`), if any.
+    pub public_url: Option<String>,
     pub date: Option<String>,
     pub date_display: Option<String>,
     pub genre: Option<String>,
@@ -253,6 +255,7 @@ struct DocRow {
     genre: Option<String>,
     lang: Option<String>,
     author: Option<String>,
+    public_url: Option<String>,
 }
 
 /// Search one corpus's index.
@@ -334,7 +337,7 @@ pub fn search_corpus(
     let rules = normalize::compile_rules(&cfg.boilerplate)?;
     let root = cfg.root();
     let mut get_doc =
-        conn.prepare("SELECT title, date, genre, lang, author FROM documents WHERE rel_path = ?1")?;
+        conn.prepare("SELECT title, date, genre, lang, author, public_url FROM documents WHERE rel_path = ?1")?;
     let mut get_pass = conn.prepare(
         "SELECT line_end, original FROM passages WHERE rel_path = ?1 AND line_start = ?2",
     )?;
@@ -346,6 +349,7 @@ pub fn search_corpus(
                 genre: r.get(2)?,
                 lang: r.get(3)?,
                 author: r.get(4)?,
+                public_url: r.get(5)?,
             })
         })?;
         let abs = root.join(&rel);
@@ -374,6 +378,7 @@ pub fn search_corpus(
             title: &d.title,
             date: d.date.as_deref(),
             link: best.link.as_deref(),
+            public_url: d.public_url.as_deref(),
         };
         let citation = Citation {
             markdown: cite::render_citation(&best.quote, &src, CiteFormat::Markdown),
@@ -386,6 +391,7 @@ pub fn search_corpus(
             date_display: d.date.as_deref().and_then(cite::format_date),
             title: d.title,
             author: d.author,
+            public_url: d.public_url,
             date: d.date,
             genre: d.genre,
             lang: d.lang,

@@ -6,26 +6,39 @@
 //!
 //! Entry point: [`Corpus`]. Multi-corpus forms of every view take
 //! `&[Corpus]`: [`search_all`], [`concord::kwic`], [`concord::distribution`],
-//! [`concord::profile`], [`ngrams::ngrams`], [`verify::verify_quote`]. The CLI and the apps call these same functions.
+//! [`concord::profile`], [`colloc::collocates`], [`ngrams::ngrams`],
+//! [`verify::verify_quote`]; the two-slice views [`colloc::compare`] and
+//! [`keyness::keyness`] take [`Slice`]s. The CLI and the apps call these same
+//! functions.
 
 pub mod cite;
+pub mod colloc;
 pub mod concord;
 pub mod filter;
+pub mod freq;
 pub mod index;
+pub mod keyness;
 pub mod markdown;
 pub mod ngrams;
 pub mod normalize;
+pub mod profile;
 pub mod registry;
+pub mod rowdist;
 pub mod search;
 pub mod stopwords;
 pub mod tokenize;
 pub mod verify;
 
-pub use concord::{DistBy, Distribution, KwicRequest, KwicResults, KwicSort, Profile};
-pub use filter::DocFilter;
+pub use colloc::{CollocRequest, CollocResults, CompareResults, Score};
+pub use concord::{
+    DistBy, Distribution, KwicRequest, KwicResults, KwicSort, Near, Profile, ProfileOptions,
+};
+pub use filter::{DocFilter, SliceSpec};
+pub use keyness::{KeynessRequest, KeynessResults};
+pub use rowdist::RowDistBy;
 pub use ngrams::{NgramRequest, NgramResults};
 pub use verify::VerifyResult;
-pub use index::{BuildReport, IndexMissing, IndexStatus};
+pub use index::{BuildReport, IndexMissing, IndexStatus, NoIndexedCorpus};
 pub use registry::{CorpusConfig, CorpusKind, Registry, RegistryMissing};
 pub use search::{SearchRequest, SearchResults};
 
@@ -93,6 +106,20 @@ impl Corpus {
         concord::profile(std::slice::from_ref(self), word, filter)
     }
 
+    pub fn profile_with(
+        &self,
+        word: &str,
+        filter: &DocFilter,
+        opts: &ProfileOptions,
+    ) -> Result<Profile> {
+        concord::profile_with(std::slice::from_ref(self), word, filter, opts)
+    }
+
+    /// Collocates of a node (logDice or MI) within a passage window.
+    pub fn collocates(&self, req: &CollocRequest) -> Result<CollocResults> {
+        colloc::collocates(std::slice::from_ref(self), req)
+    }
+
     pub fn ngrams(&self, req: &NgramRequest) -> Result<NgramResults> {
         ngrams::ngrams(std::slice::from_ref(self), req)
     }
@@ -109,4 +136,41 @@ pub fn search_all(corpora: &[Corpus], req: &SearchRequest) -> Result<SearchResul
         parts.push(c.search(req)?);
     }
     Ok(search::merge(&req.query, parts, req.limit))
+}
+
+/// A slice of the archive for the two-slice views: corpora plus a filter.
+#[derive(Debug, Clone)]
+pub struct Slice {
+    /// How the slice was written (the `--compare` / `--a` / `--b` value).
+    pub label: String,
+    pub corpora: Vec<Corpus>,
+    pub filter: DocFilter,
+}
+
+impl Slice {
+    pub fn new(label: impl Into<String>, corpora: Vec<Corpus>, filter: DocFilter) -> Slice {
+        Slice {
+            label: label.into(),
+            corpora,
+            filter,
+        }
+    }
+}
+
+/// The default corpus selection when a command names none: every corpus of
+/// the registry whose index opens. Returns them and the ids left out.
+pub fn indexed_corpora(reg: &Registry, index_dir: &Path) -> (Vec<Corpus>, Vec<String>) {
+    let mut ok = Vec::new();
+    let mut missing = Vec::new();
+    for cfg in &reg.corpora {
+        let c = Corpus::from_config(cfg.clone(), index_dir);
+        if cfg.kind == CorpusKind::MarkdownFolder
+            && index::open_existing(&c.config, c.index_path()).is_ok()
+        {
+            ok.push(c);
+        } else {
+            missing.push(cfg.id.clone());
+        }
+    }
+    (ok, missing)
 }

@@ -8,8 +8,8 @@ mod views;
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use scout_corpus::{
-    index, registry, search_all, Corpus, CorpusKind, DocFilter, IndexMissing, Registry,
-    RegistryMissing, SearchRequest,
+    index, registry, search_all, Corpus, CorpusKind, DocFilter, IndexMissing, NoIndexedCorpus,
+    Registry, RegistryMissing, SearchRequest, Slice, SliceSpec,
 };
 use std::process::ExitCode;
 
@@ -68,6 +68,60 @@ enum Cmd {
         sort: String,
         #[arg(long, default_value_t = 200)]
         limit: usize,
+        /// Only lines with this word within --window tokens of the node (a
+        /// collocate row's concordance).
+        #[arg(long)]
+        near: Option<String>,
+        /// The --near window, tokens either side.
+        #[arg(long, default_value_t = 5)]
+        window: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Collocates: words within --window tokens of the node, by logDice or MI.
+    Collocates {
+        node: Vec<String>,
+        #[command(flatten)]
+        scope: Scope,
+        #[arg(long, default_value_t = 5)]
+        window: usize,
+        /// logdice or mi.
+        #[arg(long, default_value = "logdice")]
+        score: String,
+        /// Minimum co-occurrence count f(n,c).
+        #[arg(long, default_value_t = 5)]
+        min: u64,
+        #[arg(long, default_value_t = 30)]
+        top: usize,
+        /// List stopwords as collocates too (default: dropped).
+        #[arg(long)]
+        keep_stopwords: bool,
+        /// A second slice, side by side: a corpus id and/or filter terms,
+        /// e.g. "before:2015", "y:2010-2015", "highlights", "in:writing genre:note".
+        #[arg(long)]
+        compare: Option<String>,
+        /// Per-row distribution: year, doc or corpus.
+        #[arg(long)]
+        dist: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keyness: words that set slice A apart from slice B (log-likelihood).
+    Keyness {
+        /// Slice A, e.g. "before:2015" or "in:writing genre:essay".
+        #[arg(long)]
+        a: String,
+        /// Slice B.
+        #[arg(long)]
+        b: String,
+        /// Corpora for a slice that names none (default: every indexed corpus).
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        #[arg(long, default_value_t = 40)]
+        top: usize,
+        /// Minimum count in the slice where the word is key.
+        #[arg(long, default_value_t = 5)]
+        min: u64,
         #[arg(long)]
         json: bool,
     },
@@ -99,14 +153,20 @@ enum Cmd {
         /// Drop grams with at least n-1 stopwords (default: only all-stopword grams).
         #[arg(long)]
         strict_stopwords: bool,
+        /// Per-row distribution: year, doc or corpus.
+        #[arg(long)]
+        dist: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    /// Word profile: frequency, per million, pieces, first use, per-year.
+    /// Word profile: frequency, first use, per-year, top documents, collocates, n-grams.
     Profile {
         word: Vec<String>,
         #[command(flatten)]
         scope: Scope,
+        /// A top document needs at least this many hits.
+        #[arg(long, default_value_t = 3)]
+        min_hits: usize,
         #[arg(long)]
         json: bool,
     },
@@ -197,6 +257,7 @@ fn main() -> ExitCode {
             eprintln!("scout: {e:#}");
             if e.downcast_ref::<IndexMissing>().is_some()
                 || e.downcast_ref::<RegistryMissing>().is_some()
+                || e.downcast_ref::<NoIndexedCorpus>().is_some()
             {
                 ExitCode::from(3)
             } else {
@@ -226,6 +287,38 @@ fn select(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
         .collect()
 }
 
+/// The corpora a query runs over: the named ones, or else every indexed
+/// corpus, with a one-line note on stderr naming those left out.
+fn scope_corpora(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
+    if !ids.is_empty() {
+        return select(reg, ids);
+    }
+    let (ok, missing) = scout_corpus::indexed_corpora(reg, &index::index_dir());
+    if ok.is_empty() {
+        return Err(NoIndexedCorpus(missing).into());
+    }
+    if !missing.is_empty() {
+        let used: Vec<&str> = ok.iter().map(|c| c.id()).collect();
+        eprintln!(
+            "scout: note: using {}; not indexed: {}",
+            used.join(", "),
+            missing.join(", ")
+        );
+    }
+    Ok(ok)
+}
+
+/// Resolve a slice expression: its own corpora, else `default`.
+fn slice(reg: &Registry, spec: &str, default: &[Corpus]) -> Result<Slice> {
+    let s = SliceSpec::parse(spec)?;
+    let corpora = if s.corpora.is_empty() {
+        default.to_vec()
+    } else {
+        select(reg, &s.corpora)?
+    };
+    Ok(Slice::new(s.spec, corpora, s.filter))
+}
+
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.cmd {
         Cmd::Kwic {
@@ -234,18 +327,91 @@ fn run(cli: Cli) -> Result<ExitCode> {
             width,
             sort,
             limit,
+            near,
+            window,
             json,
         } => {
             let reg = Registry::load()?;
-            let corpora = select(&reg, &scope.in_)?;
+            let corpora = scope_corpora(&reg, &scope.in_)?;
             let mut req = scout_corpus::KwicRequest::new(term.join(" "));
             req.width = width;
             req.sort = sort.parse()?;
             req.limit = limit;
             req.filter = scope.filter();
+            req.near = near.map(|word| scout_corpus::Near { word, window });
             let res = scout_corpus::concord::kwic(&corpora, &req)?;
             views::emit(json, &res, || views::print_kwic(&res))?;
             Ok(views::code(res.total > 0))
+        }
+        Cmd::Collocates {
+            node,
+            scope,
+            window,
+            score,
+            min,
+            top,
+            keep_stopwords,
+            compare,
+            dist,
+            json,
+        } => {
+            let reg = Registry::load()?;
+            let corpora = scope_corpora(&reg, &scope.in_)?;
+            let mut req = scout_corpus::CollocRequest::new(node.join(" "));
+            req.window = window;
+            req.score = score.parse()?;
+            req.min_freq = min;
+            req.top = top;
+            req.keep_stopwords = keep_stopwords;
+            req.filter = scope.filter();
+            req.dist = dist.as_deref().map(str::parse).transpose()?;
+            match compare {
+                None => {
+                    let res = scout_corpus::colloc::collocates(&corpora, &req)?;
+                    views::emit(json, &res, || views::print_collocates(&res))?;
+                    Ok(views::code(!res.rows.is_empty()))
+                }
+                Some(spec) => {
+                    if req.dist.is_some() {
+                        return Err(anyhow!("--dist does not combine with --compare"));
+                    }
+                    let f = scope.filter();
+                    let label = if f.is_empty() {
+                        "all".to_string()
+                    } else {
+                        f.spec()
+                    };
+                    let a = Slice::new(label, corpora.clone(), f);
+                    let b = slice(&reg, &spec, &corpora)?;
+                    let res = scout_corpus::colloc::compare(&a, &b, &req)?;
+                    views::emit(json, &res, || views::print_compare(&res))?;
+                    Ok(views::code(!res.rows.is_empty()))
+                }
+            }
+        }
+        Cmd::Keyness {
+            a,
+            b,
+            in_,
+            top,
+            min,
+            json,
+        } => {
+            let reg = Registry::load()?;
+            // Default corpora only when a slice names none.
+            let needs_default = SliceSpec::parse(&a)?.corpora.is_empty()
+                || SliceSpec::parse(&b)?.corpora.is_empty();
+            let default = if needs_default {
+                scope_corpora(&reg, &in_)?
+            } else {
+                vec![]
+            };
+            let sa = slice(&reg, &a, &default)?;
+            let sb = slice(&reg, &b, &default)?;
+            let req = scout_corpus::KeynessRequest { top, min_freq: min };
+            let res = scout_corpus::keyness::keyness(&sa, &sb, &req)?;
+            views::emit(json, &res, || views::print_keyness(&res))?;
+            Ok(views::code(!res.a_keys.is_empty() || !res.b_keys.is_empty()))
         }
         Cmd::Dist {
             term,
@@ -254,7 +420,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             json,
         } => {
             let reg = Registry::load()?;
-            let corpora = select(&reg, &scope.in_)?;
+            let corpora = scope_corpora(&reg, &scope.in_)?;
             let res = scout_corpus::concord::distribution(
                 &corpora,
                 &term.join(" "),
@@ -271,10 +437,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             until,
             top,
             strict_stopwords,
+            dist,
             json,
         } => {
             let reg = Registry::load()?;
-            let corpora = select(&reg, &scope.in_)?;
+            let corpora = scope_corpora(&reg, &scope.in_)?;
             let (n_min, n_max) = scout_corpus::ngrams::parse_n_range(&n)?;
             let req = scout_corpus::NgramRequest {
                 n_min,
@@ -285,21 +452,36 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 top,
                 strict_stopwords,
                 containing: None,
+                dist: dist.as_deref().map(str::parse).transpose()?,
             };
             let res = scout_corpus::ngrams::ngrams(&corpora, &req)?;
             views::emit(json, &res, || views::print_ngrams(&res))?;
             Ok(views::code(!res.grams.is_empty()))
         }
-        Cmd::Profile { word, scope, json } => {
+        Cmd::Profile {
+            word,
+            scope,
+            min_hits,
+            json,
+        } => {
             let reg = Registry::load()?;
-            let corpora = select(&reg, &scope.in_)?;
-            let res = scout_corpus::concord::profile(&corpora, &word.join(" "), &scope.filter())?;
+            let corpora = scope_corpora(&reg, &scope.in_)?;
+            let opts = scout_corpus::ProfileOptions {
+                min_hits,
+                ..Default::default()
+            };
+            let res = scout_corpus::concord::profile_with(
+                &corpora,
+                &word.join(" "),
+                &scope.filter(),
+                &opts,
+            )?;
             views::emit(json, &res, || views::print_profile(&res))?;
             Ok(views::code(res.frequency > 0))
         }
         Cmd::VerifyQuote { text, in_, json } => {
             let reg = Registry::load()?;
-            let corpora = select(&reg, &in_)?;
+            let corpora = scope_corpora(&reg, &in_)?;
             let res = scout_corpus::verify::verify_quote(&corpora, &text.join(" "))?;
             views::emit(json, &res, || views::print_verify(&res))?;
             Ok(views::code(res.found))
@@ -319,7 +501,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Err(anyhow!("empty query"));
             }
             let reg = Registry::load()?;
-            let corpora = select(&reg, &in_)?;
+            let corpora = scope_corpora(&reg, &in_)?;
             let mut req = SearchRequest::new(query);
             req.limit = limit;
             req.whole_passage = passage;

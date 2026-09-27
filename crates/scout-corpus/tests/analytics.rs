@@ -268,7 +268,8 @@ fn kwic_context_is_an_original_substring() {
     req.width = 2;
     let k = c.kwic(&req).unwrap();
     assert_eq!(k.lines[0].node, "Schön’s");
-    assert_eq!(k.lines[0].right, " metaphor &amp; more");
+    // Punctuation glued to the context edge is kept (T4 follow-up).
+    assert_eq!(k.lines[0].right, " metaphor &amp; more.");
 }
 
 #[test]
@@ -480,7 +481,7 @@ fn ngram_stopword_rules() {
 }
 
 #[test]
-fn profile_reports_first_use_and_pending_sections() {
+fn profile_reports_first_use() {
     let src = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     fixture(src.path());
@@ -492,10 +493,9 @@ fn profile_reports_first_use_and_pending_sections() {
     assert_eq!(f.line, 7);
     assert_eq!(p.total_tokens, c.status().unwrap().tokens);
     let json = serde_json::to_value(&p).unwrap();
-    assert_eq!(json["collocates"]["status"], "pending");
-    assert_eq!(json["ngrams"]["arrives_in"], "T4");
-    assert_eq!(json["collocates"]["items"].as_array().unwrap().len(), 0);
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["collocates"]["status"], "ok");
+    assert_eq!(json["ngrams"]["status"], "ok");
+    assert_eq!(json["schema_version"], 2);
     assert!(p.top_documents.len() <= concord::PROFILE_TOP_DOCUMENTS);
 }
 

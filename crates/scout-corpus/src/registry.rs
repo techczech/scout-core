@@ -44,6 +44,23 @@ fn d_summary() -> String {
 fn d_author() -> String {
     "author".into()
 }
+fn d_public_url() -> Vec<String> {
+    vec!["published_url".into(), "canonical_url".into()]
+}
+
+/// A frontmatter key list that also accepts a single string in TOML.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
+}
 
 /// Maps document metadata to frontmatter keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +79,10 @@ pub struct FieldMap {
     pub summary: String,
     #[serde(default = "d_author")]
     pub author: String,
+    /// Keys holding the document's public URL, tried in order; the first
+    /// `http(s)://` value wins. A single string is accepted.
+    #[serde(default = "d_public_url", deserialize_with = "one_or_many")]
+    pub public_url: Vec<String>,
 }
 
 impl Default for FieldMap {
@@ -74,8 +95,19 @@ impl Default for FieldMap {
             lang: d_lang(),
             summary: d_summary(),
             author: d_author(),
+            public_url: d_public_url(),
         }
     }
+}
+
+/// The writing repo holds its public URL in `published_url` (most imports)
+/// or `source_url` (the Promising Paragraphs Substack imports).
+fn writing_public_url() -> Vec<String> {
+    vec![
+        "published_url".into(),
+        "source_url".into(),
+        "canonical_url".into(),
+    ]
 }
 
 pub const WRITEFLEX_LINK: &str = "writeflex://open?path={path}&line={line}";
@@ -224,6 +256,7 @@ impl Registry {
                 require_frontmatter: vec!["genre".into()],
                 field_map: FieldMap {
                     author: "authors".into(),
+                    public_url: writing_public_url(),
                     ..FieldMap::default()
                 },
                 default_author: Some("Dominik Lukeš".into()),
@@ -240,6 +273,7 @@ impl Registry {
                 require_frontmatter: vec![],
                 field_map: FieldMap {
                     author: "authors".into(),
+                    public_url: writing_public_url(),
                     ..FieldMap::default()
                 },
                 default_author: Some("Dominik Lukeš".into()),

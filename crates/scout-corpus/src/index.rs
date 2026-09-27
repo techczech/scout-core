@@ -18,7 +18,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/3";
+pub const ENGINE_VERSION: &str = "scout-corpus/4";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.
@@ -40,6 +40,22 @@ impl std::fmt::Display for IndexMissing {
     }
 }
 impl std::error::Error for IndexMissing {}
+
+/// Raised when a command names no corpus and none of the registered ones
+/// has an index.
+#[derive(Debug)]
+pub struct NoIndexedCorpus(pub Vec<String>);
+
+impl std::fmt::Display for NoIndexedCorpus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "no corpus has an index (registered: {}); run `scout index build`",
+            self.0.join(", ")
+        )
+    }
+}
+impl std::error::Error for NoIndexedCorpus {}
 
 /// The directory holding all indexes: `$SCOUT_DATA_DIR/indexes`, else
 /// `<platform data dir>/scout/indexes`.
@@ -131,6 +147,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             lang TEXT,
             summary TEXT,
             author TEXT,
+            public_url TEXT,
             passages INTEGER NOT NULL,
             tokens INTEGER NOT NULL
         );
@@ -280,8 +297,8 @@ fn index_file(
             .unwrap_or_default()
     });
     conn.execute(
-        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, passages, tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, public_url, passages, tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             f.rel_path,
             title,
@@ -291,6 +308,7 @@ fn index_file(
             meta.lang,
             meta.summary,
             meta.author,
+            meta.public_url,
             n_pass,
             n_tok
         ],
