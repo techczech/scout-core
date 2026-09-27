@@ -3,11 +3,13 @@
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
+mod views;
+
 use anyhow::{anyhow, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use scout_corpus::{
-    index, registry, search_all, Corpus, CorpusKind, IndexMissing, Registry, RegistryMissing,
-    SearchRequest,
+    index, registry, search_all, Corpus, CorpusKind, DocFilter, IndexMissing, Registry,
+    RegistryMissing, SearchRequest,
 };
 use std::process::ExitCode;
 
@@ -52,6 +54,105 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Key word in context: every occurrence of a word or phrase.
+    Kwic {
+        /// A word or a phrase (consecutive tokens); exact tokens, no prefix.
+        term: Vec<String>,
+        #[command(flatten)]
+        scope: Scope,
+        /// Context tokens either side.
+        #[arg(long, default_value_t = 8)]
+        width: usize,
+        /// L1..L9, R1..R9, date or source; ties break by source path, line.
+        #[arg(long, default_value = "R1")]
+        sort: String,
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Hit counts of a word or phrase by year, corpus, genre or lang.
+    Dist {
+        term: Vec<String>,
+        #[arg(long)]
+        by: String,
+        #[command(flatten)]
+        scope: Scope,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Frequent n-grams within passages.
+    Ngrams {
+        #[command(flatten)]
+        scope: Scope,
+        /// A range such as 3-5, or one n.
+        #[arg(long, default_value = "3-5")]
+        n: String,
+        /// First year (inclusive); adds per-year counts.
+        #[arg(long)]
+        since: Option<i32>,
+        /// Last year (inclusive); adds per-year counts.
+        #[arg(long)]
+        until: Option<i32>,
+        #[arg(long, default_value_t = 50)]
+        top: usize,
+        /// Drop grams with at least n-1 stopwords (default: only all-stopword grams).
+        #[arg(long)]
+        strict_stopwords: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Word profile: frequency, per million, pieces, first use, per-year.
+    Profile {
+        word: Vec<String>,
+        #[command(flatten)]
+        scope: Scope,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Is this exact text in a source? (Only quote and apostrophe forms are unified.)
+    VerifyQuote {
+        text: Vec<String>,
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Corpus selection and document filters shared by the analytics views.
+#[derive(Args, Clone, Default)]
+pub struct Scope {
+    /// Comma-separated corpus ids (default: every indexable corpus).
+    #[arg(long = "in", value_delimiter = ',')]
+    pub in_: Vec<String>,
+    /// Language code(s), comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub lang: Vec<String>,
+    /// Genre(s), comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    pub genre: Vec<String>,
+    /// From this date, inclusive (YYYY, YYYY-MM or YYYY-MM-DD).
+    #[arg(long)]
+    pub after: Option<String>,
+    /// Before this date, exclusive (YYYY, YYYY-MM or YYYY-MM-DD).
+    #[arg(long)]
+    pub before: Option<String>,
+    /// Only this year.
+    #[arg(long = "y", alias = "year")]
+    pub year: Option<i32>,
+}
+
+impl Scope {
+    fn filter(&self) -> DocFilter {
+        DocFilter {
+            lang: self.lang.clone(),
+            genre: self.genre.clone(),
+            after: self.after.clone(),
+            before: self.before.clone(),
+            year: self.year,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -127,6 +228,82 @@ fn select(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
 
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.cmd {
+        Cmd::Kwic {
+            term,
+            scope,
+            width,
+            sort,
+            limit,
+            json,
+        } => {
+            let reg = Registry::load()?;
+            let corpora = select(&reg, &scope.in_)?;
+            let mut req = scout_corpus::KwicRequest::new(term.join(" "));
+            req.width = width;
+            req.sort = sort.parse()?;
+            req.limit = limit;
+            req.filter = scope.filter();
+            let res = scout_corpus::concord::kwic(&corpora, &req)?;
+            views::emit(json, &res, || views::print_kwic(&res))?;
+            Ok(views::code(res.total > 0))
+        }
+        Cmd::Dist {
+            term,
+            by,
+            scope,
+            json,
+        } => {
+            let reg = Registry::load()?;
+            let corpora = select(&reg, &scope.in_)?;
+            let res = scout_corpus::concord::distribution(
+                &corpora,
+                &term.join(" "),
+                by.parse()?,
+                &scope.filter(),
+            )?;
+            views::emit(json, &res, || views::print_dist(&res))?;
+            Ok(views::code(res.total > 0))
+        }
+        Cmd::Ngrams {
+            scope,
+            n,
+            since,
+            until,
+            top,
+            strict_stopwords,
+            json,
+        } => {
+            let reg = Registry::load()?;
+            let corpora = select(&reg, &scope.in_)?;
+            let (n_min, n_max) = scout_corpus::ngrams::parse_n_range(&n)?;
+            let req = scout_corpus::NgramRequest {
+                n_min,
+                n_max,
+                filter: scope.filter(),
+                since,
+                until,
+                top,
+                strict_stopwords,
+                containing: None,
+            };
+            let res = scout_corpus::ngrams::ngrams(&corpora, &req)?;
+            views::emit(json, &res, || views::print_ngrams(&res))?;
+            Ok(views::code(!res.grams.is_empty()))
+        }
+        Cmd::Profile { word, scope, json } => {
+            let reg = Registry::load()?;
+            let corpora = select(&reg, &scope.in_)?;
+            let res = scout_corpus::concord::profile(&corpora, &word.join(" "), &scope.filter())?;
+            views::emit(json, &res, || views::print_profile(&res))?;
+            Ok(views::code(res.frequency > 0))
+        }
+        Cmd::VerifyQuote { text, in_, json } => {
+            let reg = Registry::load()?;
+            let corpora = select(&reg, &in_)?;
+            let res = scout_corpus::verify::verify_quote(&corpora, &text.join(" "))?;
+            views::emit(json, &res, || views::print_verify(&res))?;
+            Ok(views::code(res.found))
+        }
         Cmd::Corpora { cmd } => corpora(cmd),
         Cmd::Index { cmd } => index_cmd(cmd),
         Cmd::Search {

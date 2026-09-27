@@ -662,6 +662,7 @@ dependencies = [
  "anyhow",
  "clap",
  "scout-corpus",
+ "serde",
  "serde_json",
 ]
 
