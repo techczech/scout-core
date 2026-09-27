@@ -15,6 +15,7 @@
 //! under the same order, so the result is exact.
 
 use crate::filter::DocFilter;
+use crate::rowdist::{Place, RowDist, RowDistAcc, RowDistBy};
 use crate::stopwords::is_stopword;
 use crate::Corpus;
 use anyhow::{bail, Result};
@@ -40,6 +41,8 @@ pub struct NgramRequest {
     /// Keep only grams containing this token sequence (the profile's
     /// "n-grams containing the word", and the invariant-3 check at n=1).
     pub containing: Option<Vec<String>>,
+    /// Per-row distribution (`--dist year|doc|corpus`).
+    pub dist: Option<RowDistBy>,
 }
 
 impl Default for NgramRequest {
@@ -53,6 +56,7 @@ impl Default for NgramRequest {
             top: 50,
             strict_stopwords: false,
             containing: None,
+            dist: None,
         }
     }
 }
@@ -80,6 +84,9 @@ pub struct Ngram {
     /// Per-year counts, only when `since` or `until` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by_year: Option<BTreeMap<String, u64>>,
+    /// Per-bucket counts summing to `count`, only with `dist`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist: Option<RowDist>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +101,8 @@ pub struct NgramResults {
     pub strict_stopwords: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub containing: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist: Option<RowDistBy>,
     /// Tokens in the scanned documents.
     pub total_tokens: u64,
     pub documents: usize,
@@ -128,6 +137,8 @@ struct Scan {
     passages: Vec<(u32, Vec<u32>)>,
     /// Per document: its year label (for `by_year`).
     doc_year: Vec<String>,
+    /// Per document: where it sits (for `dist`).
+    doc_place: Vec<Place>,
     total_tokens: u64,
 }
 
@@ -139,6 +150,7 @@ fn load(corpora: &[Corpus], req: &NgramRequest) -> Result<Scan> {
         stop: vec![],
         passages: vec![],
         doc_year: vec![],
+        doc_place: vec![],
         total_tokens: 0,
     };
     let period = req.since.is_some() || req.until.is_some();
@@ -154,11 +166,17 @@ fn load(corpora: &[Corpus], req: &NgramRequest) -> Result<Scan> {
         let mut doc_idx: HashMap<String, u32> = HashMap::new();
         for d in docs.values() {
             doc_idx.insert(d.rel_path.clone(), scan.doc_year.len() as u32);
-            scan.doc_year.push(
-                d.year()
-                    .map(|y| y.to_string())
-                    .unwrap_or_else(|| crate::concord::UNKNOWN.into()),
-            );
+            let year = d
+                .year()
+                .map(|y| y.to_string())
+                .unwrap_or_else(|| crate::concord::UNKNOWN.into());
+            scan.doc_place.push(Place {
+                corpus: c.id().to_string(),
+                rel: d.rel_path.clone(),
+                title: d.title.clone(),
+                year: year.clone(),
+            });
+            scan.doc_year.push(year);
         }
         let mut st = conn.prepare(
             "SELECT p.rel_path, f.tokens FROM passages p
@@ -261,6 +279,7 @@ pub fn ngrams(corpora: &[Corpus], req: &NgramRequest) -> Result<NgramResults> {
         until: req.until,
         strict_stopwords: req.strict_stopwords,
         containing: req.containing.clone(),
+        dist: req.dist,
         total_tokens: scan.total_tokens,
         documents: scan.doc_year.len(),
         grams: vec![],
@@ -331,8 +350,9 @@ pub fn ngrams(corpora: &[Corpus], req: &NgramRequest) -> Result<NgramResults> {
         v.dedup();
         v
     };
-    // key -> (last doc seen, pieces, by_year)
-    let mut extra: FxMap<u128, (u32, usize, BTreeMap<String, u64>)> = FxMap::default();
+    // key -> (last doc seen, pieces, by_year, dist)
+    type Extra = (u32, usize, BTreeMap<String, u64>, RowDistAcc);
+    let mut extra: FxMap<u128, Extra> = FxMap::default();
     for (di, s) in &scan.passages {
         for &n in &ns {
             if s.len() < n {
@@ -343,7 +363,9 @@ pub fn ngrams(corpora: &[Corpus], req: &NgramRequest) -> Result<NgramResults> {
                 if !chosen.contains(&key) {
                     continue;
                 }
-                let e = extra.entry(key).or_insert((u32::MAX, 0, BTreeMap::new()));
+                let e = extra.entry(key).or_insert_with(|| {
+                    (u32::MAX, 0, BTreeMap::new(), RowDistAcc::default())
+                });
                 if e.0 != *di {
                     e.0 = *di;
                     e.1 += 1;
@@ -351,15 +373,18 @@ pub fn ngrams(corpora: &[Corpus], req: &NgramRequest) -> Result<NgramResults> {
                 if period {
                     *e.2.entry(scan.doc_year[*di as usize].clone()).or_default() += 1;
                 }
+                if let Some(by) = req.dist {
+                    e.3.add(by, &scan.doc_place[*di as usize], 1);
+                }
             }
         }
     }
     res.grams = candidates
         .into_iter()
         .map(|(count, gram, n, key)| {
-            let (pieces, by_year) = extra
+            let (pieces, by_year, acc) = extra
                 .remove(&key)
-                .map(|(_, p, y)| (p, y))
+                .map(|(_, p, y, a)| (p, y, a))
                 .unwrap_or_default();
             Ngram {
                 gram,
@@ -372,6 +397,7 @@ pub fn ngrams(corpora: &[Corpus], req: &NgramRequest) -> Result<NgramResults> {
                     ((count as f64) * 1e6 / scan.total_tokens as f64 * 1000.0).round() / 1000.0
                 },
                 by_year: period.then_some(by_year),
+                dist: req.dist.map(|by| acc.finish(by, &res.corpora)),
             }
         })
         .collect();

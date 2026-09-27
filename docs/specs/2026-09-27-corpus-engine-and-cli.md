@@ -152,3 +152,18 @@ Measure and report the actuals; a missed target is a finding, not a blocker.
 | T5 | `scout sync --status`, `docs/cli-json.md`, skill + report recipe, published | T2, T4 | the skill is installed; one real report run end to end (Fable drives it with Dominik's question) with every quote verified |
 
 **Review:** new public interface and a cross-repo contract, so one review pass per ticket merge. Fable reviews directly (Opus build; no write path, since sources are read-only and indexes live in the app-data dir). Invariant 1 is checked by Fable's sweep on every ticket.
+
+## Keyness (T4)
+
+Added 2026-09-27 in T4. The spec named "compare two slices" without defining it; this is the definition.
+
+- **Command:** `scout keyness --a <slice> --b <slice> [--in …] [--top 40] [--min 5] [--json]`.
+- **Slice:** one expression of whitespace-separated terms: `in:<ids>` or a bare corpus id, `after:`, `before:`, `y:2016` or `y:2010-2015` (inclusive, = `after:2010 before:2016`), `lang:`, `genre:`. A slice that names no corpus uses `--in` (default: every indexed corpus). The same syntax serves `collocates --compare`.
+- **Counts:** two frequency lists of single tokens over the stored token streams (the tokens every other view counts). For a word: `a`, `b` = its counts in A and B; `c`, `d` = the slices' token totals.
+- **Score:** log-likelihood G² (Rayson and Garside 2000): E₁ = c·(a+b)/(c+d), E₂ = d·(a+b)/(c+d), G² = 2·(a·ln(a/E₁) + b·ln(b/E₂)); a zero count contributes 0.
+- **Effect size:** %DIFF (Gabrielatos and Marchi 2012) = ((a/c − b/d) / (b/d)) · 100; `null` when b = 0. Positive for A keys, negative for B keys.
+- **Key for A:** a/c > b/d, a ≥ min (default 5) and G² ≥ 3.84 (p < 0.05, 1 d.f.). Key for B is symmetric (b ≥ min).
+- **Output:** two lists, `a_keys` and `b_keys`, each ordered by G² desc, then word asc, cut at `--top`.
+- **Stopwords stay in.** A shift in function words is a finding about style.
+- **Overlap:** keyness assumes disjoint slices. The result reports `overlap_documents`, and the human output warns when it is non-zero.
+- Worked check (in the tests): a = 10 of c = 1,000 and b = 5 of d = 2,000 give E₁ = 5, E₂ = 10, G² = 10·ln 2 = 6.931 and %DIFF = 300.

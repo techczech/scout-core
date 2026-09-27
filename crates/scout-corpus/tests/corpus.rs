@@ -264,11 +264,12 @@ fn search_cites_original_text_with_link_and_british_date() {
     let link = hit.link.as_deref().unwrap();
     assert!(link.starts_with("writeflex://open?path=%2F"), "{link}");
     assert!(link.ends_with("2016-essay.md&line=12"), "{link}");
-    assert!(d.citation.markdown.contains(
-        "— Dominik Lukeš, *Repaved paths and generative metaphors: Expressing purposes*, 23 June 2016\n"
-    ));
+    assert!(d.citation.markdown.contains(&format!(
+        "— Dominik Lukeš, *Repaved paths and generative metaphors: Expressing purposes*, 23 June 2016 · [archive]({link})\n"
+    )));
     assert!(d.citation.markdown.starts_with("> New analogies"));
-    assert!(d.citation.plain.contains("— Dominik Lukeš, Repaved paths and generative metaphors: Expressing purposes, 23 June 2016\n"));
+    assert!(d.citation.plain.contains(&format!("— Dominik Lukeš, Repaved paths and generative metaphors: Expressing purposes, 23 June 2016 · archive: {link}\n")));
+    assert_eq!(d.public_url, None);
     // Boilerplate never matches.
     assert!(c
         .search(&SearchRequest::new("originally published"))

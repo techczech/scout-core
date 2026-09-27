@@ -664,6 +664,7 @@ dependencies = [
  "scout-corpus",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

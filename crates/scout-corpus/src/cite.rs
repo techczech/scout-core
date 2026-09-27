@@ -158,7 +158,10 @@ pub struct CiteSource<'a> {
     pub author: Option<&'a str>,
     pub title: &'a str,
     pub date: Option<&'a str>,
+    /// The archive link (for example `writeflex://…`).
     pub link: Option<&'a str>,
+    /// The document's public URL, when its frontmatter has one.
+    pub public_url: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +170,9 @@ pub enum CiteFormat {
     Plain,
 }
 
+/// `— Author, *Title*, 23 June 2016 · [archive](…) · [public](…)`; the
+/// plain form drops the Markdown (`· archive: … · public: …`). The title is
+/// always the full frontmatter title.
 fn attribution(src: &CiteSource, md: bool) -> String {
     let mut parts = Vec::new();
     if let Some(a) = src.author.filter(|a| !a.trim().is_empty()) {
@@ -180,7 +186,17 @@ fn attribution(src: &CiteSource, md: bool) -> String {
     if let Some(d) = src.date.and_then(format_date) {
         parts.push(d);
     }
-    format!("— {}", parts.join(", "))
+    let mut out = format!("— {}", parts.join(", "));
+    for (label, url) in [("archive", src.link), ("public", src.public_url)] {
+        if let Some(u) = url.filter(|u| !u.trim().is_empty()) {
+            if md {
+                out.push_str(&format!(" · [{label}]({u})"));
+            } else {
+                out.push_str(&format!(" · {label}: {u}"));
+            }
+        }
+    }
+    out
 }
 
 /// Render a citation for an original-text `quote`.
@@ -200,11 +216,6 @@ pub fn render_citation(quote: &str, src: &CiteSource, format: CiteFormat) -> Str
             out.push('\n');
             out.push_str(&attribution(src, true));
             out.push('\n');
-            if let Some(link) = src.link {
-                out.push('<');
-                out.push_str(link);
-                out.push_str(">\n");
-            }
         }
         CiteFormat::Plain => {
             out.push('“');
@@ -212,10 +223,6 @@ pub fn render_citation(quote: &str, src: &CiteSource, format: CiteFormat) -> Str
             out.push_str("”\n");
             out.push_str(&attribution(src, false));
             out.push('\n');
-            if let Some(link) = src.link {
-                out.push_str(link);
-                out.push('\n');
-            }
         }
     }
     out
@@ -238,6 +245,36 @@ mod tests {
     fn link_is_url_encoded() {
         let l = render_link(crate::registry::WRITEFLEX_LINK, Path::new("/a b/č.md"), 7);
         assert_eq!(l, "writeflex://open?path=%2Fa%20b%2F%C4%8D.md&line=7");
+    }
+
+    #[test]
+    fn citation_carries_archive_and_public_links() {
+        let mut src = CiteSource {
+            author: Some("Dominik Lukeš"),
+            title: "Repaved paths and generative metaphors: Expressing human purposes with technology",
+            date: Some("2016-06-23"),
+            link: Some("writeflex://open?path=%2Fa.md&line=3"),
+            public_url: Some("https://medium.com/x/repaved"),
+        };
+        assert_eq!(
+            render_citation("Q.", &src, CiteFormat::Markdown),
+            "> Q.\n\n— Dominik Lukeš, *Repaved paths and generative metaphors: Expressing human purposes with technology*, 23 June 2016 · [archive](writeflex://open?path=%2Fa.md&line=3) · [public](https://medium.com/x/repaved)\n"
+        );
+        assert_eq!(
+            render_citation("Q.", &src, CiteFormat::Plain),
+            "“Q.”\n— Dominik Lukeš, Repaved paths and generative metaphors: Expressing human purposes with technology, 23 June 2016 · archive: writeflex://open?path=%2Fa.md&line=3 · public: https://medium.com/x/repaved\n"
+        );
+        src.public_url = None;
+        assert_eq!(
+            render_citation("Q.", &src, CiteFormat::Markdown),
+            "> Q.\n\n— Dominik Lukeš, *Repaved paths and generative metaphors: Expressing human purposes with technology*, 23 June 2016 · [archive](writeflex://open?path=%2Fa.md&line=3)\n"
+        );
+        src.link = None;
+        src.date = Some("undated");
+        assert_eq!(
+            render_citation("Q.", &src, CiteFormat::Plain),
+            "“Q.”\n— Dominik Lukeš, Repaved paths and generative metaphors: Expressing human purposes with technology\n"
+        );
     }
 
     #[test]
