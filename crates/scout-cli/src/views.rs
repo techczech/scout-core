@@ -466,11 +466,15 @@ pub fn print_verify(v: &VerifyResult) {
 
 pub fn print_hits(res: &scout_corpus::SearchResults) {
     println!(
-        "{} documents, {} passages for {:?} in {}",
+        "{} documents, {} passages for {:?} in {}{}",
         res.total_documents,
         res.total_passages,
         res.query,
-        res.corpora.join(", ")
+        res.corpora.join(", "),
+        res.mode
+            .as_deref()
+            .map(|m| format!(" ({m})"))
+            .unwrap_or_default()
     );
     if !res.plan.ignored.is_empty() {
         println!("(not applied here: {})", res.plan.ignored.join(" "));
@@ -488,8 +492,12 @@ pub fn print_hits(res: &scout_corpus::SearchResults) {
             date.push_str(" (saved)");
         }
         let genre = d.genre.clone().unwrap_or_else(|| "—".into());
+        let sim = hit
+            .semantic_score
+            .map(|s| format!("  cos {s:.3}"))
+            .unwrap_or_default();
         println!(
-            "     {date:<10}  {genre:<10}  {}:{}  ({} passages)",
+            "     {date:<10}  {genre:<10}  {}:{}  ({} passages){sim}",
             d.rel_path, hit.line, d.passage_count
         );
         let q = flat(&hit.quote);
@@ -607,6 +615,22 @@ pub fn print_build(r: &IndexBuildReport) {
             r.not_documents,
             r.elapsed_ms as f64 / 1000.0
         );
+        if let Some(v) = &r.vectors {
+            println!(
+                "{:<10} vectors {} ({}-d): {} passages ({} {}: {} embedded, {} reused, {} removed) {:.1} MB {:.1}s",
+                "",
+                v.model,
+                v.dim,
+                v.passages,
+                if v.full { "full" } else { "incremental" },
+                v.vectors_path,
+                v.embedded,
+                v.reused,
+                v.removed,
+                v.bytes as f64 / 1_048_576.0,
+                v.elapsed_ms as f64 / 1000.0
+            );
+        }
     }
 }
 

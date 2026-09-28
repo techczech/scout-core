@@ -21,12 +21,14 @@ use crate::keyness::{self, KeynessRequest, KeynessResults};
 use crate::ngrams::{self, NgramRequest, NgramResults};
 use crate::registry::{self, Registry};
 use crate::search::{self, CitedPassage, PassageId, SearchRequest, SearchResults};
+use crate::semantic::{self, store, Embedder, Freshness, SearchMode};
 use crate::similar::{self, SimilarRequest, SimilarResults};
 use crate::verify::{self, VerifyResult};
 use crate::{search_all, Corpus, Slice};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Schema version of the JSON shapes this module adds (index, corpora).
 pub const SCHEMA_VERSION: u32 = 1;
@@ -100,6 +102,9 @@ pub struct SearchQuery {
     pub limit: usize,
     /// Quote the whole paragraph instead of the hit sentence.
     pub passage: bool,
+    /// `auto` (hybrid where the engine has an embedder and the corpus has
+    /// current vectors, else full text), `fts`, `semantic` or `hybrid`.
+    pub mode: SearchMode,
 }
 
 impl Default for SearchQuery {
@@ -109,6 +114,7 @@ impl Default for SearchQuery {
             in_: vec![],
             limit: 20,
             passage: false,
+            mode: SearchMode::Auto,
         }
     }
 }
@@ -304,6 +310,22 @@ pub struct IndexBuildQuery {
     pub ids: Vec<String>,
     /// Delete the index and rebuild from scratch.
     pub force: bool,
+    /// Also build passage vectors (needs an embedder). Vectors that exist
+    /// are updated by every build that has an embedder.
+    pub semantic: bool,
+}
+
+/// What a long index build reports as it goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildEvent {
+    /// Shown before the embedding model is downloaded (name, size, where).
+    Download(String),
+    /// Passages embedded so far of those a corpus needs.
+    Embedding {
+        corpus: String,
+        done: usize,
+        total: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -462,11 +484,31 @@ impl Outcome for CleanReport {
 
 // ---------- the engine ----------
 
-/// The registry and the index directory every call works against.
-#[derive(Debug, Clone)]
+/// The registry and the index directory every call works against, plus an
+/// optional embedder: semantic and hybrid search, and vector builds, need
+/// one. An engine without one searches full text only (apps opt in).
+#[derive(Clone)]
 pub struct Engine {
     registry: Registry,
     index_dir: PathBuf,
+    embedder: Option<Arc<dyn Embedder>>,
+}
+
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine")
+            .field("registry", &self.registry)
+            .field("index_dir", &self.index_dir)
+            .field("embedder", &self.embedder.as_ref().map(|e| e.model_id()))
+            .finish()
+    }
+}
+
+/// How one corpus of a search is ranked.
+enum Ranking {
+    Fts,
+    Semantic(semantic::Vectors),
+    Hybrid(semantic::Vectors),
 }
 
 fn entry(cfg: &crate::CorpusConfig, dir: &Path) -> CorpusEntry {
@@ -507,7 +549,19 @@ impl Engine {
         Engine {
             registry,
             index_dir: index_dir.into(),
+            embedder: None,
         }
+    }
+
+    /// The same engine with an embedder: semantic and hybrid search, and
+    /// passage vectors in index builds.
+    pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Engine {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    pub fn embedder(&self) -> Option<&Arc<dyn Embedder>> {
+        self.embedder.as_ref()
     }
 
     pub fn registry(&self) -> &Registry {
@@ -585,8 +639,116 @@ impl Engine {
         let mut req = SearchRequest::new(q.query.clone());
         req.limit = q.limit;
         req.whole_passage = q.passage;
-        let body = search_all(&corpora, &req)?;
+        if q.mode == SearchMode::Fts || (q.mode == SearchMode::Auto && self.embedder.is_none()) {
+            let body = search_all(&corpora, &req)?;
+            return Ok(Reply { body, notes });
+        }
+        let body = self.search_vectors(&corpora, &req, q.mode, &mut notes)?;
         Ok(Reply { body, notes })
+    }
+
+    /// Search where vectors may rank: per corpus, semantic, hybrid or full
+    /// text by `mode` and whether its vectors are current; then the usual
+    /// merge.
+    fn search_vectors(
+        &self,
+        corpora: &[Corpus],
+        req: &SearchRequest,
+        mode: SearchMode,
+        notes: &mut Vec<String>,
+    ) -> Result<SearchResults> {
+        let explicit = mode != SearchMode::Auto;
+        let Some(embedder) = self.embedder.as_ref() else {
+            bail!("semantic search needs an embedding model; this engine has none");
+        };
+        let text = semantic::query_text(&req.query);
+        if text.is_empty() {
+            if explicit {
+                bail!("semantic search needs words to embed, not only filters");
+            }
+            return search_all(corpora, req);
+        }
+        let named = search::query_corpora(&req.query)?;
+        let model = embedder.model_id();
+        let mut plan: Vec<(&Corpus, Ranking)> = Vec::new();
+        let mut unready: Vec<String> = Vec::new();
+        for c in corpora {
+            if !(named.is_empty() || named.iter().any(|n| n == c.id())) {
+                continue;
+            }
+            let conn = index::open_existing(&c.config, c.index_path())?;
+            let vpath = c.vectors_path();
+            let ranking = match store::freshness(&conn, &vpath, &model)? {
+                Freshness::Current => {
+                    let v = store::load(&vpath)?;
+                    match mode {
+                        SearchMode::Semantic => Ranking::Semantic(v),
+                        _ => Ranking::Hybrid(v),
+                    }
+                }
+                Freshness::Stale(why) => {
+                    unready.push(format!("{} ({why})", c.id()));
+                    Ranking::Fts
+                }
+                Freshness::Missing => {
+                    if explicit {
+                        unready.push(format!("{} (no vectors)", c.id()));
+                    }
+                    Ranking::Fts
+                }
+            };
+            plan.push((c, ranking));
+        }
+        if plan.is_empty() {
+            let have: Vec<&str> = corpora.iter().map(|c| c.id()).collect();
+            bail!(
+                "in:{} names none of the searched corpora ({})",
+                named.join(","),
+                have.join(", ")
+            );
+        }
+        let any_vectors = plan.iter().any(|(_, r)| !matches!(r, Ranking::Fts));
+        if !unready.is_empty() {
+            notes.push(format!(
+                "scout: note: full text only for {}; run `scout index build --semantic`",
+                unready.join(", ")
+            ));
+        }
+        if mode == SearchMode::Semantic && !any_vectors {
+            bail!(
+                "no searched corpus has current vectors; run `scout index build --semantic {}`",
+                plan.iter()
+                    .map(|(c, _)| c.id())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        let qvec = if any_vectors {
+            embedder.embed_query(&text)?
+        } else {
+            vec![]
+        };
+        let mut parts = Vec::new();
+        let mut used = None;
+        for (c, ranking) in &plan {
+            let conn = index::open_existing(&c.config, c.index_path())?;
+            let part = match ranking {
+                Ranking::Fts if mode == SearchMode::Semantic => continue,
+                Ranking::Fts => search::search_corpus(&conn, &c.config, req)?,
+                Ranking::Semantic(v) => {
+                    used = Some("semantic");
+                    semantic::semantic_corpus(&conn, &c.config, req, v, &qvec)?
+                }
+                Ranking::Hybrid(v) => {
+                    used = used.or(Some("hybrid"));
+                    semantic::hybrid_corpus(&conn, &c.config, req, v, &qvec)?
+                }
+            };
+            parts.push(part);
+        }
+        let mut body = search::merge(&req.query, parts, req.limit)?;
+        body.mode = used.map(String::from);
+        Ok(body)
     }
 
     pub fn kwic(&self, q: &KwicQuery) -> Result<Reply<KwicResults>> {
@@ -736,11 +898,46 @@ impl Engine {
     }
 
     pub fn index_build(&self, q: &IndexBuildQuery) -> Result<Reply<IndexBuildReport>> {
-        let reports = self
-            .select(&q.ids)?
-            .iter()
-            .map(|c| c.build_index(q.force))
-            .collect::<Result<Vec<_>>>()?;
+        self.index_build_with(q, &mut |_| {})
+    }
+
+    /// [`Engine::index_build`], reporting downloads and embedding progress
+    /// as they happen.
+    pub fn index_build_with(
+        &self,
+        q: &IndexBuildQuery,
+        on: &mut dyn FnMut(BuildEvent),
+    ) -> Result<Reply<IndexBuildReport>> {
+        if q.semantic && self.embedder.is_none() {
+            bail!("--semantic needs an embedding model; this engine has none");
+        }
+        let mut reports = Vec::new();
+        let mut announced = false;
+        for c in self.select(&q.ids)? {
+            let mut r = c.build_index(q.force)?;
+            if let Some(e) = &self.embedder {
+                let vpath = c.vectors_path();
+                if q.semantic || vpath.exists() {
+                    if !announced {
+                        if let Some(n) = e.download_note() {
+                            on(BuildEvent::Download(n));
+                        }
+                        announced = true;
+                    }
+                    let conn = index::open_existing(&c.config, c.index_path())?;
+                    let id = c.id().to_string();
+                    let mut progress = |done, total| {
+                        on(BuildEvent::Embedding {
+                            corpus: id.clone(),
+                            done,
+                            total,
+                        })
+                    };
+                    r.vectors = Some(store::build(&conn, &vpath, e.as_ref(), &mut progress)?);
+                }
+            }
+            reports.push(r);
+        }
         Ok(Reply::new(IndexBuildReport {
             schema_version: SCHEMA_VERSION,
             reports,

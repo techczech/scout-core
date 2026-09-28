@@ -14,7 +14,7 @@
   - `similar` may use the vectors when they exist, keeping tf-idf as the fallback.
 
 **Blocked by:** None. **Seams under test:** the embedder trait (with a fake embedder in tests, so there is no model download in CI); the vector store round trip; hybrid fusion ordering; facade parity.
-**Status:** ready
+**Status:** landed
 
 - [ ] `scout search "the mind as a machine" --semantic --in writing` returns the mind-as-computer passages (2005 Czech essay, 2016 draft) without the literal words.
 - [ ] A full vector build of writing + tweets + highlights: time and disk size reported; incremental rebuild with no changes < 3 s.

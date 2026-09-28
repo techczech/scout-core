@@ -135,6 +135,7 @@ fn cli_json_equals_facade_response_for_every_command() {
                 in_: vec!["writing".into()],
                 limit: 1,
                 passage: true,
+                ..Default::default()
             })
             .unwrap(),
         ),
@@ -371,6 +372,7 @@ fn cli_json_equals_facade_response_for_every_command() {
         .index_build(&IndexBuildQuery {
             ids: vec!["writing".into()],
             force: true,
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(
@@ -392,5 +394,68 @@ fn cli_json_equals_facade_response_for_every_command() {
             .code(),
         Some(3)
     );
+    assert_eq!(before, snapshot(&w), "sources are read-only");
+}
+
+/// Semantic and hybrid search: the CLI (with the hash fake embedder,
+/// `SCOUT_EMBEDDER=hash`) prints exactly the facade's reply.
+#[test]
+fn cli_semantic_json_equals_facade_response() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data, w) = fixture(tmp.path());
+    let before = snapshot(&w);
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_scout"))
+            .args(args)
+            .env("SCOUT_CONFIG", &cfg)
+            .env("SCOUT_DATA_DIR", &data)
+            .env("SCOUT_EMBEDDER", "hash")
+            .output()
+            .unwrap()
+    };
+    let o = run(&["index", "build", "writing", "--semantic", "--json"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["reports"][0]["vectors"]["model"], "hash-64");
+
+    let e = Engine::new(Registry::load_from(&cfg).unwrap(), data.join("indexes"))
+        .with_embedder(std::sync::Arc::new(scout_corpus::HashEmbedder::default()));
+    let q = |query: &str, mode| SearchQuery {
+        query: query.into(),
+        in_: vec!["writing".into()],
+        mode,
+        ..Default::default()
+    };
+    use scout_corpus::SearchMode::*;
+    let cases = vec![
+        case(
+            vec![
+                "search",
+                "metaphor model",
+                "--in",
+                "writing",
+                "--semantic",
+                "--json",
+            ],
+            e.search(&q("metaphor model", Semantic)).unwrap(),
+        ),
+        case(
+            vec!["search", "metaphor", "--in", "writing", "--json"],
+            e.search(&q("metaphor", Auto)).unwrap(),
+        ),
+        case(
+            vec!["search", "metaphor", "--in", "writing", "--fts", "--json"],
+            e.search(&q("metaphor", Fts)).unwrap(),
+        ),
+    ];
+    assert!(cases[1].json.contains("\"mode\": \"hybrid\""));
+    assert!(!cases[2].json.contains("\"mode\""));
+    for c in cases {
+        let o = run(&c.args);
+        assert_eq!(o.status.code(), Some(c.code), "{:?}", c.args);
+        assert_eq!(String::from_utf8_lossy(&o.stdout), c.json, "{:?}", c.args);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(err.lines().collect::<Vec<_>>(), c.notes, "{:?}", c.args);
+    }
     assert_eq!(before, snapshot(&w), "sources are read-only");
 }

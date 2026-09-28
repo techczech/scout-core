@@ -23,6 +23,12 @@ globset.workspace = true
 walkdir.workspace = true
 percent-encoding.workspace = true
 chrono.workspace = true
+fastembed = { version = "7.1.0", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"], optional = true }
+
+[features]
+default = []
+# The real in-process ONNX embedder (fastembed). Off by default: apps opt in.
+onnx = ["dep:fastembed"]
 
 [dev-dependencies]
 tempfile.workspace = true

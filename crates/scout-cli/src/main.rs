@@ -9,10 +9,24 @@ mod views;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use scout_corpus::api::{self, *};
+use scout_corpus::SearchMode;
 use scout_corpus::{
     Engine, IndexMissing, NoIndexedCorpus, Outcome, PassageNotFound, RegistryMissing, Reply,
 };
+use std::io::IsTerminal;
 use std::process::ExitCode;
+use std::sync::Arc;
+
+/// The embedder: the in-process ONNX model (loaded on first use), or the
+/// deterministic hash fake when `SCOUT_EMBEDDER=hash` (tests; no model).
+fn embedder() -> Result<Arc<dyn scout_corpus::Embedder>> {
+    if std::env::var("SCOUT_EMBEDDER").as_deref() == Ok("hash") {
+        return Ok(Arc::new(scout_corpus::HashEmbedder::default()));
+    }
+    Ok(Arc::new(
+        scout_corpus::semantic::embed::OnnxEmbedder::from_env()?,
+    ))
+}
 
 #[derive(Parser)]
 #[command(
@@ -54,6 +68,15 @@ enum Cmd {
         /// Quote the whole paragraph instead of the hit sentence.
         #[arg(long)]
         passage: bool,
+        /// Rank by meaning only (cosine to the query; needs `index build --semantic`).
+        #[arg(long, conflicts_with_all = ["hybrid", "fts"])]
+        semantic: bool,
+        /// Full-text and semantic rankings fused (the default where vectors exist).
+        #[arg(long, conflicts_with = "fts")]
+        hybrid: bool,
+        /// Full text only, even where vectors exist.
+        #[arg(long)]
+        fts: bool,
         #[arg(long)]
         json: bool,
     },
@@ -289,6 +312,10 @@ enum IndexCmd {
         /// Delete the index and rebuild from scratch.
         #[arg(long)]
         force: bool,
+        /// Also build passage vectors for semantic search (minutes; the
+        /// model is downloaded once). Existing vectors update on every build.
+        #[arg(long)]
+        semantic: bool,
         #[arg(long)]
         json: bool,
     },
@@ -354,7 +381,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         views::print_init_defaults(&r);
         return Ok(ExitCode::SUCCESS);
     }
-    let engine = Engine::from_env()?;
+    let engine = Engine::from_env()?.with_embedder(embedder()?);
     match cli.cmd {
         Cmd::Search {
             query,
@@ -362,13 +389,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
             limit,
             cite,
             passage,
+            semantic,
+            hybrid,
+            fts,
             json,
         } => {
+            let mode = match (semantic, hybrid, fts) {
+                (true, _, _) => SearchMode::Semantic,
+                (_, true, _) => SearchMode::Hybrid,
+                (_, _, true) => SearchMode::Fts,
+                _ => SearchMode::Auto,
+            };
             let q = SearchQuery {
                 query: query.join(" "),
                 in_,
                 limit,
                 passage,
+                mode,
             };
             out(engine.search(&q), json, |res| match cite {
                 Some(fmt) => {
@@ -543,9 +580,37 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out(engine.clean_report(&q), json, views::print_clean_report)
         }
         Cmd::Index { cmd } => match cmd {
-            IndexCmd::Build { ids, force, json } => {
-                let q = IndexBuildQuery { ids, force };
-                out(engine.index_build(&q), json, views::print_build)
+            IndexCmd::Build {
+                ids,
+                force,
+                semantic,
+                json,
+            } => {
+                let q = IndexBuildQuery {
+                    ids,
+                    force,
+                    semantic,
+                };
+                let tty = std::io::stderr().is_terminal();
+                let mut on = |ev: BuildEvent| match ev {
+                    BuildEvent::Download(note) => eprintln!("{note}"),
+                    BuildEvent::Embedding {
+                        corpus,
+                        done,
+                        total,
+                    } if tty && total > 0 => {
+                        eprint!("\rscout: embedding {corpus}: {done}/{total} passages");
+                        if done == total {
+                            eprintln!();
+                        }
+                    }
+                    BuildEvent::Embedding { .. } => {}
+                };
+                out(
+                    engine.index_build_with(&q, &mut on),
+                    json,
+                    views::print_build,
+                )
             }
             IndexCmd::Status { json } => out(engine.index_status(), json, views::print_status),
         },
