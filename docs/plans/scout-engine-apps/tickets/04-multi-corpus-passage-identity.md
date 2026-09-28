@@ -12,7 +12,7 @@ Required:
 **Feature / journey:** J4/J5/J6, every multi-corpus view in both apps.
 **Blocked by:** None: dispatchable now (urgent).
 **Seams under test:** the facade functions, with a two-corpus fixture DESIGNED so that row ids collide across corpora.
-**Status:** ready
+**Status:** landed
 
 - [ ] A two-corpus fixture with colliding row ids: every KWIC, search, cite and similar result's quote is a substring of its OWN document's original text (test over all rows).
 - [ ] No panic in the n-gram→concordance multi-corpus path.

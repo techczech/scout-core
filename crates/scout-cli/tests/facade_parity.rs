@@ -251,6 +251,15 @@ fn cli_json_equals_facade_response_for_every_command() {
             .unwrap(),
         ),
         case(
+            vec!["ngrams", "--n", "1-3", "--containing", "metaphor", "--json"],
+            e.ngrams(&NgramsQuery {
+                n: "1-3".into(),
+                containing: Some("metaphor".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+        ),
+        case(
             vec!["profile", "metaphor", "--min-hits", "1", "--json"],
             e.profile(&ProfileQuery {
                 word: "metaphor".into(),

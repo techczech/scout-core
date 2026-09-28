@@ -286,7 +286,7 @@ Prints the citation of one passage (the `passage_id` of search, kwic or verify-q
 - Grams are counted within passages over normalised tokens (lowercase; `don't` is one token).
 - Default: only grams made entirely of stopwords are dropped. `--strict-stopwords`: grams with at least n−1 stopwords are dropped (for n=1, any stopword).
 - `--since Y` / `--until Y` are inclusive years; undated documents are then left out, and each gram carries `"by_year": {"2016": 3, …}` (years with a count only).
-- `containing` (library only, used by the profile) appears when set.
+- `--containing <word or phrase>` (facade: `NgramsQuery.containing`) keeps only grams that contain its tokens, normalised and tokenised as passages are; the top-level `"containing"` then lists those tokens (absent when unset). A word found nowhere gives no grams; a value with no word tokens is a usage error. The profile uses the same filter for its n-grams.
 - `--dist year|doc|corpus` adds `"dist"` (top level: the chosen dimension) and a row distribution object on every gram (see above); its counts sum to the gram's `count`.
 - Order: count desc, then gram asc; at most `--top`.
 
