@@ -1,15 +1,16 @@
 //! `scout`: argument parsing and output formatting over `scout-corpus`.
-//! No engine logic lives here (invariant 5).
+//! No engine logic lives here (invariant 5): every command is one call into
+//! `scout_corpus::api::Engine`, and `--json` prints that call's response.
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
 mod views;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use scout_corpus::api::{self, *};
 use scout_corpus::{
-    index, registry, search_all, Corpus, DocFilter, IndexMissing, NoIndexedCorpus, PassageId,
-    PassageNotFound, Registry, RegistryMissing, SearchRequest, Slice, SliceSpec,
+    Engine, IndexMissing, NoIndexedCorpus, Outcome, PassageNotFound, RegistryMissing, Reply,
 };
 use std::process::ExitCode;
 
@@ -45,7 +46,7 @@ enum Cmd {
         /// Comma-separated corpus ids (default: every indexable corpus).
         #[arg(long = "in", value_delimiter = ',')]
         in_: Vec<String>,
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = SearchQuery::default().limit)]
         limit: usize,
         /// Print a citation per document.
         #[arg(long, value_enum)]
@@ -63,19 +64,19 @@ enum Cmd {
         #[command(flatten)]
         scope: Scope,
         /// Context tokens either side.
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = KwicQuery::default().width)]
         width: usize,
         /// L1..L9, R1..R9, date or source; ties break by source path, line.
-        #[arg(long, default_value = "R1")]
+        #[arg(long, default_value_t = KwicQuery::default().sort)]
         sort: String,
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = KwicQuery::default().limit)]
         limit: usize,
         /// Only lines with this word within --window tokens of the node (a
         /// collocate row's concordance).
         #[arg(long)]
         near: Option<String>,
         /// The --near window, tokens either side.
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = KwicQuery::default().window)]
         window: usize,
         #[arg(long)]
         json: bool,
@@ -85,15 +86,15 @@ enum Cmd {
         node: Vec<String>,
         #[command(flatten)]
         scope: Scope,
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = CollocatesQuery::default().window)]
         window: usize,
         /// logdice or mi.
-        #[arg(long, default_value = "logdice")]
+        #[arg(long, default_value_t = CollocatesQuery::default().score)]
         score: String,
         /// Minimum co-occurrence count f(n,c).
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = CollocatesQuery::default().min)]
         min: u64,
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = CollocatesQuery::default().top)]
         top: usize,
         /// List stopwords as collocates too (default: dropped).
         #[arg(long)]
@@ -119,10 +120,10 @@ enum Cmd {
         /// Corpora for a slice that names none (default: every indexed corpus).
         #[arg(long = "in", value_delimiter = ',')]
         in_: Vec<String>,
-        #[arg(long, default_value_t = 40)]
+        #[arg(long, default_value_t = KeynessQuery::default().top)]
         top: usize,
         /// Minimum count in the slice where the word is key.
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = KeynessQuery::default().min)]
         min: u64,
         #[arg(long)]
         json: bool,
@@ -142,7 +143,7 @@ enum Cmd {
         #[command(flatten)]
         scope: Scope,
         /// A range such as 3-5, or one n.
-        #[arg(long, default_value = "3-5")]
+        #[arg(long, default_value_t = NgramsQuery::default().n)]
         n: String,
         /// First year (inclusive); adds per-year counts.
         #[arg(long)]
@@ -150,7 +151,7 @@ enum Cmd {
         /// Last year (inclusive); adds per-year counts.
         #[arg(long)]
         until: Option<i32>,
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = NgramsQuery::default().top)]
         top: usize,
         /// Drop grams with at least n-1 stopwords (default: only all-stopword grams).
         #[arg(long)]
@@ -167,7 +168,7 @@ enum Cmd {
         #[command(flatten)]
         scope: Scope,
         /// A top document needs at least this many hits.
-        #[arg(long, default_value_t = 3)]
+        #[arg(long, default_value_t = ProfileQuery::default().min_hits)]
         min_hits: usize,
         #[arg(long)]
         json: bool,
@@ -178,6 +179,18 @@ enum Cmd {
         passage_id: String,
         #[arg(long, value_enum, default_value = "markdown")]
         format: CiteArg,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Per normalisation rule: passages changed, with before/after samples.
+    CleanReport {
+        corpus: String,
+        /// Samples per rule.
+        #[arg(long, default_value_t = CleanReportQuery::default().samples)]
+        samples: usize,
+        /// Preview a candidate boilerplate regex (repeatable); not saved.
+        #[arg(long = "rule")]
+        rules: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -218,15 +231,15 @@ pub struct Scope {
 }
 
 impl Scope {
-    fn filter(&self) -> DocFilter {
-        DocFilter {
-            lang: self.lang.clone(),
-            genre: self.genre.clone(),
-            after: self.after.clone(),
-            before: self.before.clone(),
+    fn api(self) -> api::Scope {
+        api::Scope {
+            in_: self.in_,
+            lang: self.lang,
+            genre: self.genre,
+            after: self.after,
+            before: self.before,
             year: self.year,
-            source: self.source.clone(),
-            ..DocFilter::default()
+            source: self.source,
         }
     }
 }
@@ -234,7 +247,10 @@ impl Scope {
 #[derive(Subcommand)]
 enum CorporaCmd {
     /// List registered corpora.
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Write the default registry (writing, tweets, highlights).
     InitDefaults {
         /// Overwrite an existing registry.
@@ -254,9 +270,14 @@ enum IndexCmd {
         /// Delete the index and rebuild from scratch.
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Per corpus: docs, passages, tokens, built-at, stale files.
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -286,57 +307,62 @@ fn main() -> ExitCode {
     }
 }
 
-fn indexable(reg: &Registry) -> Vec<&scout_corpus::CorpusConfig> {
-    reg.corpora.iter().collect()
-}
-
-fn select(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
-    let dir = index::index_dir();
-    if ids.is_empty() {
-        return Ok(indexable(reg)
-            .into_iter()
-            .map(|c| Corpus::from_config(c.clone(), &dir))
-            .collect());
+/// Print the notes, then the JSON body or the human view; exit 0 with
+/// results, 1 without.
+fn out<T: serde::Serialize + Outcome>(
+    reply: Result<Reply<T>>,
+    json: bool,
+    human: impl FnOnce(&T),
+) -> Result<ExitCode> {
+    let reply = reply?;
+    for n in &reply.notes {
+        eprintln!("{n}");
     }
-    ids.iter()
-        .map(|id| Ok(Corpus::from_config(reg.get(id)?.clone(), &dir)))
-        .collect()
-}
-
-/// The corpora a query runs over: the named ones, or else every indexed
-/// corpus, with a one-line note on stderr naming those left out.
-fn scope_corpora(reg: &Registry, ids: &[String]) -> Result<Vec<Corpus>> {
-    if !ids.is_empty() {
-        return select(reg, ids);
-    }
-    let (ok, missing) = scout_corpus::indexed_corpora(reg, &index::index_dir());
-    if ok.is_empty() {
-        return Err(NoIndexedCorpus(missing).into());
-    }
-    if !missing.is_empty() {
-        let used: Vec<&str> = ok.iter().map(|c| c.id()).collect();
-        eprintln!(
-            "scout: note: using {}; not indexed: {}",
-            used.join(", "),
-            missing.join(", ")
-        );
-    }
-    Ok(ok)
-}
-
-/// Resolve a slice expression: its own corpora, else `default`.
-fn slice(reg: &Registry, spec: &str, default: &[Corpus]) -> Result<Slice> {
-    let s = SliceSpec::parse(spec)?;
-    let corpora = if s.corpora.is_empty() {
-        default.to_vec()
+    if json {
+        println!("{}", api::to_json(&reply.body)?);
     } else {
-        select(reg, &s.corpora)?
-    };
-    Ok(Slice::new(s.spec, corpora, s.filter))
+        human(&reply.body);
+    }
+    Ok(views::code(reply.body.has_results()))
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    if let Cmd::Corpora {
+        cmd: CorporaCmd::InitDefaults { force },
+    } = cli.cmd
+    {
+        let r = api::init_defaults(force)?;
+        views::print_init_defaults(&r);
+        return Ok(ExitCode::SUCCESS);
+    }
+    let engine = Engine::from_env()?;
     match cli.cmd {
+        Cmd::Search {
+            query,
+            in_,
+            limit,
+            cite,
+            passage,
+            json,
+        } => {
+            let q = SearchQuery {
+                query: query.join(" "),
+                in_,
+                limit,
+                passage,
+            };
+            out(engine.search(&q), json, |res| match cite {
+                Some(fmt) => {
+                    for (i, d) in res.results.iter().enumerate() {
+                        if i > 0 {
+                            println!();
+                        }
+                        print!("{}", fmt.pick(&d.citation));
+                    }
+                }
+                None => views::print_hits(res),
+            })
+        }
         Cmd::Kwic {
             term,
             scope,
@@ -347,17 +373,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             window,
             json,
         } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &scope.in_)?;
-            let mut req = scout_corpus::KwicRequest::new(term.join(" "));
-            req.width = width;
-            req.sort = sort.parse()?;
-            req.limit = limit;
-            req.filter = scope.filter();
-            req.near = near.map(|word| scout_corpus::Near { word, window });
-            let res = scout_corpus::concord::kwic(&corpora, &req)?;
-            views::emit(json, &res, || views::print_kwic(&res))?;
-            Ok(views::code(res.total > 0))
+            let q = KwicQuery {
+                term: term.join(" "),
+                scope: scope.api(),
+                width,
+                sort,
+                limit,
+                near,
+                window,
+            };
+            out(engine.kwic(&q), json, views::print_kwic)
         }
         Cmd::Collocates {
             node,
@@ -371,39 +396,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dist,
             json,
         } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &scope.in_)?;
-            let mut req = scout_corpus::CollocRequest::new(node.join(" "));
-            req.window = window;
-            req.score = score.parse()?;
-            req.min_freq = min;
-            req.top = top;
-            req.keep_stopwords = keep_stopwords;
-            req.filter = scope.filter();
-            req.dist = dist.as_deref().map(str::parse).transpose()?;
-            match compare {
-                None => {
-                    let res = scout_corpus::colloc::collocates(&corpora, &req)?;
-                    views::emit(json, &res, || views::print_collocates(&res))?;
-                    Ok(views::code(!res.rows.is_empty()))
-                }
-                Some(spec) => {
-                    if req.dist.is_some() {
-                        return Err(anyhow!("--dist does not combine with --compare"));
-                    }
-                    let f = scope.filter();
-                    let label = if f.is_empty() {
-                        "all".to_string()
-                    } else {
-                        f.spec()
-                    };
-                    let a = Slice::new(label, corpora.clone(), f);
-                    let b = slice(&reg, &spec, &corpora)?;
-                    let res = scout_corpus::colloc::compare(&a, &b, &req)?;
-                    views::emit(json, &res, || views::print_compare(&res))?;
-                    Ok(views::code(!res.rows.is_empty()))
-                }
-            }
+            let q = CollocatesQuery {
+                node: node.join(" "),
+                scope: scope.api(),
+                window,
+                score,
+                min,
+                top,
+                keep_stopwords,
+                compare,
+                dist,
+            };
+            out(engine.collocates(&q), json, |r| match r {
+                Collocates::Single(r) => views::print_collocates(r),
+                Collocates::Compare(r) => views::print_compare(r),
+            })
         }
         Cmd::Keyness {
             a,
@@ -413,23 +420,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             min,
             json,
         } => {
-            let reg = Registry::load()?;
-            // Default corpora only when a slice names none.
-            let needs_default = SliceSpec::parse(&a)?.corpora.is_empty()
-                || SliceSpec::parse(&b)?.corpora.is_empty();
-            let default = if needs_default {
-                scope_corpora(&reg, &in_)?
-            } else {
-                vec![]
+            let q = KeynessQuery {
+                a,
+                b,
+                in_,
+                top,
+                min,
             };
-            let sa = slice(&reg, &a, &default)?;
-            let sb = slice(&reg, &b, &default)?;
-            let req = scout_corpus::KeynessRequest { top, min_freq: min };
-            let res = scout_corpus::keyness::keyness(&sa, &sb, &req)?;
-            views::emit(json, &res, || views::print_keyness(&res))?;
-            Ok(views::code(
-                !res.a_keys.is_empty() || !res.b_keys.is_empty(),
-            ))
+            out(engine.keyness(&q), json, views::print_keyness)
         }
         Cmd::Dist {
             term,
@@ -437,16 +435,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
             scope,
             json,
         } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &scope.in_)?;
-            let res = scout_corpus::concord::distribution(
-                &corpora,
-                &term.join(" "),
-                by.parse()?,
-                &scope.filter(),
-            )?;
-            views::emit(json, &res, || views::print_dist(&res))?;
-            Ok(views::code(res.total > 0))
+            let q = DistQuery {
+                term: term.join(" "),
+                by,
+                scope: scope.api(),
+            };
+            out(engine.dist(&q), json, views::print_dist)
         }
         Cmd::Ngrams {
             scope,
@@ -458,23 +452,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dist,
             json,
         } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &scope.in_)?;
-            let (n_min, n_max) = scout_corpus::ngrams::parse_n_range(&n)?;
-            let req = scout_corpus::NgramRequest {
-                n_min,
-                n_max,
-                filter: scope.filter(),
+            let q = NgramsQuery {
+                scope: scope.api(),
+                n,
                 since,
                 until,
                 top,
                 strict_stopwords,
-                containing: None,
-                dist: dist.as_deref().map(str::parse).transpose()?,
+                dist,
             };
-            let res = scout_corpus::ngrams::ngrams(&corpora, &req)?;
-            views::emit(json, &res, || views::print_ngrams(&res))?;
-            Ok(views::code(!res.grams.is_empty()))
+            out(engine.ngrams(&q), json, views::print_ngrams)
         }
         Cmd::Profile {
             word,
@@ -482,256 +469,67 @@ fn run(cli: Cli) -> Result<ExitCode> {
             min_hits,
             json,
         } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &scope.in_)?;
-            let opts = scout_corpus::ProfileOptions {
+            let q = ProfileQuery {
+                word: word.join(" "),
+                scope: scope.api(),
                 min_hits,
-                ..Default::default()
             };
-            let res = scout_corpus::concord::profile_with(
-                &corpora,
-                &word.join(" "),
-                &scope.filter(),
-                &opts,
-            )?;
-            views::emit(json, &res, || views::print_profile(&res))?;
-            Ok(views::code(res.frequency > 0))
+            out(engine.profile(&q), json, views::print_profile)
         }
         Cmd::VerifyQuote { text, in_, json } => {
-            let reg = Registry::load()?;
-            let corpora = scope_corpora(&reg, &in_)?;
-            let res = scout_corpus::verify::verify_quote(&corpora, &text.join(" "))?;
-            views::emit(json, &res, || views::print_verify(&res))?;
-            Ok(views::code(res.found))
+            let q = VerifyQuoteQuery {
+                text: text.join(" "),
+                in_,
+            };
+            out(engine.verify_quote(&q), json, views::print_verify)
         }
         Cmd::Cite {
             passage_id,
             format,
             json,
         } => {
-            let id: PassageId = passage_id.parse()?;
-            let reg = Registry::load()?;
-            let c = Corpus::from_config(reg.get(&id.corpus)?.clone(), &index::index_dir());
-            let res = c.cite(&id)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&res)?);
-            } else {
-                match format {
-                    CiteArg::Markdown => print!("{}", res.citation.markdown),
-                    CiteArg::Plain => print!("{}", res.citation.plain),
-                }
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Cmd::Corpora { cmd } => corpora(cmd),
-        Cmd::Index { cmd } => index_cmd(cmd),
-        Cmd::Search {
-            query,
-            in_,
-            limit,
-            cite,
-            passage,
-            json,
-        } => {
-            let query = query.join(" ");
-            if query.trim().is_empty() {
-                return Err(anyhow!("empty query"));
-            }
-            let reg = Registry::load()?;
-            // `in:` in the query selects corpora when --in does not.
-            let ids = if in_.is_empty() {
-                scout_corpus::search::query_corpora(&query)?
-            } else {
-                in_
-            };
-            let corpora = scope_corpora(&reg, &ids)?;
-            let mut req = SearchRequest::new(query);
-            req.limit = limit;
-            req.whole_passage = passage;
-            let res = search_all(&corpora, &req)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&res)?);
-            } else if let Some(fmt) = cite {
-                for (i, d) in res.results.iter().enumerate() {
-                    if i > 0 {
-                        println!();
-                    }
-                    match fmt {
-                        CiteArg::Markdown => print!("{}", d.citation.markdown),
-                        CiteArg::Plain => print!("{}", d.citation.plain),
-                    }
-                }
-            } else {
-                print_hits(&res);
-            }
-            Ok(if res.results.is_empty() {
-                ExitCode::from(1)
-            } else {
-                ExitCode::SUCCESS
+            let q = CiteQuery { passage_id };
+            out(engine.cite(&q), json, |r| {
+                print!("{}", format.pick(&r.citation))
             })
         }
-    }
-}
-
-fn print_hits(res: &scout_corpus::SearchResults) {
-    println!(
-        "{} documents, {} passages for {:?} in {}",
-        res.total_documents,
-        res.total_passages,
-        res.query,
-        res.corpora.join(", ")
-    );
-    if !res.plan.ignored.is_empty() {
-        println!("(not applied here: {})", res.plan.ignored.join(" "));
-    }
-    for (i, d) in res.results.iter().enumerate() {
-        let hit = &d.hits[0];
-        println!();
-        println!("{:>3}. [{}] {}", i + 1, d.corpus, d.title);
-        let mut date = d
-            .date
-            .as_deref()
-            .map(|s| s.get(..10).unwrap_or(s).to_string())
-            .unwrap_or_else(|| "—".into());
-        if d.date_source.as_deref() == Some("saved") {
-            date.push_str(" (saved)");
-        }
-        let genre = d.genre.clone().unwrap_or_else(|| "—".into());
-        println!(
-            "     {date:<10}  {genre:<10}  {}:{}  ({} passages)",
-            d.rel_path, hit.line, d.passage_count
-        );
-        let q: String = hit.quote.split_whitespace().collect::<Vec<_>>().join(" ");
-        let q = if q.chars().count() > 220 {
-            format!("{}…", q.chars().take(220).collect::<String>())
-        } else {
-            q
-        };
-        println!("     > {q}");
-    }
-}
-
-fn corpora(cmd: CorporaCmd) -> Result<ExitCode> {
-    match cmd {
-        CorporaCmd::InitDefaults { force } => {
-            let path = registry::registry_path();
-            if registry::init_defaults(&path, force)? {
-                println!("wrote {}", path.display());
-            } else {
-                println!(
-                    "{} exists; left unchanged (use --force to overwrite)",
-                    path.display()
-                );
-            }
-            let reg = Registry::load_from(&path)?;
-            for c in &reg.corpora {
-                println!("  {:<11} {:<24} {}", c.id, c.kind.as_str(), c.path);
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        CorporaCmd::List => {
-            let reg = Registry::load()?;
-            let dir = index::index_dir();
-            println!("{:<11} {:<24} {:<8} path", "id", "kind", "index");
-            for c in &reg.corpora {
-                let built = index::index_path_in(&dir, &c.id).exists();
-                println!(
-                    "{:<11} {:<24} {:<8} {}",
-                    c.id,
-                    c.kind.as_str(),
-                    if built { "built" } else { "missing" },
-                    c.path
-                );
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        CorporaCmd::Show { id } => {
-            let reg = Registry::load()?;
-            let c = reg.get(&id)?;
-            let one = Registry {
-                corpora: vec![c.clone()],
+        Cmd::CleanReport {
+            corpus,
+            samples,
+            rules,
+            json,
+        } => {
+            let q = CleanReportQuery {
+                corpus,
+                samples,
+                rules,
             };
-            print!("{}", one.to_toml()?);
-            let p = index::index_path_in(&index::index_dir(), &c.id);
-            println!("\n# root:  {}", c.root().display());
-            println!(
-                "# index: {} ({})",
-                p.display(),
-                if p.exists() { "built" } else { "missing" }
-            );
-            Ok(ExitCode::SUCCESS)
+            out(engine.clean_report(&q), json, views::print_clean_report)
         }
+        Cmd::Index { cmd } => match cmd {
+            IndexCmd::Build { ids, force, json } => {
+                let q = IndexBuildQuery { ids, force };
+                out(engine.index_build(&q), json, views::print_build)
+            }
+            IndexCmd::Status { json } => out(engine.index_status(), json, views::print_status),
+        },
+        Cmd::Corpora { cmd } => match cmd {
+            CorporaCmd::List { json } => out(engine.corpora_list(), json, views::print_corpora),
+            CorporaCmd::Show { id } => {
+                let r = engine.corpus_show(&id)?;
+                views::print_corpus_show(&r.body);
+                Ok(ExitCode::SUCCESS)
+            }
+            CorporaCmd::InitDefaults { .. } => unreachable!("handled above"),
+        },
     }
 }
 
-fn index_cmd(cmd: IndexCmd) -> Result<ExitCode> {
-    let reg = Registry::load()?;
-    match cmd {
-        IndexCmd::Build { ids, force } => {
-            for c in select(&reg, &ids)? {
-                let r = c.build_index(force)?;
-                println!(
-                    "{:<10} {} docs · {} passages · {} tokens  ({} {}: {} indexed, {} unchanged, {} removed, {} not documents) {:.1}s",
-                    r.corpus,
-                    r.docs,
-                    r.passages,
-                    r.tokens,
-                    if r.full { "full" } else { "incremental" },
-                    r.files_seen,
-                    r.indexed,
-                    r.unchanged,
-                    r.removed,
-                    r.not_documents,
-                    r.elapsed_ms as f64 / 1000.0
-                );
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        IndexCmd::Status => {
-            let dir = index::index_dir();
-            println!(
-                "{:<11} {:>6} {:>9} {:>10}  {:<20}  stale",
-                "corpus", "docs", "passages", "tokens", "built-at"
-            );
-            for c in &reg.corpora {
-                let corpus = Corpus::from_config(c.clone(), &dir);
-                let s = corpus.status()?;
-                if !s.exists {
-                    let note = format!("no index; run `scout index build {}`", c.id);
-                    println!(
-                        "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
-                        c.id, "—", "—", "—", "—", note
-                    );
-                    continue;
-                }
-                let stale = match &s.stale {
-                    Some(st) if st.added + st.changed + st.removed == 0 && s.config_current => {
-                        "none".to_string()
-                    }
-                    Some(st) => format!(
-                        "{} new · {} changed · {} removed{}",
-                        st.added,
-                        st.changed,
-                        st.removed,
-                        if s.config_current {
-                            ""
-                        } else {
-                            " · config changed"
-                        }
-                    ),
-                    None => "—".into(),
-                };
-                println!(
-                    "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
-                    c.id,
-                    s.docs,
-                    s.passages,
-                    s.tokens,
-                    s.built_at.unwrap_or_default(),
-                    stale
-                );
-            }
-            Ok(ExitCode::SUCCESS)
+impl CiteArg {
+    fn pick(self, c: &scout_corpus::search::Citation) -> &str {
+        match self {
+            CiteArg::Markdown => &c.markdown,
+            CiteArg::Plain => &c.plain,
         }
     }
 }

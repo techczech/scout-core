@@ -1,7 +1,10 @@
-//! Human output for the analytics views: compact and aligned (J9 frame).
+//! Human output for every command: compact and aligned (J9 frame).
 //! Formatting only; every number comes from `scout-corpus`.
 
-use anyhow::Result;
+use scout_corpus::api::{
+    CorporaList, CorpusShow, IndexBuildReport, IndexStatusReport, InitDefaults,
+};
+use scout_corpus::clean::CleanReport;
 use scout_corpus::colloc::{CollocResults, CompareResults};
 use scout_corpus::concord::{Distribution, KwicResults, Profile};
 use scout_corpus::keyness::{KeyWord, KeynessResults};
@@ -9,16 +12,6 @@ use scout_corpus::ngrams::NgramResults;
 use scout_corpus::rowdist::RowDist;
 use scout_corpus::verify::VerifyResult;
 use std::process::ExitCode;
-
-/// Print `value` as pretty JSON, or run the human printer.
-pub fn emit<T: serde::Serialize>(json: bool, value: &T, human: impl FnOnce()) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(value)?);
-    } else {
-        human();
-    }
-    Ok(())
-}
 
 /// Exit 0 with results, 1 without.
 pub fn code(any: bool) -> ExitCode {
@@ -467,5 +460,204 @@ pub fn print_verify(v: &VerifyResult) {
             m.title
         );
         println!("    > {}", keep_head(&flat(&m.original), 200));
+    }
+}
+
+pub fn print_hits(res: &scout_corpus::SearchResults) {
+    println!(
+        "{} documents, {} passages for {:?} in {}",
+        res.total_documents,
+        res.total_passages,
+        res.query,
+        res.corpora.join(", ")
+    );
+    if !res.plan.ignored.is_empty() {
+        println!("(not applied here: {})", res.plan.ignored.join(" "));
+    }
+    for (i, d) in res.results.iter().enumerate() {
+        let hit = &d.hits[0];
+        println!();
+        println!("{:>3}. [{}] {}", i + 1, d.corpus, d.title);
+        let mut date = d
+            .date
+            .as_deref()
+            .map(|s| s.get(..10).unwrap_or(s).to_string())
+            .unwrap_or_else(|| "—".into());
+        if d.date_source.as_deref() == Some("saved") {
+            date.push_str(" (saved)");
+        }
+        let genre = d.genre.clone().unwrap_or_else(|| "—".into());
+        println!(
+            "     {date:<10}  {genre:<10}  {}:{}  ({} passages)",
+            d.rel_path, hit.line, d.passage_count
+        );
+        let q = flat(&hit.quote);
+        let q = if q.chars().count() > 220 {
+            format!("{}…", q.chars().take(220).collect::<String>())
+        } else {
+            q
+        };
+        println!("     > {q}");
+    }
+}
+
+pub fn print_init_defaults(r: &InitDefaults) {
+    if r.wrote {
+        println!("wrote {}", r.path);
+    } else {
+        println!(
+            "{} exists; left unchanged (use --force to overwrite)",
+            r.path
+        );
+    }
+    for c in &r.corpora {
+        println!("  {:<11} {:<24} {}", c.id, c.kind, c.path);
+    }
+}
+
+pub fn print_corpora(r: &CorporaList) {
+    println!("{:<11} {:<24} {:<8} path", "id", "kind", "index");
+    for c in &r.corpora {
+        println!(
+            "{:<11} {:<24} {:<8} {}",
+            c.id,
+            c.kind,
+            if c.index_built { "built" } else { "missing" },
+            c.path
+        );
+    }
+}
+
+pub fn print_corpus_show(r: &CorpusShow) {
+    print!("{}", r.toml);
+    println!("\n# root:  {}", r.entry.root);
+    println!(
+        "# index: {} ({})",
+        r.entry.index_path,
+        if r.entry.index_built {
+            "built"
+        } else {
+            "missing"
+        }
+    );
+}
+
+pub fn print_build(r: &IndexBuildReport) {
+    for r in &r.reports {
+        println!(
+            "{:<10} {} docs · {} passages · {} tokens  ({} {}: {} indexed, {} unchanged, {} removed, {} not documents) {:.1}s",
+            r.corpus,
+            r.docs,
+            r.passages,
+            r.tokens,
+            if r.full { "full" } else { "incremental" },
+            r.files_seen,
+            r.indexed,
+            r.unchanged,
+            r.removed,
+            r.not_documents,
+            r.elapsed_ms as f64 / 1000.0
+        );
+    }
+}
+
+pub fn print_status(r: &IndexStatusReport) {
+    println!(
+        "{:<11} {:>6} {:>9} {:>10}  {:<20}  stale",
+        "corpus", "docs", "passages", "tokens", "built-at"
+    );
+    for s in &r.corpora {
+        if !s.exists {
+            let note = format!("no index; run `scout index build {}`", s.corpus);
+            println!(
+                "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
+                s.corpus, "—", "—", "—", "—", note
+            );
+            continue;
+        }
+        let stale = match &s.stale {
+            Some(st) if st.added + st.changed + st.removed == 0 && s.config_current => {
+                "none".to_string()
+            }
+            Some(st) => format!(
+                "{} new · {} changed · {} removed{}",
+                st.added,
+                st.changed,
+                st.removed,
+                if s.config_current {
+                    ""
+                } else {
+                    " · config changed"
+                }
+            ),
+            None => "—".into(),
+        };
+        println!(
+            "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
+            s.corpus,
+            s.docs,
+            s.passages,
+            s.tokens,
+            s.built_at.clone().unwrap_or_default(),
+            stale
+        );
+    }
+}
+
+fn toks(t: &[String]) -> String {
+    if t.is_empty() {
+        "(nothing counted)".into()
+    } else {
+        t.join(" · ")
+    }
+}
+
+pub fn print_clean_report(r: &CleanReport) {
+    println!(
+        "Cleaning report · {} · {} documents · {} passages · {} lines",
+        r.corpus, r.documents, r.passages, r.lines
+    );
+    println!(
+        "{:<28} {:>10} {:>16} {:>14}",
+        "rule", "passages", "tokens changed", "lines"
+    );
+    for rule in &r.rules {
+        println!(
+            "{:<28} {:>10} {:>16} {:>14}",
+            rule.label, rule.passages, rule.token_passages, rule.token_lines
+        );
+        if let Some(ps) = &rule.patterns {
+            if ps.is_empty() {
+                println!(
+                    "    (no boilerplate rules in the registry; preview one with --rule <regex>)"
+                );
+            }
+            for p in ps {
+                println!(
+                    "    rule {} ({}) {:?}: {} lines dropped in {} passages",
+                    p.n, p.origin, p.regex, p.lines, p.passages
+                );
+            }
+        }
+    }
+    for rule in &r.rules {
+        if rule.samples.is_empty() {
+            continue;
+        }
+        println!();
+        println!("{} · samples", rule.label);
+        for s in &rule.samples {
+            let by = s
+                .pattern
+                .map(|n| format!(" · rule {n}"))
+                .unwrap_or_default();
+            println!("  {}:{}  ×{}{by}", s.rel_path, s.line, s.occurrences);
+            println!("    original: {}", keep_head(&s.original, 160));
+            println!("    before:   {}", keep_head(&toks(&s.before), 160));
+            println!("    after:    {}", keep_head(&toks(&s.after), 160));
+            let mut change: Vec<String> = s.removed.iter().map(|t| format!("-{t}")).collect();
+            change.extend(s.added.iter().map(|t| format!("+{t}")));
+            println!("    change:   {}", keep_head(&change.join(" "), 160));
+        }
     }
 }
