@@ -12,7 +12,7 @@ Fix in the highlights adapter and `cite`:
 The local `file://` link stays only in the Markdown flavour (the apps already drop it on plain and export).
 
 **Blocked by:** None. **Seams under test:** facade `cite` over a highlights fixture (X post, Readwise article, Zotero item with a DOI); the CLI parity test.
-**Status:** ready
+**Status:** landed
 
 - [ ] Citing a highlight of an X post gives the x.com link; the post text never appears as the title.
 - [ ] Articles and Zotero items carry their public URL or DOI.

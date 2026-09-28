@@ -178,6 +178,8 @@ pub struct CiteSource<'a> {
     pub handle: Option<&'a str>,
     /// Highlights: `published` or `saved` (the date is a save date).
     pub date_source: Option<&'a str>,
+    /// Highlights: the work's type (`tweet` cites as a post).
+    pub kind: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,9 +233,59 @@ fn tweet_attribution(src: &CiteSource, md: bool) -> String {
     out
 }
 
-/// `— Author, *Title*, 2019 · [highlight](…)`: the year of the work's
-/// publication; a save date (no publication date known) reads `saved 2021`.
+/// The account of an X / Twitter status URL (`https://x.com/atroyn/status/1`
+/// gives `atroyn`).
+fn status_handle(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let mut parts = rest.split('/');
+    let host = parts
+        .next()?
+        .trim_start_matches("www.")
+        .trim_start_matches("mobile.");
+    if host != "x.com" && host != "twitter.com" {
+        return None;
+    }
+    let handle = parts.next().filter(|h| !h.is_empty())?;
+    matches!(parts.next(), Some("status" | "statuses")).then_some(handle)
+}
+
+/// Highlight links: the public URL first; the local `file://` highlight link
+/// only in the Markdown form (it means nothing once pasted elsewhere).
+fn push_highlight_links(out: &mut String, src: &CiteSource, md: bool) {
+    let local = if md { src.link } else { None };
+    push_links(out, &[("public", src.public_url), ("highlight", local)], md);
+}
+
+/// A highlighted X post: `— @atroyn, post, 22 October 2024 · [public](…)`.
+/// The post text is never a title.
+fn post_attribution(src: &CiteSource, md: bool) -> String {
+    let who = src
+        .handle
+        .or_else(|| src.public_url.and_then(status_handle))
+        .filter(|h| !h.trim().is_empty())
+        .map(|h| format!("@{}", h.trim_start_matches('@')))
+        .or_else(|| {
+            src.author
+                .map(|a| a.trim().trim_end_matches(" on Twitter").to_string())
+                .filter(|a| !a.is_empty())
+        });
+    let mut parts: Vec<String> = who.into_iter().collect();
+    parts.push("post".to_string());
+    if let Some(d) = src.date.and_then(format_date) {
+        parts.push(d);
+    }
+    let mut out = format!("— {}", parts.join(", "));
+    push_highlight_links(&mut out, src, md);
+    out
+}
+
+/// `— Author, *Title*, 2019 · [public](…) · [highlight](…)`: the year of the
+/// work's publication; a save date (no publication date known) reads `saved
+/// 2021`. X posts have their own form ([`post_attribution`]).
 fn highlight_attribution(src: &CiteSource, md: bool) -> String {
+    if src.kind == Some("tweet") {
+        return post_attribution(src, md);
+    }
     let mut parts = Vec::new();
     if let Some(a) = src.author.filter(|a| !a.trim().is_empty()) {
         parts.push(a.to_string());
@@ -251,7 +303,7 @@ fn highlight_attribution(src: &CiteSource, md: bool) -> String {
         }
     }
     let mut out = format!("— {}", parts.join(", "));
-    push_links(&mut out, &[("highlight", src.link)], md);
+    push_highlight_links(&mut out, src, md);
     out
 }
 
@@ -377,6 +429,7 @@ mod tests {
             public_url: Some("https://x.com/techczech/status/1"),
             handle: Some("techczech"),
             date_source: Some("published"),
+            kind: None,
         };
         assert_eq!(
             render_citation("Q", &t, CiteFormat::Markdown),
@@ -404,8 +457,41 @@ mod tests {
         h.date_source = Some("saved");
         assert_eq!(
             render_citation("Q", &h, CiteFormat::Plain),
-            "“Q”\n— George Lakoff, Metaphors We Live By, saved 2021 · highlight: file:///a/b%20c.md\n"
+            "“Q”\n— George Lakoff, Metaphors We Live By, saved 2021\n",
+            "the local link never leaves the Markdown form"
         );
+        h.public_url = Some("https://doi.org/10.1/x");
+        assert_eq!(
+            render_citation("Q", &h, CiteFormat::Markdown),
+            "> Q\n\n— George Lakoff, *Metaphors We Live By*, saved 2021 · [public](https://doi.org/10.1/x) · [highlight](file:///a/b%20c.md)\n"
+        );
+        let post = CiteSource {
+            style: CiteStyle::Highlight,
+            kind: Some("tweet"),
+            author: Some("atroyn"),
+            title: "metaphors bewitch people at every scale, choosing the right ones is im…",
+            date: Some("2024-02-26T18:00:00Z"),
+            link: Some("file:///w.md"),
+            public_url: Some("https://x.com/atroyn/status/1761135266952347917"),
+            date_source: Some("published"),
+            ..CiteSource::default()
+        };
+        assert_eq!(
+            render_citation("Q", &post, CiteFormat::Plain),
+            "“Q”\n— @atroyn, post, 26 February 2024 · public: https://x.com/atroyn/status/1761135266952347917\n"
+        );
+        let md = render_citation("Q", &post, CiteFormat::Markdown);
+        assert!(
+            !md.contains("bewitch"),
+            "the post text is never a title: {md}"
+        );
+        assert!(md.ends_with("· [public](https://x.com/atroyn/status/1761135266952347917) · [highlight](file:///w.md)\n"));
+        assert_eq!(
+            status_handle("https://twitter.com/Jessifer/status/13"),
+            Some("Jessifer")
+        );
+        assert_eq!(status_handle("https://twitter.com/sventechie"), None);
+        assert_eq!(status_handle("https://example.org/a/status/1"), None);
         assert_eq!(file_url(Path::new("/a b/č.md")), "file:///a%20b/%C4%8D.md");
     }
 

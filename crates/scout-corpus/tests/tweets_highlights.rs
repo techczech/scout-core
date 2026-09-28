@@ -116,10 +116,10 @@ author: George Lakoff
 type: book
 source_system: zotero
 source_id: \"ABC\"
-url: https://example.org/mwlb
+url: mailto:lakoff@example.org
 imported_at: 2026-06-17T08:18:52Z
 updated_at: 2026-06-17T08:18:52Z
-source_data: {\"date\":\"1980-00-00 1980\",\"zotero_key\":\"ABC\"}
+source_data: {\"date\":\"1980-00-00 1980\",\"fields\":{\"DOI\":\"10.1000/mwlb\"},\"zotero_key\":\"ABC\"}
 ---
 
 > Metaphor is pervasive in everyday life, not just in language but in thought and action.
@@ -384,7 +384,11 @@ fn a_work_is_a_document_and_a_highlight_a_passage() {
     assert_eq!(d.date_source.as_deref(), Some("published"));
     assert_eq!(d.source.as_deref(), Some("zotero"));
     assert_eq!(d.kind.as_deref(), Some("book"));
-    assert_eq!(d.public_url.as_deref(), Some("https://example.org/mwlb"));
+    // A Zotero item with no web `url:` carries its DOI.
+    assert_eq!(
+        d.public_url.as_deref(),
+        Some("https://doi.org/10.1000/mwlb")
+    );
     let hit = &d.hits[0];
     assert_eq!(
         hit.quote,
@@ -399,7 +403,7 @@ fn a_work_is_a_document_and_a_highlight_a_passage() {
     assert!(link.ends_with("/readings/works/lakoff-metaphors-we-live-by-abc.md"));
     assert_eq!(
         d.citation.markdown,
-        format!("> {}\n\n— George Lakoff, *Metaphors We Live By: a \"classic\" study*, 1980 · [highlight]({link})\n", hit.quote)
+        format!("> {}\n\n— George Lakoff, *Metaphors We Live By: a \"classic\" study*, 1980 · [public](https://doi.org/10.1000/mwlb) · [highlight]({link})\n", hit.quote)
     );
     // The quote is the text of source line 14 without its `> ` marker.
     let lines: Vec<String> = fs::read_to_string(&d.path)
@@ -413,6 +417,15 @@ fn a_work_is_a_document_and_a_highlight_a_passage() {
     let d = &search(&f.highlights, "problem").results[0];
     assert_eq!(d.date.as_deref(), Some("2025-07-01T04:17:24Z"));
     assert_eq!(d.date_source.as_deref(), Some("published"));
+    // An X post cites as a post with its x.com link; its text is no title.
+    assert_eq!(
+        d.citation.plain,
+        "“Frames and metaphor: a metaphor frames the problem.”\n— @0xabi, post, 1 July 2025 · public: https://x.com/0xabi/status/1939901126326764018\n"
+    );
+    assert!(d.citation.markdown.contains(
+        "— @0xabi, post, 1 July 2025 · [public](https://x.com/0xabi/status/1939901126326764018) · [highlight](file:///"
+    ));
+    assert!(!d.citation.markdown.contains("Frames and metaphor…"));
     // No publication date: the earliest highlight date, marked as saved.
     let d = &search(&f.highlights, "inference").results[0];
     assert_eq!(d.date.as_deref(), Some("2021-04-03"));
@@ -420,7 +433,8 @@ fn a_work_is_a_document_and_a_highlight_a_passage() {
     assert!(d
         .citation
         .plain
-        .contains("— astralcodexten.substack.com, Towards a Bayesian Theory of Willpower, saved 2021 · highlight: file:///"));
+        .ends_with("— astralcodexten.substack.com, Towards a Bayesian Theory of Willpower, saved 2021 · public: https://astralcodexten.substack.com/p/towards\n"),
+        "an article carries its public URL; the local link stays out of plain");
     // Notes, fulltext and non-work files are not indexed.
     assert!(search(&f.highlights, "note").results.is_empty());
     let k = f.highlights.kwic(&KwicRequest::new("metaphor")).unwrap();
@@ -577,10 +591,24 @@ fn cite_takes_a_passage_id_from_any_view() {
         .citation
         .markdown
         .starts_with("> The brain is an inference engine"));
-    assert!(c
-        .citation
-        .markdown
-        .contains("saved 2021 · [highlight](file:///"));
+    assert!(c.citation.markdown.contains(
+        "saved 2021 · [public](https://astralcodexten.substack.com/p/towards) · [highlight](file:///"
+    ));
+    assert_eq!(
+        c.public_url.as_deref(),
+        Some("https://astralcodexten.substack.com/p/towards")
+    );
+    // An X post through the facade: the x.com link, never the post text.
+    let k = f.highlights.kwic(&KwicRequest::new("frames")).unwrap();
+    let id: PassageId = k.lines[0].passage_id.parse().unwrap();
+    let c = f.highlights.cite(&id).unwrap();
+    assert!(
+        c.citation.plain.ends_with(
+            "\n— @0xabi, post, 1 July 2025 · public: https://x.com/0xabi/status/1939901126326764018\n"
+        ),
+        "{}",
+        c.citation.plain
+    );
     // Unknown ids are typed errors.
     let bad: PassageId = "tweets:stream/2025-07.md#1:999".parse().unwrap();
     let e = f.tweets.cite(&bad).unwrap_err();
