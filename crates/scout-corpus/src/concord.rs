@@ -274,8 +274,10 @@ impl Hits {
     /// Render `hits` as concordance lines from the ORIGINAL passage text,
     /// with `width` tokens either side (invariant 2).
     pub(crate) fn lines(&self, hits: &[Hit], width: usize) -> Result<Vec<KwicLine>> {
+        // Row ids restart in every corpus's index, so a passage is named by
+        // (corpus, row id), never by row id alone.
         struct Rendered {
-            rowid: i64,
+            key: (usize, i64),
             original: String,
             spans: Vec<(usize, usize)>,
         }
@@ -285,7 +287,8 @@ impl Hits {
         for &h in hits {
             let rec = &self.passages[h.p as usize];
             let c = &self.corpora[rec.corpus];
-            if cache.as_ref().map(|r| r.rowid) != Some(rec.rowid) {
+            let key = (rec.corpus, rec.rowid);
+            if cache.as_ref().map(|r| r.key) != Some(key) {
                 if let std::collections::btree_map::Entry::Vacant(e) = conns.entry(rec.corpus) {
                     let conn = crate::index::open_existing(&c.config, c.index_path())?;
                     let rules = normalize::compile_rules(&c.config.boilerplate)?;
@@ -312,7 +315,7 @@ impl Hits {
                     .map(|t| m.original_range(t.start, t.end))
                     .collect();
                 cache = Some(Rendered {
-                    rowid: rec.rowid,
+                    key,
                     original,
                     spans,
                 });

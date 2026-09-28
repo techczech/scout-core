@@ -159,6 +159,9 @@ enum Cmd {
         /// Per-row distribution: year, doc or corpus.
         #[arg(long)]
         dist: Option<String>,
+        /// Only grams containing this word or phrase.
+        #[arg(long)]
+        containing: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -466,6 +469,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             top,
             strict_stopwords,
             dist,
+            containing,
             json,
         } => {
             let q = NgramsQuery {
@@ -476,6 +480,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 top,
                 strict_stopwords,
                 dist,
+                containing,
             };
             out(engine.ngrams(&q), json, views::print_ngrams)
         }

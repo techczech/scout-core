@@ -219,6 +219,9 @@ pub struct NgramsQuery {
     pub top: usize,
     pub strict_stopwords: bool,
     pub dist: Option<String>,
+    /// Keep only grams containing this word or phrase (normalised and
+    /// tokenised as passages are), e.g. the phrases with a word.
+    pub containing: Option<String>,
 }
 
 impl Default for NgramsQuery {
@@ -231,6 +234,7 @@ impl Default for NgramsQuery {
             top: NgramRequest::default().top,
             strict_stopwords: false,
             dist: None,
+            containing: None,
         }
     }
 }
@@ -663,6 +667,16 @@ impl Engine {
         let mut notes = vec![];
         let corpora = self.scope(&q.scope.in_, &mut notes)?;
         let (n_min, n_max) = ngrams::parse_n_range(&q.n)?;
+        let containing = match &q.containing {
+            None => None,
+            Some(c) => {
+                let toks = concord::node_tokens(c);
+                if toks.is_empty() {
+                    bail!("empty --containing {c:?}: it has no word tokens");
+                }
+                Some(toks)
+            }
+        };
         let req = NgramRequest {
             n_min,
             n_max,
@@ -671,7 +685,7 @@ impl Engine {
             until: q.until,
             top: q.top,
             strict_stopwords: q.strict_stopwords,
-            containing: None,
+            containing,
             dist: q.dist.as_deref().map(str::parse).transpose()?,
         };
         let body = ngrams::ngrams(&corpora, &req)?;
