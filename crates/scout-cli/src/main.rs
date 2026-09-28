@@ -194,6 +194,22 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// More like these: passages ranked by tf-idf cosine to 1–10 seed passages.
+    Similar {
+        /// Seed passage ids, <corpus>:<path>:<line> (the passage_id of search, kwic, cite).
+        #[arg(required = true, num_args = 1..=10)]
+        seeds: Vec<String>,
+        /// Comma-separated corpus ids to search (default: every indexable corpus).
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        #[arg(long, default_value_t = SimilarQuery::default().top)]
+        top: usize,
+        /// Leave the seeds themselves out of the results.
+        #[arg(long)]
+        exclude_seeds: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Is this exact text in a source? (Only quote and apostrophe forms are unified.)
     VerifyQuote {
         text: Vec<String>,
@@ -482,6 +498,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 in_,
             };
             out(engine.verify_quote(&q), json, views::print_verify)
+        }
+        Cmd::Similar {
+            seeds,
+            in_,
+            top,
+            exclude_seeds,
+            json,
+        } => {
+            let q = SimilarQuery {
+                seeds,
+                in_,
+                top,
+                exclude_seeds,
+            };
+            out(engine.similar(&q), json, views::print_similar)
         }
         Cmd::Cite {
             passage_id,

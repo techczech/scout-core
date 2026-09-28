@@ -288,6 +288,33 @@ fn cli_json_equals_facade_response_for_every_command() {
             })
             .unwrap(),
         ),
+        case(
+            vec!["similar", "writing:2016-essay.md:6", "--json"],
+            e.similar(&SimilarQuery {
+                seeds: vec!["writing:2016-essay.md:6".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        ),
+        case(
+            vec![
+                "similar",
+                "writing:2016-essay.md:6",
+                "--in",
+                "writing",
+                "--exclude-seeds",
+                "--top",
+                "1",
+                "--json",
+            ],
+            e.similar(&SimilarQuery {
+                seeds: vec!["writing:2016-essay.md:6".into()],
+                in_: vec!["writing".into()],
+                top: 1,
+                exclude_seeds: true,
+            })
+            .unwrap(),
+        ),
         case(vec!["index", "status", "--json"], e.index_status().unwrap()),
         case(vec!["corpora", "list", "--json"], e.corpora_list().unwrap()),
         case(

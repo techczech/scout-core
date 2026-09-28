@@ -11,7 +11,7 @@ Values in the examples are illustrative. Every `--json` document is one pretty-p
 
 ## Library facade (apps)
 
-Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `IndexBuildQuery`, `CleanReportQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
+Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `SimilarQuery`, `IndexBuildQuery`, `CleanReportQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
 
 - `api::to_json(&reply.body)` is byte-for-byte the command's `--json` stdout (minus the final newline); `notes` are the stderr lines; `Outcome::has_results(&body)` is exit 0 vs 1. Errors are the same typed errors the CLI maps to exit 2/3 (`IndexMissing`, `RegistryMissing`, `NoIndexedCorpus`) or 1 (`PassageNotFound`). `crates/scout-cli/tests/facade_parity.rs` holds this for every command.
 - Requests are serde structs with every field defaulted to the CLI default, so partial JSON works: `{"term": "metaphor", "scope": {"in": ["writing"], "after": "2020"}}`. Rust `in_` fields serialise as `"in"`. `Scope` = `in`, `lang`, `genre`, `after`, `before`, `year`, `source`. Enumerated options stay strings as on the command line (`sort: "R1"`, `score: "mi"`, `by: "year"`, `n: "3-5"`, `dist: "doc"`).
@@ -164,6 +164,40 @@ Prints the citation of one passage (the `passage_id` of search, kwic or verify-q
   "citation": {"markdown": "> …\n\n— Dominik Lukeš (@techczech), tweet, 1 July 2025 · [public](https://x.com/…)\n", "plain": "“…”\n— …\n"}
 }
 ```
+
+## `scout similar <passage-id>… [--in …] [--top 20] [--exclude-seeds] [--json]` — schema_version 1
+
+"More like these": passages ranked by similarity to 1–10 seed passages (`passage_id`s). Facade: `Engine::similar(&SimilarQuery { seeds, in, top, exclude_seeds })`. Exit 1 when nothing shares two terms with the seeds or a seed id names no passage; 2 for no seed, more than 10, or a malformed id.
+
+- **Terms**: the passage's index tokens minus stopwords and tokens with no letter. Weight = (1 + ln tf) × idf, idf = ln((1 + N) / (1 + df)) + 1, with N and df counted in passages over the searched corpora.
+- **Score**: cosine of the passage vector with the centroid (mean) of the L2-normalised seed vectors, rounded to 6 decimals. A candidate must share at least 2 distinct terms with the seeds.
+- **Scope**: `--in` (default every indexed corpus) chooses the corpora searched; a seed may lie outside them. Without `--exclude-seeds` each seed is itself a result (score 1 for a single seed).
+- `shared_terms`: up to 3 shared terms by their contribution to the score (centroid weight × passage weight), then alphabetically. `closest_seed`: the seed with the highest cosine to the passage; the first given on a tie.
+- `total_passages`: every candidate before `--top`.
+- Order: `score` desc, then `passage_id`.
+
+```json
+{
+  "schema_version": 1,
+  "seeds": [{"passage_id": "writing:blogs/…/2016-06-23-repaved-paths-….md:24", "corpus": "writing", "rel_path": "…", "title": "Repaved paths and generative metaphors: …", "date": "2016-06-23"}],
+  "corpora": ["writing", "tweets", "highlights"],
+  "total_passages": 6983,
+  "results": [{
+    "passage_id": "highlights:readings/works/….md:199", "corpus": "highlights", "rel_path": "…", "path": "/abs/…",
+    "line_start": 199, "line_end": 199,
+    "quote": "original passage text",
+    "score": 0.225284,
+    "shared_terms": ["analogies", "metaphors", "new"],
+    "closest_seed": "writing:blogs/…:24",
+    "title": "The First 20 Hours", "author": "…", "date": "2019-05-14", "date_display": "14 May 2019",
+    "date_source": "saved", "genre": null, "kind": "book", "source": "readwise",
+    "link": "file:///…", "public_url": null,
+    "citation": {"markdown": "…", "plain": "…"}
+  }]
+}
+```
+
+`date_source`, `kind` and `source` appear only when set.
 
 ## `scout kwic <term>` — schema_version 1
 

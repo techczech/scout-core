@@ -10,6 +10,7 @@ use scout_corpus::concord::{Distribution, KwicResults, Profile};
 use scout_corpus::keyness::{KeyWord, KeynessResults};
 use scout_corpus::ngrams::NgramResults;
 use scout_corpus::rowdist::RowDist;
+use scout_corpus::similar::SimilarResults;
 use scout_corpus::verify::VerifyResult;
 use std::process::ExitCode;
 
@@ -492,6 +493,54 @@ pub fn print_hits(res: &scout_corpus::SearchResults) {
             d.rel_path, hit.line, d.passage_count
         );
         let q = flat(&hit.quote);
+        let q = if q.chars().count() > 220 {
+            format!("{}…", q.chars().take(220).collect::<String>())
+        } else {
+            q
+        };
+        println!("     > {q}");
+    }
+}
+
+pub fn print_similar(res: &SimilarResults) {
+    println!(
+        "{} of {} passages like {} seed{} in {}",
+        res.results.len(),
+        res.total_passages,
+        res.seeds.len(),
+        if res.seeds.len() == 1 { "" } else { "s" },
+        res.corpora.join(", ")
+    );
+    for (i, s) in res.seeds.iter().enumerate() {
+        println!(
+            "  seed {}: [{}] {}  {}",
+            i + 1,
+            s.corpus,
+            s.title,
+            s.passage_id
+        );
+    }
+    for (i, r) in res.results.iter().enumerate() {
+        let seed = res
+            .seeds
+            .iter()
+            .position(|s| s.passage_id == r.closest_seed)
+            .map(|n| n + 1)
+            .unwrap_or(0);
+        println!();
+        println!("{:>3}. [{}] {}  ({:.3})", i + 1, r.corpus, r.title, r.score);
+        let date = r
+            .date
+            .as_deref()
+            .map(|s| s.get(..10).unwrap_or(s).to_string())
+            .unwrap_or_else(|| "—".into());
+        println!(
+            "     {date:<10}  {}:{}  like seed {seed} · shared: {}",
+            r.rel_path,
+            r.line_start,
+            r.shared_terms.join(", ")
+        );
+        let q = flat(&r.quote);
         let q = if q.chars().count() > 220 {
             format!("{}…", q.chars().take(220).collect::<String>())
         } else {

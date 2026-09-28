@@ -9,7 +9,7 @@
 **Design:** `~/gitrepos/06_apps-utilities/01_desktop-apps/highlight-scout/docs/design/2026-09-27-archive-search-and-corpus-tools/round-1/hs-2-sets.html` (HS-2A, the suggestions state).
 **Blocked by:** 01 (the facade).
 **Seams under test:** the facade `similar()`; the CLI.
-**Status:** ready
+**Status:** landed
 
 **Context (cold read):**
 - The Scout corpus engine lives in ~/gitrepos/06_apps-utilities/03_misc-utilities/scout-core (spec: docs/specs/2026-09-27-corpus-engine-and-cli.md; JSON shapes: docs/cli-json.md). It indexes three corpora: `writing` (Dominik's writing, 1,742 pieces), `tweets` (14,892, one doc per tweet) and `highlights` (the Highlight Scout archive, 14,914 works).
