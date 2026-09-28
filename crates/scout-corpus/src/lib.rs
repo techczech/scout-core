@@ -32,6 +32,7 @@ pub mod profile;
 pub mod registry;
 pub mod rowdist;
 pub mod search;
+pub mod similar;
 pub mod stopwords;
 pub mod tokenize;
 pub mod tweets;

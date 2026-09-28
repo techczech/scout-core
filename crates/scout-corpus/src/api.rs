@@ -21,6 +21,7 @@ use crate::keyness::{self, KeynessRequest, KeynessResults};
 use crate::ngrams::{self, NgramRequest, NgramResults};
 use crate::registry::{self, Registry};
 use crate::search::{self, CitedPassage, PassageId, SearchRequest, SearchResults};
+use crate::similar::{self, SimilarRequest, SimilarResults};
 use crate::verify::{self, VerifyResult};
 use crate::{search_all, Corpus, Slice};
 use anyhow::{anyhow, bail, Result};
@@ -259,6 +260,31 @@ pub struct CiteQuery {
     pub passage_id: String,
 }
 
+/// `similar`: passages like 1–10 seeds (tf-idf cosine to their centroid).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimilarQuery {
+    /// Seed passage ids, `<corpus>:<path>:<line>`.
+    pub seeds: Vec<String>,
+    /// Corpora to search; empty = every indexed corpus. Seeds may lie outside.
+    #[serde(rename = "in")]
+    pub in_: Vec<String>,
+    pub top: usize,
+    /// Leave the seeds themselves out of the results.
+    pub exclude_seeds: bool,
+}
+
+impl Default for SimilarQuery {
+    fn default() -> Self {
+        SimilarQuery {
+            seeds: vec![],
+            in_: vec![],
+            top: 20,
+            exclude_seeds: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VerifyQuoteQuery {
@@ -392,6 +418,11 @@ impl Outcome for NgramResults {
 impl Outcome for Profile {
     fn has_results(&self) -> bool {
         self.frequency > 0
+    }
+}
+impl Outcome for SimilarResults {
+    fn has_results(&self) -> bool {
+        !self.results.is_empty()
     }
 }
 impl Outcome for VerifyResult {
@@ -662,6 +693,25 @@ impl Engine {
         let mut notes = vec![];
         let corpora = self.scope(&q.in_, &mut notes)?;
         let body = verify::verify_quote(&corpora, &q.text)?;
+        Ok(Reply { body, notes })
+    }
+
+    pub fn similar(&self, q: &SimilarQuery) -> Result<Reply<SimilarResults>> {
+        let mut notes = vec![];
+        let seeds = q
+            .seeds
+            .iter()
+            .map(|s| {
+                let id: PassageId = s.parse()?;
+                Ok((self.corpus(&id.corpus)?, id))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let corpora = self.scope(&q.in_, &mut notes)?;
+        let req = SimilarRequest {
+            top: q.top,
+            exclude_seeds: q.exclude_seeds,
+        };
+        let body = similar::similar(&seeds, &corpora, &req)?;
         Ok(Reply { body, notes })
     }
 
