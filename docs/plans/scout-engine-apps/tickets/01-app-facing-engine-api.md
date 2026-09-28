@@ -13,7 +13,7 @@ Then tag scout-core `v0.2.0`, so the apps can pin it as a git dependency.
 **Design:** `~/gitrepos/06_apps-utilities/01_desktop-apps/archive-scout/docs/design/round-3-corpus-lab/as-3b-corpus-home-cleaning-bench.html`; engine spec above.
 **Blocked by:** None: dispatchable now.
 **Seams under test:** the facade functions (request → response JSON), and the CLI binary's output equal to the facade's for the same request.
-**Status:** ready
+**Status:** landed
 
 **Context (cold read):**
 - The Scout corpus engine lives in ~/gitrepos/06_apps-utilities/03_misc-utilities/scout-core (spec: docs/specs/2026-09-27-corpus-engine-and-cli.md; JSON shapes: docs/cli-json.md). It indexes three corpora: `writing` (Dominik's writing, 1,742 pieces), `tweets` (14,892, one doc per tweet) and `highlights` (the Highlight Scout archive, 14,914 works).

@@ -134,6 +134,14 @@ fn regex_stage(
     b.finish()
 }
 
+/// The index of the first boilerplate rule matching `line` (without its
+/// newline), as the boilerplate stage tests it.
+pub fn boilerplate_rule(line: &str, rules: &[Regex]) -> Option<usize> {
+    let bare = line.strip_suffix('\n').unwrap_or(line);
+    let bare = bare.strip_suffix('\r').unwrap_or(bare);
+    rules.iter().position(|r| r.is_match(bare))
+}
+
 fn drop_boilerplate(src: &Mapped, rules: &[Regex]) -> Mapped {
     if rules.is_empty() {
         return src.clone();
@@ -142,9 +150,7 @@ fn drop_boilerplate(src: &Mapped, rules: &[Regex]) -> Mapped {
     let mut pos = 0;
     for line in src.text.split_inclusive('\n') {
         let end = pos + line.len();
-        let bare = line.strip_suffix('\n').unwrap_or(line);
-        let bare = bare.strip_suffix('\r').unwrap_or(bare);
-        if !rules.iter().any(|r| r.is_match(bare)) {
+        if boilerplate_rule(line, rules).is_none() {
             b.copy(pos, end);
         }
         pos = end;
@@ -347,28 +353,122 @@ pub fn compile_rules(rules: &[String]) -> anyhow::Result<Vec<Regex>> {
         .collect()
 }
 
-/// Normalise `original` with the corpus boilerplate `rules`.
-pub fn normalize(original: &str, rules: &[Regex]) -> Mapped {
-    let mut m = Mapped::identity(original);
-    m = drop_boilerplate(&m, rules);
-    for _ in 0..8 {
-        let (next, changed) = decode_entities_once(&m);
-        m = next;
-        if !changed {
-            break;
+/// One normalisation stage, in pipeline order. The cleaning report counts
+/// what each one changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Stage {
+    /// Lines matching a corpus boilerplate regex are dropped.
+    Boilerplate,
+    /// HTML entities decoded (repeatedly, for double encoding).
+    Entities,
+    /// HTML tags and comments stripped.
+    Tags,
+    /// Markdown link targets and bare URLs stripped.
+    LinksUrls,
+    /// Curly and straight apostrophes and quotes unified.
+    Quotes,
+    /// Unicode NFC.
+    Nfc,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 6] = [
+        Stage::Boilerplate,
+        Stage::Entities,
+        Stage::Tags,
+        Stage::LinksUrls,
+        Stage::Quotes,
+        Stage::Nfc,
+    ];
+
+    /// Stable id used in JSON (`entities`, `links_urls`, ...).
+    pub fn id(self) -> &'static str {
+        match self {
+            Stage::Boilerplate => "boilerplate",
+            Stage::Entities => "entities",
+            Stage::Tags => "tags",
+            Stage::LinksUrls => "links_urls",
+            Stage::Quotes => "apostrophes",
+            Stage::Nfc => "nfc",
         }
     }
-    m = regex_stage(&m, tag_re(), |b, caps| {
-        let g = caps.get(0).unwrap();
-        b.replace(" ", g.start(), g.end());
-    });
-    m = regex_stage(&m, md_link_re(), |b, caps| {
-        let t = caps.get(1).unwrap();
-        b.copy(t.start(), t.end());
-    });
-    m = regex_stage(&m, url_re(), |_, _| {});
-    m = unify_quotes(&m);
-    nfc(&m)
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Stage::Boilerplate => "Boilerplate lines",
+            Stage::Entities => "HTML entities",
+            Stage::Tags => "HTML tags and comments",
+            Stage::LinksUrls => "Link targets and URLs",
+            Stage::Quotes => "Apostrophes and quotes",
+            Stage::Nfc => "Unicode composition (NFC)",
+        }
+    }
+}
+
+/// The pipeline. `skip` leaves one stage out; `changed` hears every stage
+/// whose output text differs from its input.
+fn pipeline(
+    original: &str,
+    rules: &[Regex],
+    skip: Option<Stage>,
+    mut changed: impl FnMut(Stage),
+) -> Mapped {
+    let mut m = Mapped::identity(original);
+    for stage in Stage::ALL {
+        if skip == Some(stage) {
+            continue;
+        }
+        let next = match stage {
+            Stage::Boilerplate => drop_boilerplate(&m, rules),
+            Stage::Entities => {
+                let mut cur = m.clone();
+                for _ in 0..8 {
+                    let (next, did) = decode_entities_once(&cur);
+                    cur = next;
+                    if !did {
+                        break;
+                    }
+                }
+                cur
+            }
+            Stage::Tags => regex_stage(&m, tag_re(), |b, caps| {
+                let g = caps.get(0).unwrap();
+                b.replace(" ", g.start(), g.end());
+            }),
+            Stage::LinksUrls => {
+                let links = regex_stage(&m, md_link_re(), |b, caps| {
+                    let t = caps.get(1).unwrap();
+                    b.copy(t.start(), t.end());
+                });
+                regex_stage(&links, url_re(), |_, _| {})
+            }
+            Stage::Quotes => unify_quotes(&m),
+            Stage::Nfc => nfc(&m),
+        };
+        if next.text != m.text {
+            changed(stage);
+        }
+        m = next;
+    }
+    m
+}
+
+/// Normalise `original` with the corpus boilerplate `rules`.
+pub fn normalize(original: &str, rules: &[Regex]) -> Mapped {
+    pipeline(original, rules, None, |_| {})
+}
+
+/// Normalise and name the stages that changed the text, in pipeline order.
+pub fn normalize_traced(original: &str, rules: &[Regex]) -> (Mapped, Vec<Stage>) {
+    let mut stages = Vec::new();
+    let m = pipeline(original, rules, None, |s| stages.push(s));
+    (m, stages)
+}
+
+/// Normalise with one stage left out: what the index would count without
+/// that rule (the cleaning report's "before").
+pub fn normalize_without(original: &str, rules: &[Regex], skip: Stage) -> Mapped {
+    pipeline(original, rules, Some(skip), |_| {})
 }
 
 #[cfg(test)]

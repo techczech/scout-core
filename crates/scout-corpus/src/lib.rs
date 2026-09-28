@@ -10,9 +10,14 @@
 //! [`verify::verify_quote`]; the two-slice views [`colloc::compare`] and
 //! [`keyness::keyness`] take [`Slice`]s. The CLI and the apps call these same
 //! functions.
+//!
+//! Apps and the CLI enter through [`api::Engine`]: one request → response
+//! call per `scout` command, whose JSON is the command's `--json` output.
 
 pub mod adapter;
+pub mod api;
 pub mod cite;
+pub mod clean;
 pub mod colloc;
 pub mod concord;
 pub mod filter;
@@ -32,6 +37,8 @@ pub mod tokenize;
 pub mod tweets;
 pub mod verify;
 
+pub use api::{Engine, Outcome, Reply};
+pub use clean::{CleanOptions, CleanReport};
 pub use colloc::{CollocRequest, CollocResults, CompareResults, Score};
 pub use concord::{
     DistBy, Distribution, KwicRequest, KwicResults, KwicSort, Near, Profile, ProfileOptions,

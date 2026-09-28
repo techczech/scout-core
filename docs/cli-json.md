@@ -9,6 +9,15 @@ spec: docs/specs/2026-09-27-corpus-engine-and-cli.md
 
 Values in the examples are illustrative. Every `--json` document is one pretty-printed JSON object with a top-level `schema_version` (integer). A field is added without a bump; a rename, removal or meaning change bumps that command's `schema_version`.
 
+## Library facade (apps)
+
+Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `IndexBuildQuery`, `CleanReportQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
+
+- `api::to_json(&reply.body)` is byte-for-byte the command's `--json` stdout (minus the final newline); `notes` are the stderr lines; `Outcome::has_results(&body)` is exit 0 vs 1. Errors are the same typed errors the CLI maps to exit 2/3 (`IndexMissing`, `RegistryMissing`, `NoIndexedCorpus`) or 1 (`PassageNotFound`). `crates/scout-cli/tests/facade_parity.rs` holds this for every command.
+- Requests are serde structs with every field defaulted to the CLI default, so partial JSON works: `{"term": "metaphor", "scope": {"in": ["writing"], "after": "2020"}}`. Rust `in_` fields serialise as `"in"`. `Scope` = `in`, `lang`, `genre`, `after`, `before`, `year`, `source`. Enumerated options stay strings as on the command line (`sort: "R1"`, `score: "mi"`, `by: "year"`, `n: "3-5"`, `dist: "doc"`).
+- `collocates` returns `Collocates::Single` or, with `compare`, `Collocates::Compare` (untagged: the two JSON shapes below).
+- `Engine` holds only the registry and index dir; each call opens and closes its index files. It is `Send + Sync + Clone`: call it from any thread, with no global mutable state.
+
 ## Conventions
 
 - **Original text.** Every text field that quotes a source (`quote`, `left`, `node`, `right`, `original`) is ORIGINAL source text: Markdown, entities and curly quotes as written. Normalised text never appears.
@@ -407,3 +416,63 @@ The same node, window, score and `--min` over two slices side by side. A = the c
 - The quote (trimmed of surrounding whitespace) must occur exactly in the original text of one passage. The only leniency is quote and apostrophe unification on both sides (‘ ’ ‛ ′ ʼ = `'`; “ ” „ ‟ ″ = `"`). No case folding, whitespace collapsing or entity decoding; a quote spanning two paragraphs is not found.
 - `original` is the matched source text, which may differ from `quote` only in quote and apostrophe forms.
 - Order: corpus, path, line. Exit 1 when `found` is false.
+
+
+## `scout clean-report <corpus> [--samples 5] [--rule <regex>]… [--json]` — schema_version 1
+
+What each normalisation stage changed, read from the source files (read-only; no index needed, so it also sees passages the index skips because boilerplate emptied them). `--rule` previews a candidate boilerplate regex as if it were in the registry; nothing is saved.
+
+```json
+{
+  "schema_version": 1,
+  "corpus": "writing",
+  "documents": 1742, "passages": 60383, "lines": 73729,
+  "samples_per_rule": 5,
+  "rules": [{
+    "rule": "entities", "label": "HTML entities",
+    "passages": 57, "token_passages": 4, "token_lines": 4,
+    "samples": [{
+      "passage_id": "writing:blogs/…:117", "rel_path": "blogs/…", "path": "/abs/…", "line": 117,
+      "original": "Rock &amp;amp;amp; roll",
+      "before": ["rock", "amp", "amp", "amp", "roll"], "after": ["rock", "roll"],
+      "removed": ["amp", "amp", "amp"], "added": [],
+      "occurrences": 2
+    }]
+  }, {
+    "rule": "boilerplate", "label": "Boilerplate lines", "passages": 80, "token_passages": 80, "token_lines": 80,
+    "patterns": [{"n": 1, "regex": "^\\*Dominik Lukeš\\*$", "origin": "registry", "lines": 80, "passages": 80}],
+    "samples": [{"…": "…", "pattern": 1}]
+  }]
+}
+```
+
+- `rules` always lists the six stages in pipeline order: `boilerplate`, `entities`, `tags` (HTML tags and comments), `links_urls` (Markdown link targets and bare URLs), `apostrophes` (curly/straight quote unification), `nfc`.
+- `passages`: passages whose text the stage changed. `token_passages`: of those, passages whose counted tokens differ when that one stage is left out. `token_lines`: source lines whose tokens differ.
+- A sample is one source line: `original` as written, `after` = the tokens the index counts, `before` = the tokens with that one stage left out (every other stage still applied). So an apostrophe sample reads `before ["don’t"]`, `after ["don't"]`. `removed` / `added` are the multiset differences.
+- Samples are grouped by their change (`removed` + `added`); `occurrences` = lines with that change. Groups are ordered by occurrences desc, then change; each group's sample is its first line in corpus order. At most `--samples` per stage.
+- A stage sees only what earlier stages left: a line dropped as boilerplate is not counted again for links.
+- `patterns` (boilerplate only): registry rules then `--rule` previews, `n` 1-based; a dropped line is credited to the first rule that matches it. `pattern` on a boilerplate sample names that rule.
+
+## `scout index build [ids…] [--force] --json` — schema_version 1
+
+```json
+{"schema_version": 1, "reports": [{"corpus": "writing", "index_path": "/abs/…/writing.sqlite", "full": false, "docs": 1742, "passages": 60383, "tokens": 2429458, "files_seen": 1800, "indexed": 3, "unchanged": 1797, "removed": 0, "not_documents": 58, "elapsed_ms": 812}]}
+```
+
+`full` is true on a first build, `--force`, or an engine or registry-entry change. `elapsed_ms` is the one non-deterministic field.
+
+## `scout index status --json` — schema_version 1
+
+```json
+{"schema_version": 1, "corpora": [{"corpus": "writing", "kind": "markdown-folder", "index_path": "/abs/…", "exists": true, "docs": 1742, "passages": 60383, "tokens": 2429458, "built_at": "2026-09-27T14:52:00Z", "config_current": true, "stale": {"added": 0, "changed": 1, "removed": 0}}]}
+```
+
+Every registered corpus, in registry order. Without an index: `exists` false, zero counts, `built_at` and `stale` null.
+
+## `scout corpora list --json` — schema_version 1
+
+```json
+{"schema_version": 1, "corpora": [{"id": "writing", "name": "Writing", "kind": "markdown-folder", "path": "~/gitrepos/…/writing", "root": "/Users/…/writing", "index_path": "/abs/…/writing.sqlite", "index_built": true}]}
+```
+
+`path` is as written in the registry; `root` is it expanded.
