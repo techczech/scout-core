@@ -15,3 +15,5 @@
 - [ ] `scout search "paths metaphor" --in writing` returns the 2016 essay first, quoting a passage with "paths".
 - [ ] A query whose terms all occur in one passage ranks that passage above title-only matches (test).
 - [ ] The T1 done-when query ("generative metaphor") still returns the essay first; the timings stay within the spec.
+
+**Also in this ticket (found by the cleaning bench, 2026-09-28):** inline Markdown or HTML emphasis inside a word splits it into tokens. `He <u>sw**a**m</u>` counts as "he sw a m" (585 lines in the writing corpus). Stripping emphasis markers and inline tags must not create word boundaries where there was none; `swam` is one token. Test it, and report the clean-report before/after.
