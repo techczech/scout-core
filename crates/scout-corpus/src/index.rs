@@ -61,18 +61,43 @@ impl std::error::Error for NoIndexedCorpus {}
 /// The directory holding all indexes: `$SCOUT_DATA_DIR/indexes`, else
 /// `<platform data dir>/scout/indexes`.
 pub fn index_dir() -> PathBuf {
-    let base = std::env::var_os("SCOUT_DATA_DIR")
+    data_base().join("indexes")
+}
+
+/// Where downloaded embedding models live: `$SCOUT_DATA_DIR/models`, else
+/// `<platform data dir>/scout/models`.
+pub fn models_dir() -> PathBuf {
+    data_base().join("models")
+}
+
+fn data_base() -> PathBuf {
+    std::env::var_os("SCOUT_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::data_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("scout")
-        });
-    base.join("indexes")
+        })
 }
 
 pub fn index_path_in(dir: &Path, corpus_id: &str) -> PathBuf {
     dir.join(format!("{corpus_id}.sqlite"))
+}
+
+/// The passage vector store beside a corpus's FTS index (a separate file,
+/// so the FTS index and its version are untouched).
+pub fn vectors_path_in(dir: &Path, corpus_id: &str) -> PathBuf {
+    dir.join(format!("{corpus_id}.vectors.sqlite"))
+}
+
+/// Meta key naming the index's content generation: it changes whenever a
+/// build may have changed a passage (ids or text).
+const GENERATION_KEY: &str = "content_generation";
+
+/// The index's content generation (None for an index built before it
+/// existed; the next build sets one).
+pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
+    meta_get(conn, GENERATION_KEY)
 }
 
 fn remove_index_files(path: &Path) -> Result<()> {
@@ -211,6 +236,10 @@ pub struct BuildReport {
     /// those read this run).
     pub not_documents: usize,
     pub elapsed_ms: u128,
+    /// The passage vector build, when the build had an embedder and the
+    /// corpus has (or was asked for) vectors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vectors: Option<crate::semantic::VectorReport>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -477,6 +506,16 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
     for rel in existing.keys() {
         delete_doc(&tx, rel)?;
     }
+    // A new content generation whenever passages may have changed, so a
+    // vector store built from an older generation knows it is stale. A
+    // meta row, not a schema change: ENGINE_VERSION stays.
+    if full || indexed > 0 || removed > 0 || meta_get(&tx, GENERATION_KEY)?.is_none() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        meta_set(&tx, GENERATION_KEY, &format!("{now:x}-{}", files.len()))?;
+    }
     meta_set(&tx, "fingerprint", &fp)?;
     meta_set(&tx, "engine", ENGINE_VERSION)?;
     meta_set(&tx, "corpus", &cfg.id)?;
@@ -510,6 +549,7 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
         removed,
         not_documents: not_docs,
         elapsed_ms: started.elapsed().as_millis(),
+        vectors: None,
     })
 }
 

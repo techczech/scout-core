@@ -310,6 +310,7 @@ fn search_similar_cite_and_verify_quote_their_own_passage() {
                 in_: scope().in_,
                 limit: 50,
                 passage,
+                ..Default::default()
             })
             .unwrap()
             .body;

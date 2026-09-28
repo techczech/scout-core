@@ -190,7 +190,7 @@ impl Plan {
     }
 
     /// Anything that selects passages without a positive term.
-    fn has_selector(&self) -> bool {
+    pub(crate) fn has_selector(&self) -> bool {
         !self.filter.is_empty()
             || self.tag.is_some()
             || self.color.is_some()
@@ -276,7 +276,7 @@ impl Plan {
         out
     }
 
-    fn passage_ok(
+    pub(crate) fn passage_ok(
         &self,
         doc: &DocInfo,
         tags: &[String],
@@ -338,6 +338,9 @@ pub struct PassageHit {
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_at: Option<String>,
+    /// Cosine similarity to the query (semantic and hybrid search only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -389,6 +392,10 @@ pub struct SearchResults {
     pub total_documents: usize,
     pub total_passages: usize,
     pub results: Vec<DocResult>,
+    /// `semantic` or `hybrid` when vectors ranked the results; absent for
+    /// full-text search (whose JSON is unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 fn round6(x: f64) -> f64 {
@@ -497,7 +504,7 @@ struct Row {
 }
 
 /// The rowids of an FTS table matching one term.
-fn fts_rowids(conn: &Connection, table: &str, term: &Term) -> Result<BTreeSet<i64>> {
+pub(crate) fn fts_rowids(conn: &Connection, table: &str, term: &Term) -> Result<BTreeSet<i64>> {
     let mut st =
         conn.prepare_cached(&format!("SELECT rowid FROM {table} WHERE {table} MATCH ?1"))?;
     let ids = st
@@ -601,6 +608,7 @@ pub fn search_corpus(
         total_documents: 0,
         total_passages: 0,
         results: vec![],
+        mode: None,
     };
     if !plan.has_positive() && !plan.has_selector() {
         return Ok(res);
@@ -755,7 +763,6 @@ pub fn search_corpus(
         .prepare("SELECT line_end, original, tags, color, saved_at FROM passages WHERE id = ?1")?;
     for (rel, ps) in groups.into_iter().take(req.limit) {
         let d = &docs[&rel];
-        let abs = cfg.source_path(&rel);
         let mut hits = Vec::new();
         for p in ps.iter().take(req.hits_per_doc.max(1)) {
             let (line_end, original, tags, color, saved_at): (
@@ -771,47 +778,110 @@ pub fn search_corpus(
                 (true, Some(re)) => locate_regex(&original, re, req.whole_passage),
                 _ => locate(&original, &rules, &terms, req.whole_passage),
             };
-            let line = p.line_start as usize + original[..loc.first_match].matches('\n').count();
-            hits.push(PassageHit {
-                passage_id: format!("{}:{}:{}", cfg.id, rel, p.line_start),
-                line_start: p.line_start as usize,
-                line_end: line_end as usize,
-                line,
-                quote: original[loc.start..loc.end].to_string(),
-                score: p.score,
-                field_terms: p.field_terms.iter().map(|&i| terms[i].clone()).collect(),
-                link: cfg.link_for(&rel, line),
-                tags: serde_json::from_str(&tags).unwrap_or_default(),
-                color,
-                saved_at,
-            });
+            hits.push(passage_hit(
+                cfg,
+                &rel,
+                PassageRow {
+                    line_start: p.line_start,
+                    line_end,
+                    original: &original,
+                    tags: &tags,
+                    color,
+                    saved_at,
+                },
+                &loc,
+                p.score,
+                p.field_terms.iter().map(|&i| terms[i].clone()).collect(),
+            ));
         }
-        let best = &hits[0];
-        let citation = citation(cfg, d, &best.quote, best.link.as_deref());
         let score = doc_score(&rel, &ps);
-        res.results.push(DocResult {
-            corpus: cfg.id.clone(),
-            rel_path: rel.clone(),
-            path: abs.display().to_string(),
-            date_display: d.date.as_deref().and_then(cite::format_date),
-            title: d.title.clone(),
-            author: d.author.clone(),
-            public_url: public_url(cfg, d),
-            date: d.date.clone(),
-            date_source: d.date_source.clone(),
-            genre: d.genre.clone(),
-            lang: d.lang.clone(),
-            kind: d.kind.clone(),
-            source: d.source.clone(),
-            score,
-            rank: if top > 0.0 { round6(score / top) } else { 0.0 },
-            title_match: title_scores.contains_key(&rel),
-            passage_count: ps.len(),
+        res.results.push(doc_result(
+            cfg,
+            &rel,
+            d,
             hits,
-            citation,
-        });
+            score,
+            top,
+            title_scores.contains_key(&rel),
+            ps.len(),
+        ));
     }
     Ok(res)
+}
+
+/// A passage row as the index stores it, for building a hit.
+pub(crate) struct PassageRow<'a> {
+    pub line_start: i64,
+    pub line_end: i64,
+    pub original: &'a str,
+    /// The JSON array of tags.
+    pub tags: &'a str,
+    pub color: Option<String>,
+    pub saved_at: Option<String>,
+}
+
+/// One hit: the located quote of a passage (original text) and its link.
+pub(crate) fn passage_hit(
+    cfg: &CorpusConfig,
+    rel: &str,
+    p: PassageRow<'_>,
+    loc: &Located,
+    score: f64,
+    field_terms: Vec<Term>,
+) -> PassageHit {
+    let line = p.line_start as usize + p.original[..loc.first_match].matches('\n').count();
+    PassageHit {
+        passage_id: format!("{}:{}:{}", cfg.id, rel, p.line_start),
+        line_start: p.line_start as usize,
+        line_end: p.line_end as usize,
+        line,
+        quote: p.original[loc.start..loc.end].to_string(),
+        score,
+        field_terms,
+        link: cfg.link_for(rel, line),
+        tags: serde_json::from_str(p.tags).unwrap_or_default(),
+        color: p.color,
+        saved_at: p.saved_at,
+        semantic_score: None,
+    }
+}
+
+/// A document result over its hits (best first); `top` is the corpus's best
+/// document score, for `rank`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn doc_result(
+    cfg: &CorpusConfig,
+    rel: &str,
+    d: &DocInfo,
+    hits: Vec<PassageHit>,
+    score: f64,
+    top: f64,
+    title_match: bool,
+    passage_count: usize,
+) -> DocResult {
+    let best = &hits[0];
+    let citation = citation(cfg, d, &best.quote, best.link.as_deref());
+    DocResult {
+        corpus: cfg.id.clone(),
+        rel_path: rel.to_string(),
+        path: cfg.source_path(rel).display().to_string(),
+        date_display: d.date.as_deref().and_then(cite::format_date),
+        title: d.title.clone(),
+        author: d.author.clone(),
+        public_url: public_url(cfg, d),
+        date: d.date.clone(),
+        date_source: d.date_source.clone(),
+        genre: d.genre.clone(),
+        lang: d.lang.clone(),
+        kind: d.kind.clone(),
+        source: d.source.clone(),
+        score,
+        rank: if top > 0.0 { round6(score / top) } else { 0.0 },
+        title_match,
+        passage_count,
+        hits,
+        citation,
+    }
 }
 
 /// Merge per-corpus results: rank desc (score / the corpus's best score),
@@ -827,6 +897,7 @@ pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> Result<Sea
         total_documents: 0,
         total_passages: 0,
         results: vec![],
+        mode: None,
     };
     for p in parts {
         out.corpora.extend(p.corpora);

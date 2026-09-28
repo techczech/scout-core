@@ -32,6 +32,7 @@ pub mod profile;
 pub mod registry;
 pub mod rowdist;
 pub mod search;
+pub mod semantic;
 pub mod similar;
 pub mod stopwords;
 pub mod tokenize;
@@ -51,6 +52,7 @@ pub use ngrams::{NgramRequest, NgramResults};
 pub use registry::{CiteStyle, CorpusConfig, CorpusKind, DocumentUnit, Registry, RegistryMissing};
 pub use rowdist::RowDistBy;
 pub use search::{CitedPassage, PassageId, PassageNotFound, SearchRequest, SearchResults};
+pub use semantic::{Embedder, HashEmbedder, SearchMode};
 pub use verify::VerifyResult;
 
 use anyhow::Result;
@@ -86,6 +88,12 @@ impl Corpus {
 
     pub fn index_path(&self) -> &Path {
         &self.index_path
+    }
+
+    /// The passage vector store beside the index.
+    pub fn vectors_path(&self) -> PathBuf {
+        let dir = self.index_path.parent().unwrap_or_else(|| Path::new("."));
+        index::vectors_path_in(dir, &self.config.id)
     }
 
     /// Incremental build (mtime + hash); `force` deletes the index first.

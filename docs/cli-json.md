@@ -147,6 +147,22 @@ Order: `results` by `rank` desc, then `score` desc, corpus, path; `hits` by scor
   - highlights: `— Author, *Title*, 1980 · [highlight](file:///…)`: the publication year, or `saved 2021` when `date_source` is `saved`.
   - `plain` writes `· archive: <link>`, `· public: <url>`, `· highlight: <link>`. An unknown date is left out.
 
+### Semantic and hybrid search (`--semantic`, `--hybrid`, `--fts`)
+
+Same shape, with two additive keys that appear only when vectors ranked the results, so full-text JSON is unchanged:
+
+- top-level `mode`: `"semantic"` or `"hybrid"`;
+- a hit's `semantic_score`: the passage's cosine to the query (0–1).
+
+Modes (`SearchQuery.mode` in the facade: `auto`, `fts`, `semantic`, `hybrid`):
+
+- `auto` (the default): hybrid for each corpus with current vectors (`scout index build --semantic`), full text for the rest. A facade `Engine` without an embedder is always full text, so apps are unaffected until they attach one (`Engine::with_embedder`).
+- `semantic`: passages by cosine to the query's free words (fields such as `in:`, `lang:`, `y:`, `tag:`, `-x`, `/re/` still filter). A document scores its best passage; `score` is that cosine; hits quote the whole passage's original text.
+- `hybrid`: the top 100 documents of the full-text and of the semantic ranking fused by reciprocal rank, `score` = Σ 1 / (60 + rank); a document's hits are its full-text hits, then its semantic ones. `total_documents` = full-text matches plus semantic-only documents in the pool.
+- A corpus whose vectors are stale (the index changed since, or another model) is searched as full text, with the note ``scout: note: full text only for <id> (<why>); run `scout index build --semantic` ``.
+
+Vectors live in `<corpus>.vectors.sqlite` beside the index. `index build --semantic --json` adds a `vectors` object to each report: `vectors_path`, `model`, `dim`, `full`, `passages`, `embedded`, `reused`, `removed`, `bytes`, `elapsed_ms`. Once a corpus has vectors, every `index build` updates them (only new or changed passage text is embedded). The model (default `minilm-l12`, `Xenova/paraphrase-multilingual-MiniLM-L12-v2`, about 490 MB; chosen by the ticket 07 recall test) is downloaded once on first use to `$HF_HOME` when set, else `<data dir>/scout/models`; `SCOUT_EMBED_MODEL` picks another (`e5-small`, `e5-base`). Passages under 5 tokens (headings, link lines) get no vector.
+
 ## `scout cite <passage-id> [--format markdown|plain] [--json]` — schema_version 1
 
 Prints the citation of one passage (the `passage_id` of search, kwic or verify-quote), quoting the whole passage. Default `--format markdown`. Exit 1 when the index has no such passage; 2 for a malformed id.
