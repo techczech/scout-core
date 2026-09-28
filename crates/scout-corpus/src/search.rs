@@ -544,22 +544,40 @@ fn locate_regex(original: &str, re: &regex::Regex, whole_passage: bool) -> Locat
 }
 
 /// The citation metadata of a document.
-fn cite_source<'a>(cfg: &CorpusConfig, d: &'a DocInfo, link: Option<&'a str>) -> CiteSource<'a> {
+fn cite_source<'a>(
+    cfg: &CorpusConfig,
+    d: &'a DocInfo,
+    link: Option<&'a str>,
+    public_url: Option<&'a str>,
+) -> CiteSource<'a> {
     CiteSource {
         style: cfg.cite_style(),
         author: d.author.as_deref(),
         title: &d.title,
         date: d.date.as_deref(),
         link,
-        public_url: d.public_url.as_deref(),
+        public_url,
         handle: d.handle.as_deref(),
         date_source: d.date_source.as_deref(),
+        kind: d.kind.as_deref(),
     }
+}
+
+/// A document's public URL: the indexed one, or, for a highlights work the
+/// index holds none for, the link its frontmatter gives now (`source_url`, a
+/// Zotero DOI). Read at cite time so an existing index needs no rebuild.
+pub fn public_url(cfg: &CorpusConfig, d: &DocInfo) -> Option<String> {
+    if d.public_url.is_some() || cfg.kind != crate::registry::CorpusKind::HighlightScoutArchive {
+        return d.public_url.clone();
+    }
+    let text = std::fs::read_to_string(cfg.source_path(&d.rel_path)).ok()?;
+    crate::highlights::work_public_url(&text)
 }
 
 /// Both citation forms of an original-text quote from a document.
 pub fn citation(cfg: &CorpusConfig, d: &DocInfo, quote: &str, link: Option<&str>) -> Citation {
-    let src = cite_source(cfg, d, link);
+    let url = public_url(cfg, d);
+    let src = cite_source(cfg, d, link, url.as_deref());
     Citation {
         markdown: cite::render_citation(quote, &src, CiteFormat::Markdown),
         plain: cite::render_citation(quote, &src, CiteFormat::Plain),
@@ -778,7 +796,7 @@ pub fn search_corpus(
             date_display: d.date.as_deref().and_then(cite::format_date),
             title: d.title.clone(),
             author: d.author.clone(),
-            public_url: d.public_url.clone(),
+            public_url: public_url(cfg, d),
             date: d.date.clone(),
             date_source: d.date_source.clone(),
             genre: d.genre.clone(),
@@ -946,7 +964,7 @@ pub fn cite_passage(conn: &Connection, cfg: &CorpusConfig, id: &PassageId) -> Re
         date_display: d.date.as_deref().and_then(cite::format_date),
         date_source: d.date_source.clone(),
         link,
-        public_url: d.public_url.clone(),
+        public_url: public_url(cfg, d),
         citation,
     })
 }

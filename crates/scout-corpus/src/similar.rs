@@ -455,7 +455,7 @@ pub fn similar(
             kind: d.kind.clone(),
             source: d.source.clone(),
             link,
-            public_url: d.public_url.clone(),
+            public_url: crate::search::public_url(&c.config, d),
         });
     }
     Ok(SimilarResults {

@@ -189,6 +189,71 @@ fn record(lines: &[(usize, &str)]) -> Option<PassageRecord> {
     Some(p)
 }
 
+fn is_http(u: &str) -> bool {
+    u.starts_with("http://") || u.starts_with("https://")
+}
+
+/// A DOI as a resolvable link: `10.1007/x`, `doi:10.1007/x` and
+/// `https://doi.org/10.1007/x` all give `https://doi.org/10.1007/x`.
+fn doi_url(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let lower = t.to_ascii_lowercase();
+    let bare = [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+        "doi:",
+    ]
+    .iter()
+    .find(|p| lower.starts_with(*p))
+    .map(|p| t[p.len()..].trim())
+    .unwrap_or(t);
+    bare.starts_with("10.")
+        .then(|| format!("https://doi.org/{bare}"))
+}
+
+/// The work's public link: `url:`, then `source_url:`, then a DOI (Zotero
+/// keeps it in `source_data.fields.DOI`). Non-web values (`mailto:`, a bare
+/// word) are not links. The X post URL is the `url:` of an X work.
+fn public_link(fm: &BTreeMap<String, String>, source_data: &serde_json::Value) -> Option<String> {
+    let get = |k: &str| fm.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+    let web = ["url", "source_url"]
+        .iter()
+        .filter_map(|k| get(k))
+        .find(|u| is_http(u))
+        .map(String::from);
+    web.or_else(|| {
+        let s = |v: Option<&serde_json::Value>| v.and_then(|v| v.as_str()).map(String::from);
+        let fields = source_data.get("fields");
+        s(fields.and_then(|f| f.get("DOI")))
+            .or_else(|| s(source_data.get("DOI")))
+            .or_else(|| s(source_data.get("doi")))
+            .or_else(|| get("doi").map(String::from))
+            .and_then(|d| doi_url(&d))
+    })
+}
+
+/// The public link of a work file's frontmatter (see [`public_link`]), read
+/// at cite time for an index built before the link rules covered it.
+pub fn work_public_url(text: &str) -> Option<String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
+        return None;
+    }
+    let close = 1 + lines.iter().skip(1).position(|l| l.trim_end() == "---")?;
+    let fm = frontmatter(&lines[1..close]);
+    let source_data: serde_json::Value = fm
+        .get("source_data")
+        .and_then(|s| serde_json::from_str(s.trim()).ok())
+        .unwrap_or(serde_json::Value::Null);
+    public_link(&fm, &source_data)
+}
+
 /// Parse one work file. `None` when it has no frontmatter.
 pub fn work(rel_path: &str, text: &str) -> Option<DocRecord> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -223,7 +288,7 @@ pub fn work(rel_path: &str, text: &str) -> Option<DocRecord> {
     }
     passages.extend(record(&cur));
 
-    let url = get("url").filter(|u| u.starts_with("http://") || u.starts_with("https://"));
+    let url = public_link(&fm, &source_data);
     let source = get("source_system");
     let published = source_data
         .get("date")
@@ -293,6 +358,36 @@ mod tests {
         );
         assert_eq!(snowflake_time("20"), None, "pre-snowflake ids have no time");
         assert_eq!(snowflake_time("rw_book_1"), None);
+    }
+
+    #[test]
+    fn public_link_prefers_web_urls_then_doi() {
+        let doc = |fm: &str| format!("---\n{fm}\n---\n\n> q\n");
+        assert_eq!(
+            work_public_url(&doc("url: https://x.com/a/status/1")).as_deref(),
+            Some("https://x.com/a/status/1")
+        );
+        assert_eq!(
+            work_public_url(&doc("url: mailto:a@b.c\nsource_url: https://e.org/p")).as_deref(),
+            Some("https://e.org/p")
+        );
+        assert_eq!(
+            work_public_url(&doc(
+                "url: mailto:a@b.c\nsource_data: {\"fields\":{\"DOI\":\"10.1007/BF02478291\"}}"
+            ))
+            .as_deref(),
+            Some("https://doi.org/10.1007/BF02478291")
+        );
+        assert_eq!(
+            doi_url("doi:10.1/x").as_deref(),
+            Some("https://doi.org/10.1/x")
+        );
+        assert_eq!(
+            doi_url("https://doi.org/10.1/x").as_deref(),
+            Some("https://doi.org/10.1/x")
+        );
+        assert_eq!(doi_url("not a doi"), None);
+        assert_eq!(work_public_url(&doc("title: t")), None);
     }
 
     #[test]
