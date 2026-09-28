@@ -199,3 +199,132 @@ fn clean_report_counts_rules_with_before_after_samples() {
     assert!(one.rules.iter().all(|r| r.samples.is_empty()));
     assert_eq!(fs::read(w.join("a.md")).unwrap(), before);
 }
+
+/// Ticket 03: documents where some query terms are only in the title,
+/// topics or summary.
+fn fields_engine(tmp: &Path) -> Engine {
+    let w = tmp.join("writing");
+    write(
+        &w,
+        "essay.md",
+        "---\ntitle: \"Repaved paths and generative metaphors\"\ngenre: essay\n---\n\
+         Cows wander and people follow their paths.\n\n\
+         Nothing to see in this paragraph.\n",
+    );
+    write(
+        &w,
+        "both.md",
+        "---\ntitle: Notes on metaphor\ngenre: note\n---\n\
+         Paths wander.\n\n\
+         Paths are a metaphor for learning.\n",
+    );
+    write(
+        &w,
+        "topic.md",
+        "---\ntitle: Walking\ngenre: note\ntopics: metaphor, walking\n---\n\
+         Walking along forest paths.\n",
+    );
+    write(
+        &w,
+        "summary.md",
+        "---\ntitle: Roads\ngenre: note\nsummary: A metaphor study.\n---\n\
+         Roads and paths.\n",
+    );
+    write(
+        &w,
+        "neither.md",
+        "---\ntitle: Gardens\ngenre: note\n---\nGarden paths only.\n",
+    );
+    let reg = Registry::parse(&format!(
+        "[[corpus]]\nid = \"writing\"\nname = \"W\"\nkind = \"markdown-folder\"\npath = \"{}\"\nrequire_frontmatter = [\"genre\"]\n",
+        w.display()
+    ))
+    .unwrap();
+    let e = Engine::new(reg, tmp.join("indexes"));
+    e.index_build(&IndexBuildQuery::default()).unwrap();
+    e
+}
+
+fn search(e: &Engine, q: &str) -> scout_corpus::SearchResults {
+    e.search(&SearchQuery {
+        query: q.into(),
+        ..Default::default()
+    })
+    .unwrap()
+    .body
+}
+
+#[test]
+fn search_takes_missing_terms_from_title_topics_and_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = fields_engine(tmp.path());
+    let r = search(&e, "paths metaphor");
+    let order: Vec<&str> = r.results.iter().map(|d| d.rel_path.as_str()).collect();
+    // A passage holding every term outranks the ones leaning on a field;
+    // a document whose fields lack "metaphor" does not match.
+    assert_eq!(order[0], "both.md");
+    let mut rest = order[1..].to_vec();
+    rest.sort();
+    assert_eq!(rest, vec!["essay.md", "summary.md", "topic.md"]);
+
+    // The shown passage is the one covering the most terms; "Paths wander."
+    // matches too, the title supplying "metaphor".
+    let both = &r.results[0];
+    assert_eq!(both.hits[0].quote, "Paths are a metaphor for learning.");
+    assert!(both.hits[0].field_terms.is_empty());
+    assert_eq!(both.hits[1].quote, "Paths wander.");
+    assert_eq!(both.hits[1].field_terms.len(), 1);
+    assert!(both.score > r.results[1].score);
+
+    // The essay quotes its "paths" passage, as written; the title supplies
+    // "metaphor" and matches the whole query.
+    let essay = r.results.iter().find(|d| d.rel_path == "essay.md").unwrap();
+    assert_eq!(essay.hits.len(), 1);
+    assert_eq!(
+        essay.hits[0].quote,
+        "Cows wander and people follow their paths."
+    );
+    assert_eq!(
+        essay.hits[0].field_terms,
+        vec![scout_corpus::search::Term::Prefix("metaphor".into())]
+    );
+    assert!(essay.title_match);
+
+    // Deterministic output.
+    let again = search(&e, "paths metaphor");
+    assert_eq!(api::to_json(&again).unwrap(), api::to_json(&r).unwrap());
+
+    // A term found only in fields never matches on its own.
+    assert!(search(&e, "metaphor walking")
+        .results
+        .iter()
+        .all(|d| d.rel_path == "topic.md"));
+    assert!(search(&e, "study").results.is_empty());
+}
+
+#[test]
+fn full_passage_outranks_title_only_match_of_equal_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = tmp.path().join("writing");
+    // Same passage text; only one of them holds "metaphor" in the passage.
+    write(
+        &w,
+        "a.md",
+        "---\ntitle: Metaphor\ngenre: note\n---\nPaths metaphor.\n",
+    );
+    write(
+        &w,
+        "b.md",
+        "---\ntitle: Metaphor\ngenre: note\n---\nPaths only.\n",
+    );
+    let reg = Registry::parse(&format!(
+        "[[corpus]]\nid = \"writing\"\nname = \"W\"\nkind = \"markdown-folder\"\npath = \"{}\"\nrequire_frontmatter = [\"genre\"]\n",
+        w.display()
+    ))
+    .unwrap();
+    let e = Engine::new(reg, tmp.path().join("indexes"));
+    e.index_build(&IndexBuildQuery::default()).unwrap();
+    let r = search(&e, "paths metaphor");
+    let order: Vec<&str> = r.results.iter().map(|d| d.rel_path.as_str()).collect();
+    assert_eq!(order, vec!["a.md", "b.md"]);
+}

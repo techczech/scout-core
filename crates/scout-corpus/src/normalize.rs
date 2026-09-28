@@ -8,10 +8,15 @@
 //! 1. drop lines matching the corpus boilerplate regexes (matched against the
 //!    original line, without its newline);
 //! 2. HTML entity decode, repeated so double-encoded `&amp;amp;` decodes fully;
-//! 3. strip HTML tags and comments;
-//! 4. strip Markdown link targets (`[text](url)` keeps `text`) and bare URLs;
-//! 5. unify curly and straight apostrophes and quotes;
-//! 6. Unicode NFC.
+//! 3. strip HTML tags and comments: an inline formatting tag (`<u>`, `<b>`,
+//!    `<sup>` …) leaves nothing, so `sw<u>a</u>m` stays one word; any other
+//!    tag or a comment leaves a space;
+//! 4. strip Markdown emphasis markers (`*`, `**`, `***`) of a pair that sits
+//!    inside a word (`sw**a**m`, `**K**ognitivní`), so they create no word
+//!    boundary; pairs at word edges are left to the tokeniser;
+//! 5. strip Markdown link targets (`[text](url)` keeps `text`) and bare URLs;
+//! 6. unify curly and straight apostrophes and quotes;
+//! 7. Unicode NFC.
 
 use regex::Regex;
 use std::sync::OnceLock;
@@ -277,6 +282,131 @@ fn tag_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?s)<!--.*?-->|</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?/?>|<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>").unwrap())
 }
 
+/// Inline formatting elements: stripping one must not split a word.
+const INLINE_TAGS: &[&str] = &[
+    "a", "abbr", "b", "bdi", "bdo", "big", "cite", "code", "del", "dfn", "em", "font", "i", "ins",
+    "kbd", "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u",
+    "var",
+];
+
+/// Whether a matched tag (`<u>`, `</strong>`, `<span class="x">`) is an
+/// inline formatting element.
+fn is_inline_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix('<') else {
+        return false;
+    };
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if name.is_empty() || rest[name.len()..].starts_with(':') {
+        return false; // an autolink `<https://…>`
+    }
+    INLINE_TAGS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+fn strip_tags(src: &Mapped) -> Mapped {
+    regex_stage(src, tag_re(), |b, caps| {
+        let g = caps.get(0).unwrap();
+        if !is_inline_tag(g.as_str()) {
+            b.replace(" ", g.start(), g.end());
+        }
+    })
+}
+
+/// A run of 1–3 `*` on one line.
+struct StarRun {
+    start: usize,
+    end: usize,
+    intraword: bool,
+    left: bool,
+    right: bool,
+}
+
+/// Remove the markers of every emphasis pair (same run length, on one line,
+/// no whitespace inside) of which at least one marker is inside a word
+/// (a letter or digit on both sides). Unpaired `*` (`2*3`) stays.
+fn strip_intraword_emphasis(src: &Mapped) -> Mapped {
+    let text = &src.text;
+    if !text.contains('*') {
+        return src.clone();
+    }
+    let mut remove: Vec<(usize, usize)> = Vec::new();
+    let mut pos = 0;
+    for line in text.split_inclusive('\n') {
+        let base = pos;
+        pos += line.len();
+        if !line.contains('*') {
+            continue;
+        }
+        let mut runs: Vec<StarRun> = Vec::new();
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] != b'*' {
+                i += 1;
+                continue;
+            }
+            let s = i;
+            while i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+            }
+            let before = line[..s].chars().next_back();
+            let after = line[i..].chars().next();
+            let alnum = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric());
+            let solid = |c: Option<char>| c.is_some_and(|c| !c.is_whitespace());
+            if i - s > 3 {
+                continue;
+            }
+            runs.push(StarRun {
+                start: base + s,
+                end: base + i,
+                intraword: alnum(before) && alnum(after),
+                left: solid(after),
+                right: solid(before),
+            });
+        }
+        let mut open: Vec<usize> = Vec::new();
+        for (ri, r) in runs.iter().enumerate() {
+            if r.right {
+                let len = r.end - r.start;
+                if let Some(k) = open
+                    .iter()
+                    .rposition(|&o| runs[o].end - runs[o].start == len)
+                {
+                    let o = &runs[open[k]];
+                    let inner = &text[o.end..r.start];
+                    if (o.intraword || r.intraword)
+                        && !inner.is_empty()
+                        && !inner.chars().any(char::is_whitespace)
+                    {
+                        remove.push((o.start, o.end));
+                        remove.push((r.start, r.end));
+                    }
+                    open.truncate(k);
+                    continue;
+                }
+            }
+            if r.left {
+                open.push(ri);
+            }
+        }
+    }
+    if remove.is_empty() {
+        return src.clone();
+    }
+    remove.sort();
+    let mut b = Builder::new(src);
+    let mut last = 0;
+    for (s, e) in remove {
+        b.copy(last, s);
+        last = e;
+    }
+    b.copy(last, text.len());
+    b.finish()
+}
+
 fn md_link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"!?\[([^\[\]\n]*)\]\(\s*<?[^()\s<>]*(?:\([^()\s]*\)[^()\s<>]*)*>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)"#).unwrap())
@@ -363,6 +493,8 @@ pub enum Stage {
     Entities,
     /// HTML tags and comments stripped.
     Tags,
+    /// Emphasis markers inside a word stripped.
+    Emphasis,
     /// Markdown link targets and bare URLs stripped.
     LinksUrls,
     /// Curly and straight apostrophes and quotes unified.
@@ -372,10 +504,11 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub const ALL: [Stage; 6] = [
+    pub const ALL: [Stage; 7] = [
         Stage::Boilerplate,
         Stage::Entities,
         Stage::Tags,
+        Stage::Emphasis,
         Stage::LinksUrls,
         Stage::Quotes,
         Stage::Nfc,
@@ -387,6 +520,7 @@ impl Stage {
             Stage::Boilerplate => "boilerplate",
             Stage::Entities => "entities",
             Stage::Tags => "tags",
+            Stage::Emphasis => "emphasis",
             Stage::LinksUrls => "links_urls",
             Stage::Quotes => "apostrophes",
             Stage::Nfc => "nfc",
@@ -398,6 +532,7 @@ impl Stage {
             Stage::Boilerplate => "Boilerplate lines",
             Stage::Entities => "HTML entities",
             Stage::Tags => "HTML tags and comments",
+            Stage::Emphasis => "Emphasis inside words",
             Stage::LinksUrls => "Link targets and URLs",
             Stage::Quotes => "Apostrophes and quotes",
             Stage::Nfc => "Unicode composition (NFC)",
@@ -431,10 +566,8 @@ fn pipeline(
                 }
                 cur
             }
-            Stage::Tags => regex_stage(&m, tag_re(), |b, caps| {
-                let g = caps.get(0).unwrap();
-                b.replace(" ", g.start(), g.end());
-            }),
+            Stage::Tags => strip_tags(&m),
+            Stage::Emphasis => strip_intraword_emphasis(&m),
             Stage::LinksUrls => {
                 let links = regex_stage(&m, md_link_re(), |b, caps| {
                     let t = caps.get(1).unwrap();
@@ -479,6 +612,46 @@ mod tests {
     fn identity_maps_bytes() {
         let m = Mapped::identity("příklad");
         assert_eq!(m.original_range(0, m.text.len()), (0, "příklad".len()));
+    }
+
+    fn toks(s: &str) -> Vec<String> {
+        crate::tokenize::words(&normalize(s, &[]).text)
+    }
+
+    #[test]
+    fn inline_emphasis_inside_a_word_makes_no_boundary() {
+        assert_eq!(toks("*He <u>sw**a**m</u>.*"), vec!["he", "swam"]);
+        assert_eq!(
+            toks("He sw<u>a</u>m, sw*a*m, sw***a***m."),
+            vec!["he", "swam", "swam", "swam"]
+        );
+        assert_eq!(
+            toks("Místo **K**ognitivní lingvistiky"),
+            vec!["místo", "kognitivní", "lingvistiky"]
+        );
+        assert_eq!(
+            toks("3<sup>rd</sup> and 2002<sub>a</sub>"),
+            vec!["3rd", "and", "2002a"]
+        );
+        // Tags that are not inline formatting still separate words.
+        assert_eq!(toks("one<br>two<p>three</p>"), vec!["one", "two", "three"]);
+        // Emphasis at word edges and a lone star are untouched.
+        assert_eq!(
+            toks("a **bold** word and 2*3"),
+            vec!["a", "bold", "word", "and", "2", "3"]
+        );
+        // A pair with a space inside is not an in-word pair.
+        assert_eq!(toks("P*1 and P*2"), vec!["p", "1", "and", "p", "2"]);
+    }
+
+    #[test]
+    fn stripped_emphasis_keeps_the_offset_map() {
+        let orig = "He <u>sw**a**m</u>.";
+        let m = normalize(orig, &[]);
+        let t = crate::tokenize::tokenize(&m.text, &crate::tokenize::IdentityLemmatizer, None);
+        let swam = t.iter().find(|t| t.text == "swam").unwrap();
+        let (s, e) = m.original_range(swam.start, swam.end);
+        assert_eq!(&orig[s..e], "sw**a**m");
     }
 
     #[test]

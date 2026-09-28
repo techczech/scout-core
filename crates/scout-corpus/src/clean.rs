@@ -57,7 +57,8 @@ pub struct CleanReport {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RuleReport {
-    /// `boilerplate`, `entities`, `tags`, `links_urls`, `apostrophes`, `nfc`.
+    /// `boilerplate`, `entities`, `tags`, `emphasis`, `links_urls`,
+    /// `apostrophes`, `nfc`.
     pub rule: String,
     pub label: String,
     /// Passages whose text the stage changed.

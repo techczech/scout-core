@@ -43,7 +43,8 @@ fn entities_decode_including_double_encoded() {
         "AT&amp;amp;T and &lt;b&gt; &#8217; &#x201C;x&#x201D; tea&nbsp;time",
         &[],
     );
-    assert_eq!(m.text, "AT&T and   ' \"x\" tea time");
+    // `<b>` is inline formatting: stripped without a space (ticket 03).
+    assert_eq!(m.text, "AT&T and  ' \"x\" tea time");
     let w = words(&m.text);
     assert!(!w.iter().any(|t| t == "amp"), "no amp tokens left: {w:?}");
 }
