@@ -14,6 +14,13 @@
 //!   highlight's colour).
 //! - A query with no positive term but with filters or a regex lists every
 //!   passage that passes them (score 0).
+//! - Title- and topic-aware: a passage matches an AND-group when it holds at
+//!   least one of the group's terms and every other term is in the passage
+//!   or in its document's title, topics or summary. Its document score is
+//!   its BM25 score times the share of the group's terms the passage itself
+//!   holds (so document fields weigh less than passage text), plus the title
+//!   score when the title matches the whole query. A document shows the
+//!   passages covering the most terms first, ties broken by score.
 
 use crate::cite::{self, CiteFormat, CiteSource};
 use crate::filter::{DocFilter, DocInfo};
@@ -191,6 +198,56 @@ impl Plan {
             || !self.not.is_empty()
     }
 
+    /// Every positive term of every group ORed, repeats kept, so a row's
+    /// BM25 score equals its score under [`Plan::positive_fts`] whenever it
+    /// matches that too; plus the exclusions.
+    fn candidate_fts(&self) -> String {
+        let pos = self
+            .any_of
+            .iter()
+            .flatten()
+            .map(Term::fts)
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        if self.not.is_empty() {
+            return pos;
+        }
+        let mut out = format!("({pos})");
+        for n in &self.not {
+            out.push_str(&format!(" NOT {}", n.fts()));
+        }
+        out
+    }
+
+    /// The best share of an AND-group's terms that a passage holds itself,
+    /// over the groups it satisfies (every term in the passage or in the
+    /// document fields, at least one in the passage); `None` when it
+    /// satisfies none. `in_passage` and `in_fields` answer per term of
+    /// [`Plan::terms`].
+    fn coverage(
+        &self,
+        terms: &[Term],
+        in_passage: impl Fn(usize) -> bool,
+        in_fields: impl Fn(usize) -> bool,
+    ) -> Option<f64> {
+        let mut best: Option<f64> = None;
+        for g in &self.any_of {
+            let idx: Vec<usize> = g
+                .iter()
+                .filter_map(|t| terms.iter().position(|x| x == t))
+                .collect();
+            let held = idx.iter().filter(|&&i| in_passage(i)).count();
+            if held == 0 || !idx.iter().all(|&i| in_passage(i) || in_fields(i)) {
+                continue;
+            }
+            let share = held as f64 / idx.len() as f64;
+            if best.is_none_or(|b| share > b) {
+                best = Some(share);
+            }
+        }
+        best
+    }
+
     fn positive_fts(&self) -> String {
         self.any_of
             .iter()
@@ -269,6 +326,10 @@ pub struct PassageHit {
     /// Original text: the hit sentence, or the whole passage with `--passage`.
     pub quote: String,
     pub score: f64,
+    /// Query terms this passage lacks that its document's title, topics or
+    /// summary supply.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub field_terms: Vec<Term>,
     pub link: Option<String>,
     /// Highlights: the highlight's tags, colour and highlight date.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -305,7 +366,8 @@ pub struct DocResult {
     /// The source system (`readwise`, `x`, `zotero`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// Best passage score, plus the title score when the title matches.
+    /// The shown passage's score times the share of the query terms it holds
+    /// itself, plus the title score when the title matches.
     pub score: f64,
     /// `score` divided by the best score in the same corpus: the merge key
     /// across corpora (BM25 scores of different corpora do not compare).
@@ -427,6 +489,40 @@ struct Row {
     rel_path: String,
     line_start: i64,
     score: f64,
+    /// Share of its AND-group's terms the passage holds itself (1 when it
+    /// needs no document field).
+    cover: f64,
+    /// Indexes into the plan's terms supplied by document fields.
+    field_terms: Vec<usize>,
+}
+
+/// The rowids of an FTS table matching one term.
+fn fts_rowids(conn: &Connection, table: &str, term: &Term) -> Result<BTreeSet<i64>> {
+    let mut st =
+        conn.prepare_cached(&format!("SELECT rowid FROM {table} WHERE {table} MATCH ?1"))?;
+    let ids = st
+        .query_map([term.fts()], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<BTreeSet<i64>>>()?;
+    Ok(ids)
+}
+
+/// The documents whose title, topics or summary hold one term (none on an
+/// index built before the fields table existed).
+fn field_docs(conn: &Connection, term: &Term) -> Result<BTreeSet<String>> {
+    let mut st =
+        conn.prepare_cached("SELECT DISTINCT rel_path FROM fields_fts WHERE fields_fts MATCH ?1")?;
+    let docs = st
+        .query_map([term.fts()], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<BTreeSet<String>>>()?;
+    Ok(docs)
+}
+
+fn has_table(conn: &Connection, name: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+        [name],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
 }
 
 /// The sentence holding the first match of a regex (regex-only queries).
@@ -496,40 +592,57 @@ pub fn search_corpus(
     let cols =
         "p.id, p.rel_path, p.line_start, p.tags, p.color, CASE WHEN ?2 THEN p.original ELSE '' END";
     let mut rows: Vec<Row> = Vec::new();
-    let mut keep = |id: i64,
-                    rel: String,
-                    line_start: i64,
-                    score: f64,
-                    tags: String,
-                    color: Option<String>,
-                    original: String| {
-        let Some(doc) = docs.get(&rel) else { return };
+    let mut keep = |row: Row, tags: String, color: Option<String>, original: String| {
+        let Some(doc) = docs.get(&row.rel_path) else {
+            return;
+        };
         if need_passage {
             let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
             if !plan.passage_ok(doc, &tags, color.as_deref(), &original) {
                 return;
             }
         }
-        rows.push(Row {
-            id,
-            rel_path: rel,
-            line_start,
-            score,
-        });
+        rows.push(row);
     };
     if plan.has_positive() {
-        let fts = plan.fts();
+        // Which passages hold each term, and which documents' fields do.
+        let in_pass: Vec<BTreeSet<i64>> = terms
+            .iter()
+            .map(|t| fts_rowids(conn, "passages_fts", t))
+            .collect::<Result<_>>()?;
+        let in_fields: Vec<BTreeSet<String>> = if has_table(conn, "fields_fts")? {
+            terms
+                .iter()
+                .map(|t| field_docs(conn, t))
+                .collect::<Result<_>>()?
+        } else {
+            vec![BTreeSet::new(); terms.len()]
+        };
         let mut st = conn.prepare(&format!(
             "SELECT {cols}, bm25(passages_fts) FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
              WHERE passages_fts MATCH ?1"
         ))?;
-        let mut q = st.query(params![fts, need_passage])?;
+        let mut q = st.query(params![plan.candidate_fts(), need_passage])?;
         while let Some(r) = q.next()? {
+            let id: i64 = r.get(0)?;
+            let rel: String = r.get(1)?;
+            let holds = |i: usize| in_pass[i].contains(&id);
+            let supplied = |i: usize| in_fields[i].contains(&rel);
+            let Some(cover) = plan.coverage(&terms, holds, supplied) else {
+                continue;
+            };
+            let field_terms = (0..terms.len())
+                .filter(|&i| !holds(i) && supplied(i))
+                .collect();
             keep(
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                round6(-r.get::<_, f64>(6)?),
+                Row {
+                    id,
+                    rel_path: rel,
+                    line_start: r.get(2)?,
+                    score: round6(-r.get::<_, f64>(6)?),
+                    cover,
+                    field_terms,
+                },
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
@@ -561,10 +674,14 @@ pub fn search_corpus(
                 continue;
             }
             keep(
-                id,
-                r.get(1)?,
-                r.get(2)?,
-                0.0,
+                Row {
+                    id,
+                    rel_path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    score: 0.0,
+                    cover: 1.0,
+                    field_terms: vec![],
+                },
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
@@ -573,7 +690,7 @@ pub fn search_corpus(
     }
     res.total_passages = rows.len();
 
-    // Group by document; order passages by score desc, then line.
+    // Group by document; order passages by coverage desc, score desc, line.
     let mut by_doc: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     for r in rows {
         by_doc.entry(r.rel_path.clone()).or_default().push(r);
@@ -581,8 +698,9 @@ pub fn search_corpus(
     let mut groups: Vec<(String, Vec<Row>)> = by_doc.into_iter().collect();
     for (_, ps) in groups.iter_mut() {
         ps.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
+            b.cover
+                .total_cmp(&a.cover)
+                .then(b.score.total_cmp(&a.score))
                 .then(a.line_start.cmp(&b.line_start))
         });
     }
@@ -600,8 +718,9 @@ pub fn search_corpus(
             title_scores.insert(k, v);
         }
     }
-    let doc_score =
-        |rel: &str, ps: &[Row]| round6(ps[0].score + title_scores.get(rel).copied().unwrap_or(0.0));
+    let doc_score = |rel: &str, ps: &[Row]| {
+        round6(ps[0].score * ps[0].cover + title_scores.get(rel).copied().unwrap_or(0.0))
+    };
     groups.sort_by(|a, b| {
         doc_score(&b.0, &b.1)
             .total_cmp(&doc_score(&a.0, &a.1))
@@ -642,6 +761,7 @@ pub fn search_corpus(
                 line,
                 quote: original[loc.start..loc.end].to_string(),
                 score: p.score,
+                field_terms: p.field_terms.iter().map(|&i| terms[i].clone()).collect(),
                 link: cfg.link_for(&rel, line),
                 tags: serde_json::from_str(&tags).unwrap_or_default(),
                 color,

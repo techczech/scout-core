@@ -10,7 +10,7 @@
 **Design:** engine spec `docs/specs/2026-09-27-corpus-engine-and-cli.md` (search section).
 **Blocked by:** None: dispatchable now.
 **Seams under test:** the facade `search()`; the CLI parity test.
-**Status:** ready
+**Status:** landed
 
 - [ ] `scout search "paths metaphor" --in writing` returns the 2016 essay first, quoting a passage with "paths".
 - [ ] A query whose terms all occur in one passage ranks that passage above title-only matches (test).

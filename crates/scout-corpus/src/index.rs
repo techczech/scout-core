@@ -19,7 +19,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/5";
+pub const ENGINE_VERSION: &str = "scout-corpus/6";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.
@@ -173,6 +173,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_passages_doc ON passages(rel_path, line_start);
         CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(tokens, tokenize = \"{FTS_TOKENIZE}\");
         CREATE VIRTUAL TABLE IF NOT EXISTS titles_fts USING fts5(rel_path UNINDEXED, tokens, tokenize = \"{FTS_TOKENIZE}\");
+        CREATE VIRTUAL TABLE IF NOT EXISTS fields_fts USING fts5(rel_path UNINDEXED, tokens, tokenize = \"{FTS_TOKENIZE}\");
         "
     ))?;
     Ok(())
@@ -254,6 +255,10 @@ fn delete_doc(conn: &Connection, rel_path: &str) -> Result<()> {
     )?;
     conn.execute(
         &format!("DELETE FROM titles_fts WHERE {OF_FILE}"),
+        [rel_path],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM fields_fts WHERE {OF_FILE}"),
         [rel_path],
     )?;
     conn.execute("DELETE FROM files WHERE rel_path = ?1", [rel_path])?;
@@ -351,18 +356,35 @@ fn index_doc(
             n_tok
         ],
     )?;
-    if d.index_title {
-        let title_norm = normalize::normalize(&title, &[]);
-        let title_toks = tokenize(&title_norm.text, &IdentityLemmatizer, lang.as_deref());
-        let joined = title_toks
-            .iter()
-            .map(|t| t.lemma.as_str())
+    let field_tokens = |s: &str| {
+        let norm = normalize::normalize(s, &[]);
+        tokenize(&norm.text, &IdentityLemmatizer, lang.as_deref())
+            .into_iter()
+            .map(|t| t.lemma)
             .collect::<Vec<_>>()
-            .join(" ");
+    };
+    // The document fields search may match a term in when the passage lacks
+    // it: the title (when indexed), the topics and the summary.
+    let mut fields: Vec<String> = Vec::new();
+    if d.index_title {
+        let joined = field_tokens(&title).join(" ");
         conn.execute(
             "INSERT INTO titles_fts (rel_path, tokens) VALUES (?1, ?2)",
             params![d.key, joined],
         )?;
+        fields.push(joined);
+    }
+    for t in &meta.topics {
+        fields.push(field_tokens(t).join(" "));
+    }
+    if let Some(s) = &meta.summary {
+        fields.push(field_tokens(s).join(" "));
+    }
+    // One row per field, so a phrase never spans two fields.
+    let mut ins_fields =
+        conn.prepare_cached("INSERT INTO fields_fts (rel_path, tokens) VALUES (?1, ?2)")?;
+    for f in fields.iter().filter(|f| !f.is_empty()) {
+        ins_fields.execute(params![d.key, f])?;
     }
     Ok(())
 }
