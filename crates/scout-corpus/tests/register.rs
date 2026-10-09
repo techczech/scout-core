@@ -431,6 +431,28 @@ fn adding_a_missing_folder_that_would_hold_the_registry_creates_nothing() {
     assert!(!new.exists(), "{} was created", new.display());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlink_retargeted_while_add_waits_is_judged_by_its_new_target() {
+    // <base>/cfg/corpora.toml is the registry; <base>/link -> <base>/safe
+    // when `add <base>/link` starts, and -> <base>/cfg once the lock is held.
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    for d in ["safe", "cfg"] {
+        fs::create_dir_all(base.join(d)).unwrap();
+    }
+    std::os::unix::fs::symlink(base.join("safe"), base.join("link")).unwrap();
+    let reg = base.join("cfg/corpora.toml");
+    let s = RegistryStore::new(&reg, base.join("indexes")).with_after_lock(|reg| {
+        let base = reg.parent().unwrap().parent().unwrap();
+        fs::remove_file(base.join("link")).unwrap();
+        std::os::unix::fs::symlink(base.join("cfg"), base.join("link")).unwrap();
+    });
+    let e = s.add(&add(&base.join("link"))).unwrap_err().to_string();
+    assert!(e.contains("lies inside the source folder"), "{e}");
+    assert!(!reg.exists(), "nothing registered");
+}
+
 #[test]
 fn a_registry_beside_a_source_folder_is_fine() {
     // SCOUT_CONFIG=/data/corpora.toml, then `corpora add /data/notes`.
