@@ -102,13 +102,20 @@ pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
 
 /// The files of the SQLite database at `path` that exist: the database and
 /// its `-wal`, `-shm` and `-journal` side files. A symlink counts as a file
-/// (it is the link that would be removed, never its target).
-pub(crate) fn sqlite_files(path: &Path) -> Vec<PathBuf> {
-    ["", "-wal", "-shm", "-journal"]
-        .iter()
-        .map(|suffix| PathBuf::from(format!("{}{suffix}", path.display())))
-        .filter(|p| std::fs::symlink_metadata(p).is_ok())
-        .collect()
+/// (it is the link that would be removed, never its target). Only "not
+/// found" means absent; any other error (a directory that cannot be
+/// searched, say) is returned, never read as "no index".
+pub(crate) fn sqlite_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let p = PathBuf::from(format!("{}{suffix}", path.display()));
+        match std::fs::symlink_metadata(&p) {
+            Ok(_) => out.push(p),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => bail!("inspect {}: {e}", p.display()),
+        }
+    }
+    Ok(out)
 }
 
 /// Delete the SQLite database at `path` with its side files: the one
@@ -117,7 +124,7 @@ pub(crate) fn sqlite_files(path: &Path) -> Vec<PathBuf> {
 pub(crate) fn remove_index_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     let mut left = Vec::new();
-    for p in sqlite_files(path) {
+    for p in sqlite_files(path)? {
         match std::fs::remove_file(&p) {
             Ok(()) => removed.push(p),
             Err(e) => left.push(format!("{} ({e})", p.display())),

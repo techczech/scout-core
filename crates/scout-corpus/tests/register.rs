@@ -2,7 +2,7 @@
 //! bodies of `api::add_corpus` / `api::remove_corpus`) and kind detection.
 //! Every test works in a temp dir; the user registry is never read.
 
-use scout_corpus::register::{detect_kind, RegistryStore};
+use scout_corpus::register::RegistryStore;
 use scout_corpus::{AddCorpus, CorpusKind, Registry};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -207,7 +207,9 @@ fn corrupt_registry_is_refused_with_a_parse_error_and_left_alone() {
     fs::create_dir_all(reg.parent().unwrap()).unwrap();
     let corrupt = "# mine\n[[corpus]\nid = \"x\n";
     fs::write(&reg, corrupt).unwrap();
-    let e = format!("{:#}", s.add(&add(tmp.path())).unwrap_err());
+    let notes = tmp.path().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let e = format!("{:#}", s.add(&add(&notes)).unwrap_err());
     assert!(e.contains("parse corpus registry"), "{e}");
     assert_eq!(fs::read_to_string(&reg).unwrap(), corrupt);
 }
@@ -307,77 +309,139 @@ fn remove_on_missing_registry_is_registry_missing() {
     assert!(e.downcast_ref::<scout_corpus::RegistryMissing>().is_some());
 }
 
-/// A work file as Highlight Scout and `scout-archive` write it.
-const WORK: &str = "---\ntitle: A Work\nauthor: A. Author\ntype: article\n\
-source_system: readwise\nsource_id: \"42\"\nurl: https://example.org/a\n---\n\n\
-> a highlight\n\nhighlighted_at: 2021-04-03\n\n---\n";
-
 fn archive_at(root: &Path) {
     fs::create_dir_all(root.join("readings/works")).unwrap();
     fs::create_dir_all(root.join("readings/fulltext")).unwrap();
-    fs::create_dir_all(root.join("readings/assets")).unwrap();
-    fs::write(root.join("readings/works/a-work-42.md"), WORK).unwrap();
+    fs::write(
+        root.join("readings/works/a-work.md"),
+        "---\ntitle: A Work\nsource_system: readwise\nsource_id: \"42\"\n---\n\n> a highlight\n",
+    )
+    .unwrap();
 }
 
 #[test]
-fn kind_detection_recognises_a_highlight_scout_archive() {
+fn kind_defaults_to_markdown_folder_even_for_an_archive_layout() {
     let tmp = tempfile::tempdir().unwrap();
-    let plain = tmp.path().join("plain");
     let archive = tmp.path().join("archive");
-    fs::create_dir_all(&plain).unwrap();
     archive_at(&archive);
-    assert_eq!(detect_kind(&plain), CorpusKind::MarkdownFolder);
-    assert_eq!(detect_kind(&archive), CorpusKind::HighlightScoutArchive);
-
-    let fresh = tmp.path().join("fresh");
-    fs::create_dir_all(fresh.join("readings/works")).unwrap();
-    fs::create_dir_all(fresh.join("readings/fulltext")).unwrap();
-    assert_eq!(
-        detect_kind(&fresh),
-        CorpusKind::HighlightScoutArchive,
-        "a new archive with no works yet"
-    );
-
     let (s, _, _) = store(tmp.path());
     let cfg = s.add(&add(&archive)).unwrap();
-    assert_eq!(cfg.kind, CorpusKind::HighlightScoutArchive);
-    assert!(cfg.include.is_empty(), "the adapter's own default applies");
-    let forced = s
-        .add(&AddCorpus {
-            kind: Some(CorpusKind::MarkdownFolder),
-            ..add(&plain)
-        })
-        .unwrap();
-    assert_eq!(forced.kind, CorpusKind::MarkdownFolder);
+    assert_eq!(cfg.kind, CorpusKind::MarkdownFolder, "never guessed");
+    assert_eq!(cfg.include, vec!["**/*.md", "**/*.txt"]);
 }
 
 #[test]
-fn a_readings_works_folder_alone_is_not_an_archive() {
+fn an_explicit_archive_kind_needs_readings_works() {
     let tmp = tempfile::tempdir().unwrap();
-    // Only the directory name.
-    let a = tmp.path().join("a");
-    fs::create_dir_all(a.join("readings/works")).unwrap();
-    fs::write(
-        a.join("readings/works/essay.md"),
-        "# An essay\n\nPlain text.\n",
-    )
-    .unwrap();
-    assert_eq!(detect_kind(&a), CorpusKind::MarkdownFolder);
-    // The full layout, but the works are ordinary notes.
-    let b = tmp.path().join("b");
-    fs::create_dir_all(b.join("readings/works")).unwrap();
-    fs::create_dir_all(b.join("readings/fulltext")).unwrap();
-    fs::write(
-        b.join("readings/works/essay.md"),
-        "---\ntitle: An essay\n---\n\nPlain text.\n",
-    )
-    .unwrap();
-    assert_eq!(detect_kind(&b), CorpusKind::MarkdownFolder);
+    let (s, reg, _) = store(tmp.path());
+    let plain = tmp.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let e = s
+        .add(&AddCorpus {
+            kind: Some(CorpusKind::HighlightScoutArchive),
+            ..add(&plain)
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("no readings/works/"), "{e}");
+    assert!(!reg.exists());
 
+    let archive = tmp.path().join("archive");
+    archive_at(&archive);
+    let cfg = s
+        .add(&AddCorpus {
+            kind: Some(CorpusKind::HighlightScoutArchive),
+            ..add(&archive)
+        })
+        .unwrap();
+    assert_eq!(cfg.kind, CorpusKind::HighlightScoutArchive);
+    assert!(cfg.include.is_empty(), "the adapter's own default applies");
+}
+
+#[test]
+fn add_refuses_a_folder_holding_or_inside_the_registry_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("corpus");
+    fs::create_dir_all(src.join("notes")).unwrap();
+    // The registry lives inside the folder being added; indexes elsewhere.
+    let reg = src.join("config/corpora.toml");
+    let s = RegistryStore::new(&reg, tmp.path().join("indexes"));
+    let e = s.add(&add(&src)).unwrap_err().to_string();
+    assert!(e.contains("holds the corpus registry's folder"), "{e}");
+    assert!(!src.join("config").exists(), "no lock or registry written");
+
+    // A folder inside the registry's folder.
     let (s, _, _) = store(tmp.path());
-    let cfg = s.add(&add(&a)).unwrap();
-    assert_eq!(cfg.kind, CorpusKind::MarkdownFolder);
-    assert_eq!(cfg.include, vec!["**/*.md", "**/*.txt"]);
+    let inside = tmp.path().join("config/sub");
+    fs::create_dir_all(&inside).unwrap();
+    let e = s.add(&add(&inside)).unwrap_err().to_string();
+    assert!(e.contains("inside the corpus registry's folder"), "{e}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_file_is_refused_and_never_followed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (s, reg, _) = store(tmp.path());
+    let src = tmp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(reg.parent().unwrap()).unwrap();
+    let planted = src.join("new.md");
+    std::os::unix::fs::symlink(&planted, reg.parent().unwrap().join(".corpora.toml.lock")).unwrap();
+    let notes = tmp.path().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let e = s.add(&add(&notes)).unwrap_err().to_string();
+    assert!(e.contains("symlink"), "{e}");
+    assert!(
+        !planted.exists(),
+        "the dangling link's target was not created"
+    );
+    assert!(!reg.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_registry_is_not_replaced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (s, reg, _) = store(tmp.path());
+    fs::create_dir_all(reg.parent().unwrap()).unwrap();
+    let real = tmp.path().join("dotfiles-corpora.toml");
+    fs::write(&real, "# mine\n").unwrap();
+    std::os::unix::fs::symlink(&real, &reg).unwrap();
+    let notes = tmp.path().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let e = s.add(&add(&notes)).unwrap_err().to_string();
+    assert!(e.contains("is a symlink"), "{e}");
+    assert!(fs::symlink_metadata(&reg).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_to_string(&real).unwrap(), "# mine\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unsearchable_index_dir_fails_removal_and_keeps_the_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (s, reg, idx) = store(tmp.path());
+    let notes = tmp.path().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    s.add(&add(&notes)).unwrap();
+    fs::create_dir_all(&idx).unwrap();
+    fs::write(idx.join("notes.sqlite"), "x").unwrap();
+    let before = fs::read_to_string(&reg).unwrap();
+
+    fs::set_permissions(&idx, fs::Permissions::from_mode(0o000)).unwrap();
+    let res = s.remove("notes", false);
+    fs::set_permissions(&idx, fs::Permissions::from_mode(0o755)).unwrap();
+    let e = format!("{:#}", res.unwrap_err());
+    assert!(
+        e.contains("left registered") && e.contains("notes.sqlite"),
+        "{e}"
+    );
+    assert_eq!(fs::read_to_string(&reg).unwrap(), before);
+
+    let r = s.remove("notes", false).unwrap();
+    assert_eq!(r.deleted.len(), 1);
+    assert!(!idx.join("notes.sqlite").exists());
 }
 
 #[test]

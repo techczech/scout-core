@@ -1,5 +1,5 @@
 //! Corpus registration: `corpora add` and `corpora remove` as a
-//! read-modify-write of the registry file, plus kind detection.
+//! read-modify-write of the registry file, plus validation.
 //!
 //! - The only files written are the registry (atomically: a temp file in
 //!   the same directory, created exclusively, then a rename), its lock file
@@ -47,7 +47,9 @@ pub struct AddCorpus {
     pub id: Option<String>,
     /// Default: the folder name.
     pub name: Option<String>,
-    /// Default: detected (see [`detect_kind`]), else markdown-folder.
+    /// Default: markdown-folder. A Highlight Scout archive is registered
+    /// only when asked for (`kind = highlight-scout-archive`); its folder
+    /// must have `readings/works/`.
     pub kind: Option<CorpusKind>,
     /// The author of documents that name none.
     pub author: Option<String>,
@@ -123,13 +125,20 @@ impl RegistryStore {
     /// Register a folder; creates the registry when missing. Does not build
     /// the index.
     pub fn add(&self, req: &AddCorpus) -> Result<CorpusConfig> {
+        // Before the lock: taking it creates the lock file, which must not
+        // land inside the folder being refused.
+        if let Ok(abs) =
+            std::path::absolute(expand_home(req.path.trim())).and_then(|p| p.canonicalize())
+        {
+            refuse_store_overlaps(&abs, &self.index_dir, &self.path)?;
+        }
         let _lock = lock_registry(&self.path)?;
         let existing = self.read()?;
         let reg = existing
             .as_ref()
             .map(|(_, r)| r.clone())
             .unwrap_or_default();
-        let cfg = new_config(req, &reg, &self.index_dir)?;
+        let cfg = new_config(req, &reg, &self.index_dir, &self.path)?;
         let mut want = reg.clone();
         want.corpora.push(cfg.clone());
         let text = match &existing {
@@ -186,54 +195,13 @@ impl RegistryStore {
     }
 }
 
-/// A folder's corpus kind. A Highlight Scout archive is recognised by the
-/// layout its writers (Highlight Scout, `scout-archive`) always create,
-/// `readings/works/` and `readings/fulltext/`, and by a work file in
-/// `readings/works/` whose frontmatter carries `source_system:` and
-/// `source_id:` (an archive with no works yet passes on the layout alone).
-/// Anything else, including a plain folder that happens to have a
-/// `readings/works/` directory, is a markdown-folder.
-pub fn detect_kind(dir: &Path) -> CorpusKind {
-    let works = dir.join("readings").join("works");
-    if !works.is_dir() || !dir.join("readings").join("fulltext").is_dir() {
-        return CorpusKind::MarkdownFolder;
-    }
-    let first_work = std::fs::read_dir(&works).ok().and_then(|it| {
-        it.filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .find(|p| p.extension().is_some_and(|x| x == "md") && p.is_file())
-    });
-    match first_work {
-        None => CorpusKind::HighlightScoutArchive,
-        Some(p) if is_work_file(&p) => CorpusKind::HighlightScoutArchive,
-        Some(_) => CorpusKind::MarkdownFolder,
-    }
-}
-
-/// True when the file opens with frontmatter naming `source_system` and
-/// `source_id` (the head of an ADR-0003 v2 work file).
-fn is_work_file(p: &Path) -> bool {
-    use std::io::{BufRead, BufReader};
-    let Ok(f) = std::fs::File::open(p) else {
-        return false;
-    };
-    let mut lines = BufReader::new(f).lines().map_while(|l| l.ok()).take(60);
-    if lines.next().as_deref().map(str::trim_end) != Some("---") {
-        return false;
-    }
-    let (mut system, mut source_id) = (false, false);
-    for l in lines {
-        if l.trim_end() == "---" {
-            break;
-        }
-        system |= l.starts_with("source_system:");
-        source_id |= l.starts_with("source_id:");
-    }
-    system && source_id
-}
-
 /// Validate a request against the registry and build the new entry.
-fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<CorpusConfig> {
+fn new_config(
+    req: &AddCorpus,
+    reg: &Registry,
+    index_dir: &Path,
+    registry: &Path,
+) -> Result<CorpusConfig> {
     if req.path.trim().is_empty() {
         bail!("no folder given");
     }
@@ -253,22 +221,7 @@ fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<Corpu
             bail!("path {} already registered as `{}`", abs.display(), c.id);
         }
     }
-    let store = index::canonical_prefix(index_dir);
-    if store.starts_with(&abs) {
-        bail!(
-            "{} holds the index store {}; refusing to register it (its index files would \
-             live inside the source folder)",
-            abs.display(),
-            store.display()
-        );
-    }
-    if abs.starts_with(&store) {
-        bail!(
-            "{} is inside the index store {}; refusing to register it",
-            abs.display(),
-            store.display()
-        );
-    }
+    refuse_store_overlaps(&abs, index_dir, registry)?;
     // Stored as the user spelled it (a symlink kept as a symlink, e.g. a
     // stable link to a cloud-storage mount), cleaned of `.`; only a path
     // with `..` is stored canonical, since its meaning depends on symlinks.
@@ -304,7 +257,14 @@ fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<Corpu
         }
         None => unique_id(&slug(&folder), reg),
     };
-    let kind = req.kind.unwrap_or_else(|| detect_kind(&abs));
+    // Never guessed from the folder's contents: an archive is asked for.
+    let kind = req.kind.unwrap_or(CorpusKind::MarkdownFolder);
+    if kind == CorpusKind::HighlightScoutArchive && !abs.join("readings").join("works").is_dir() {
+        bail!(
+            "{} has no readings/works/ folder; it is not a Highlight Scout archive",
+            abs.display()
+        );
+    }
     let include = if !req.include.is_empty() {
         req.include.clone()
     } else {
@@ -360,6 +320,37 @@ fn normalise(p: &Path) -> Result<PathBuf> {
         }
     }
     Ok(out)
+}
+
+/// Refuse a (canonical) source folder that holds, or lies inside, the index
+/// store or the registry's directory: the index files, the registry, its
+/// temp files and its lock file would then be written inside a source.
+fn refuse_store_overlaps(abs: &Path, index_dir: &Path, registry: &Path) -> Result<()> {
+    let stores = [
+        ("the index store", index::canonical_prefix(index_dir)),
+        (
+            "the corpus registry's folder",
+            index::canonical_prefix(parent_dir(registry)),
+        ),
+    ];
+    for (what, store) in stores {
+        if store.starts_with(abs) {
+            bail!(
+                "{} holds {what} {}; refusing to register it (scout would write inside \
+                 the source folder)",
+                abs.display(),
+                store.display()
+            );
+        }
+        if abs.starts_with(&store) {
+            bail!(
+                "{} is inside {what} {}; refusing to register it",
+                abs.display(),
+                store.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// A registered corpus's source folder, canonical when it exists, else
@@ -488,15 +479,35 @@ pub(crate) fn lock_registry(path: &Path) -> Result<std::fs::File> {
     let dir = parent_dir(path);
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let lock = dir.join(format!(".{}.lock", file_name(path)));
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
+    refuse_symlink(&lock)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A symlink planted between the check and the open fails (ELOOP)
+        // instead of being followed.
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let f = opts
         .open(&lock)
-        .with_context(|| format!("open {}", lock.display()))?;
+        .with_context(|| format!("open {} (it must not be a symlink)", lock.display()))?;
     f.lock()
         .with_context(|| format!("lock {}", lock.display()))?;
     Ok(f)
+}
+
+/// An error when `path` is a symlink (dangling or not).
+fn refuse_symlink(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            bail!(
+                "{} is a symlink; refusing to write through it",
+                path.display()
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 fn parent_dir(path: &Path) -> &Path {
@@ -536,8 +547,10 @@ fn temp_name(path: &Path) -> String {
 /// created exclusively (`O_EXCL`: an existing file or symlink of that name
 /// is never opened, so nothing it points at is truncated), flushed, then
 /// renamed over `path`. On any failure a temp file this call created is
-/// removed and `path` is as it was.
+/// removed and `path` is as it was. A `path` that is a symlink is refused
+/// (replacing it would silently swap the link for a plain file).
 pub fn write_atomic(path: &Path, text: &str, rename: RenameFn) -> Result<()> {
+    refuse_symlink(path)?;
     let dir = parent_dir(path);
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let tmp = dir.join(temp_name(path));
@@ -570,7 +583,12 @@ fn delete_index_files(index_dir: &Path, id: &str, reg: &Registry) -> Result<Vec<
         index::index_path_in(index_dir, id),
         index::vectors_path_in(index_dir, id),
     ];
-    let files: Vec<PathBuf> = bases.iter().flat_map(|b| index::sqlite_files(b)).collect();
+    let mut files = Vec::new();
+    for b in &bases {
+        files.extend(index::sqlite_files(b).with_context(|| {
+            format!("corpus `{id}` left registered (run the remove again to retry)")
+        })?);
+    }
     if files.is_empty() {
         return Ok(vec![]);
     }
