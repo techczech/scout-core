@@ -433,8 +433,10 @@ fn maintainer_preset() -> Registry {
 
 /// Write a starter registry to `path`: empty by default, or a preset.
 /// Refuses to overwrite unless `force`; returns false (and writes nothing)
-/// when the file exists and `force` is off. The write is atomic.
+/// when the file exists and `force` is off. The write is atomic and holds
+/// the registry lock (see [`crate::register`]).
 pub fn init_defaults(path: &Path, force: bool, preset: Preset) -> Result<bool> {
+    let _lock = crate::register::lock_registry(path)?;
     if path.exists() && !force {
         return Ok(false);
     }

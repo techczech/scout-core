@@ -9,7 +9,7 @@ use crate::markdown::{self, SourceFile};
 use crate::normalize;
 use crate::registry::CorpusConfig;
 use crate::tokenize::{tokenize, IdentityLemmatizer};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -100,18 +100,37 @@ pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
     meta_get(conn, GENERATION_KEY)
 }
 
-pub(crate) fn remove_index_files(path: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let p = PathBuf::from(format!("{}{}", path.display(), suffix));
-        if p.exists() {
-            std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
+/// The files of the SQLite database at `path` that exist: the database and
+/// its `-wal`, `-shm` and `-journal` side files. A symlink counts as a file
+/// (it is the link that would be removed, never its target).
+pub(crate) fn sqlite_files(path: &Path) -> Vec<PathBuf> {
+    ["", "-wal", "-shm", "-journal"]
+        .iter()
+        .map(|suffix| PathBuf::from(format!("{}{suffix}", path.display())))
+        .filter(|p| std::fs::symlink_metadata(p).is_ok())
+        .collect()
+}
+
+/// Delete the SQLite database at `path` with its side files: the one
+/// cleanup used by rebuilds and by `corpora remove`. Every file is tried;
+/// returns the files removed, or an error naming each file left behind.
+pub(crate) fn remove_index_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    let mut left = Vec::new();
+    for p in sqlite_files(path) {
+        match std::fs::remove_file(&p) {
+            Ok(()) => removed.push(p),
+            Err(e) => left.push(format!("{} ({e})", p.display())),
         }
     }
-    Ok(())
+    if !left.is_empty() {
+        bail!("could not remove {}", left.join(", "));
+    }
+    Ok(removed)
 }
 
 /// Canonicalise the longest existing ancestor of `p`, re-appending the rest.
-fn canonical_prefix(p: &Path) -> PathBuf {
+pub(crate) fn canonical_prefix(p: &Path) -> PathBuf {
     let mut tail = Vec::new();
     let mut cur = p.to_path_buf();
     loop {

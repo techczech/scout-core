@@ -148,7 +148,9 @@ fn add_build_search_remove_round_trip() {
         "{}",
         err(&o)
     );
-    let o = h.scout(&["corpora", "add", h.home.to_str().unwrap(), "--id", "other"]);
+    let third = h.home.join("third");
+    fs::create_dir_all(&third).unwrap();
+    let o = h.scout(&["corpora", "add", third.to_str().unwrap(), "--id", "other"]);
     assert!(
         err(&o).contains("corpus id `other` is already registered"),
         "{}",
