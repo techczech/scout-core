@@ -436,6 +436,7 @@ fn maintainer_preset() -> Registry {
 /// when the file exists and `force` is off. The write is atomic and holds
 /// the registry lock (see [`crate::register`]).
 pub fn init_defaults(path: &Path, force: bool, preset: Preset) -> Result<bool> {
+    crate::register::check_registry_location(path, &crate::register::registered_sources(path))?;
     let _lock = crate::register::lock_registry(path)?;
     if path.exists() && !force {
         return Ok(false);
