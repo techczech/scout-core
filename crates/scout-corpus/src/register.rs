@@ -128,15 +128,14 @@ impl RegistryStore {
     /// Register a folder; creates the registry when missing. Does not build
     /// the index.
     pub fn add(&self, req: &AddCorpus) -> Result<CorpusConfig> {
+        // First, before anything can create a directory: the requested
+        // folder must exist, so its canonical path is known.
+        let src = resolve_source(req)?;
         // Before the lock: taking it creates the lock file, which must not
         // land inside a source folder, registered or new.
+        refuse_index_store_overlap(&src.canonical, &self.index_dir)?;
         let mut sources = registered_sources(&self.path);
-        if let Ok(abs) =
-            std::path::absolute(expand_home(req.path.trim())).and_then(|p| p.canonicalize())
-        {
-            refuse_index_store_overlap(&abs, &self.index_dir)?;
-            sources.push(abs);
-        }
+        sources.push(src.canonical.clone());
         check_registry_location(&self.path, &sources)?;
         let _lock = lock_registry(&self.path)?;
         let existing = self.read()?;
@@ -144,7 +143,7 @@ impl RegistryStore {
             .as_ref()
             .map(|(_, r)| r.clone())
             .unwrap_or_default();
-        let cfg = new_config(req, &reg, &self.index_dir)?;
+        let cfg = new_config(req, &src, &reg)?;
         let mut want = reg.clone();
         want.corpora.push(cfg.clone());
         let text = match &existing {
@@ -202,28 +201,39 @@ impl RegistryStore {
     }
 }
 
-/// Validate a request against the registry and build the new entry.
-fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<CorpusConfig> {
+/// A requested source folder: as given (absolute) and canonical.
+struct Source {
+    given: PathBuf,
+    canonical: PathBuf,
+}
+
+/// The requested folder, which must exist and be a folder. The filesystem
+/// resolves symlinks before `..`, so `link/../x` is the `x` beside the
+/// link's target, not beside the link.
+fn resolve_source(req: &AddCorpus) -> Result<Source> {
     if req.path.trim().is_empty() {
         bail!("no folder given");
     }
     let given = std::path::absolute(expand_home(req.path.trim()))
         .with_context(|| format!("resolve {}", req.path.trim()))?;
-    // The filesystem resolves symlinks before `..`, so `link/../x` is the
-    // `x` beside the link's target, not beside the link.
-    let abs = match given.canonicalize() {
+    let canonical = match given.canonicalize() {
         Ok(c) => c,
         Err(_) => bail!("no folder at {}", normalise(&given)?.display()),
     };
-    if !abs.is_dir() {
-        bail!("{} is a file, not a folder", abs.display());
+    if !canonical.is_dir() {
+        bail!("{} is a file, not a folder", canonical.display());
     }
+    Ok(Source { given, canonical })
+}
+
+/// Validate a request against the registry and build the new entry.
+fn new_config(req: &AddCorpus, src: &Source, reg: &Registry) -> Result<CorpusConfig> {
+    let (given, abs) = (&src.given, &src.canonical);
     for c in &reg.corpora {
-        if source_root(c) == abs {
+        if source_root(c) == *abs {
             bail!("path {} already registered as `{}`", abs.display(), c.id);
         }
     }
-    refuse_index_store_overlap(&abs, index_dir)?;
     // Stored as the user spelled it (a symlink kept as a symlink, e.g. a
     // stable link to a cloud-storage mount), cleaned of `.`; only a path
     // with `..` is stored canonical, since its meaning depends on symlinks.
@@ -231,7 +241,7 @@ fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<Corpu
     let spelled = if given.components().any(|c| c == Component::ParentDir) {
         abs.clone()
     } else {
-        normalise(&given)?
+        normalise(given)?
     };
     let folder = spelled
         .file_name()
