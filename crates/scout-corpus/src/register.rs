@@ -76,6 +76,7 @@ pub struct Removed {
 }
 
 type RenameFn = fn(&Path, &Path) -> std::io::Result<()>;
+type HookFn = fn(&Path);
 
 /// The registry file and index directory registration works against.
 #[derive(Debug, Clone)]
@@ -83,6 +84,7 @@ pub struct RegistryStore {
     path: PathBuf,
     index_dir: PathBuf,
     rename: RenameFn,
+    after_lock: HookFn,
 }
 
 impl RegistryStore {
@@ -91,6 +93,7 @@ impl RegistryStore {
             path: registry_path.into(),
             index_dir: index_dir.into(),
             rename: |a, b| std::fs::rename(a, b),
+            after_lock: |_| {},
         }
     }
 
@@ -105,6 +108,14 @@ impl RegistryStore {
     #[doc(hidden)]
     pub fn with_rename(mut self, rename: RenameFn) -> RegistryStore {
         self.rename = rename;
+        self
+    }
+
+    /// Test seam: run `hook(registry_path)` in `add` just after the lock is
+    /// taken (to change the filesystem while `add` waits for the lock).
+    #[doc(hidden)]
+    pub fn with_after_lock(mut self, hook: HookFn) -> RegistryStore {
+        self.after_lock = hook;
         self
     }
 
@@ -128,16 +139,14 @@ impl RegistryStore {
     /// Register a folder; creates the registry when missing. Does not build
     /// the index.
     pub fn add(&self, req: &AddCorpus) -> Result<CorpusConfig> {
-        // First, before anything can create a directory: the requested
-        // folder must exist, so its canonical path is known.
-        let src = resolve_source(req)?;
-        // Before the lock: taking it creates the lock file, which must not
-        // land inside a source folder, registered or new.
-        refuse_index_store_overlap(&src.canonical, &self.index_dir)?;
-        let mut sources = registered_sources(&self.path);
-        sources.push(src.canonical.clone());
-        check_registry_location(&self.path, &sources)?;
+        // Before the lock (taking it creates the lock file and maybe its
+        // directory): nothing is created for a missing or refused folder.
+        self.validate_source(req)?;
         let _lock = lock_registry(&self.path)?;
+        (self.after_lock)(&self.path);
+        // Again under the lock, resolved afresh: a symlink retargeted while
+        // `add` waited is judged by where it points now.
+        let src = self.validate_source(req)?;
         let existing = self.read()?;
         let reg = existing
             .as_ref()
@@ -166,6 +175,17 @@ impl RegistryStore {
         };
         write_atomic(&self.path, &text, self.rename)?;
         Ok(cfg)
+    }
+
+    /// The requested folder resolved now, checked against the index store
+    /// and the registry location (registered sources plus this one).
+    fn validate_source(&self, req: &AddCorpus) -> Result<Source> {
+        let src = resolve_source(req)?;
+        refuse_index_store_overlap(&src.canonical, &self.index_dir)?;
+        let mut sources = registered_sources(&self.path);
+        sources.push(src.canonical.clone());
+        check_registry_location(&self.path, &sources)?;
+        Ok(src)
     }
 
     /// Unregister a corpus and, unless `keep_index`, delete its index files
