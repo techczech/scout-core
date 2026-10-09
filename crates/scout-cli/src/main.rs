@@ -32,7 +32,7 @@ fn embedder() -> Result<Arc<dyn scout_corpus::Embedder>> {
 #[command(
     name = "scout",
     version,
-    about = "Search and cite across Dominik's writing, tweets and highlights"
+    about = "Search and cite across your registered corpora of writing and highlights"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -293,14 +293,70 @@ enum CorporaCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Write the default registry (writing, tweets, highlights).
+    /// Register a folder as a corpus (creates the registry when missing).
+    /// Does not build its index: run `scout index build <id>` next.
+    Add {
+        /// The folder (`~` is expanded).
+        path: String,
+        /// Corpus id (default: a slug of the folder name).
+        #[arg(long)]
+        id: Option<String>,
+        /// Display name (default: the folder name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Default: markdown-folder. A Highlight Scout archive must be named
+        /// (`--kind highlight-scout-archive`); its folder needs readings/works/.
+        #[arg(long, value_enum)]
+        kind: Option<KindArg>,
+        /// Author of documents that name none.
+        #[arg(long)]
+        author: Option<String>,
+        /// Files to index, repeatable (default for markdown-folder: **/*.md, **/*.txt).
+        #[arg(long)]
+        include: Vec<String>,
+        /// Files to skip, repeatable.
+        #[arg(long)]
+        exclude: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Unregister a corpus and delete its index. The folder is left alone.
+    Remove {
+        id: String,
+        /// Keep the corpus's index files.
+        #[arg(long)]
+        keep_index: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write an empty registry that explains `scout corpora add`.
     InitDefaults {
         /// Overwrite an existing registry.
         #[arg(long)]
         force: bool,
+        // `--preset dominik` writes the maintainer's own three corpora
+        // (registry::Preset::Maintainer). Hidden on purpose: not in --help,
+        // not in any error message.
+        #[arg(long, hide = true)]
+        preset: Option<String>,
     },
     /// Show one corpus entry and its index location.
     Show { id: String },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum KindArg {
+    MarkdownFolder,
+    HighlightScoutArchive,
+}
+
+impl From<KindArg> for scout_corpus::CorpusKind {
+    fn from(k: KindArg) -> Self {
+        match k {
+            KindArg::MarkdownFolder => scout_corpus::CorpusKind::MarkdownFolder,
+            KindArg::HighlightScoutArchive => scout_corpus::CorpusKind::HighlightScoutArchive,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -373,14 +429,65 @@ fn out<T: serde::Serialize + Outcome>(
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
-    if let Cmd::Corpora {
-        cmd: CorporaCmd::InitDefaults { force },
-    } = cli.cmd
-    {
-        let r = api::init_defaults(force)?;
-        views::print_init_defaults(&r);
-        return Ok(ExitCode::SUCCESS);
-    }
+    // Registry writes run before the engine loads: the registry may not
+    // exist yet.
+    let cli = match cli.cmd {
+        Cmd::Corpora { cmd } => match cmd {
+            CorporaCmd::InitDefaults { force, preset } => {
+                let preset = match preset.as_deref() {
+                    None => scout_corpus::Preset::Empty,
+                    Some("dominik") => scout_corpus::Preset::Maintainer,
+                    Some(other) => anyhow::bail!("unknown preset {other:?}"),
+                };
+                let r = api::init_defaults(force, preset)?;
+                views::print_init_defaults(&r);
+                return Ok(ExitCode::SUCCESS);
+            }
+            CorporaCmd::Add {
+                path,
+                id,
+                name,
+                kind,
+                author,
+                include,
+                exclude,
+                json,
+            } => {
+                let cfg = api::add_corpus(AddCorpus {
+                    path,
+                    id,
+                    name,
+                    kind: kind.map(Into::into),
+                    author,
+                    include,
+                    exclude,
+                })?;
+                if json {
+                    println!("{}", api::to_json(&cfg)?);
+                } else {
+                    views::print_added(&cfg);
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            CorporaCmd::Remove {
+                id,
+                keep_index,
+                json,
+            } => {
+                let r = api::remove_corpus(&id, keep_index)?;
+                if json {
+                    println!("{}", api::to_json(&r)?);
+                } else {
+                    views::print_removed(&r);
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            cmd => Cli {
+                cmd: Cmd::Corpora { cmd },
+            },
+        },
+        cmd => Cli { cmd },
+    };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
     match cli.cmd {
         Cmd::Search {
@@ -621,7 +728,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 views::print_corpus_show(&r.body);
                 Ok(ExitCode::SUCCESS)
             }
-            CorporaCmd::InitDefaults { .. } => unreachable!("handled above"),
+            CorporaCmd::InitDefaults { .. }
+            | CorporaCmd::Add { .. }
+            | CorporaCmd::Remove { .. } => {
+                unreachable!("handled above")
+            }
         },
     }
 }
