@@ -58,7 +58,17 @@ pub fn records(cfg: &CorpusConfig, rel_path: &str, text: &str) -> Vec<DocRecord>
             if !markdown::is_document(cfg, &parsed) {
                 return vec![];
             }
-            let meta = markdown::doc_meta(cfg, &parsed);
+            let mut meta = markdown::doc_meta(cfg, &parsed);
+            let fm_title = parsed
+                .frontmatter
+                .as_ref()
+                .and_then(|fm| fm.get(&cfg.field_map.title))
+                .and_then(|v| v.as_scalar());
+            if fm_title.is_none() {
+                if let Some(stem) = plain_text_title(rel_path) {
+                    meta.title = Some(stem);
+                }
+            }
             let passages = markdown::split_passages(&parsed)
                 .into_iter()
                 .map(|p| PassageRecord {
@@ -76,4 +86,14 @@ pub fn records(cfg: &CorpusConfig, rel_path: &str, text: &str) -> Vec<DocRecord>
             }]
         }
     }
+}
+
+/// A `.txt` file without a frontmatter title is titled by its file stem
+/// (`notes/On reading.txt` → `On reading`); a `#` line in plain text is not
+/// taken for a heading title. Markdown files keep their frontmatter or
+/// heading title, or none. The date stays unset either way.
+fn plain_text_title(rel_path: &str) -> Option<String> {
+    let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    let (stem, ext) = name.rsplit_once('.')?;
+    (ext.eq_ignore_ascii_case("txt") && !stem.trim().is_empty()).then(|| stem.trim().to_string())
 }

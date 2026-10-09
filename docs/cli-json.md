@@ -522,7 +522,38 @@ Every registered corpus, in registry order. Without an index: `exists` false, ze
 ## `scout corpora list --json` — schema_version 1
 
 ```json
-{"schema_version": 1, "corpora": [{"id": "writing", "name": "Writing", "kind": "markdown-folder", "path": "~/gitrepos/…/writing", "root": "/Users/…/writing", "index_path": "/abs/…/writing.sqlite", "index_built": true}]}
+{"schema_version": 1, "corpora": [{"id": "notes", "name": "Notes", "kind": "markdown-folder", "path": "~/Notes", "root": "/Users/…/Notes", "index_path": "/abs/…/notes.sqlite", "index_built": true, "folder_exists": true}]}
 ```
 
-`path` is as written in the registry; `root` is it expanded.
+`path` is as written in the registry; `root` is it expanded. `folder_exists` is false when the source folder is gone: the entry and its index are kept and stay searchable (the human list appends `(folder missing)`); nothing is removed automatically.
+
+## `scout corpora add <folder> [--id] [--name] [--kind] [--author] [--include <glob>]… [--exclude <glob>]… --json`
+
+The added registry entry, exactly as written to the registry (the `[[corpus]]` table as JSON; no `schema_version`, because it is the registry's own shape):
+
+```json
+{"id": "notes", "name": "Notes", "kind": "markdown-folder", "path": "~/Notes", "include": ["**/*.md", "**/*.txt"], "exclude": [], "require_frontmatter": [], "field_map": {"title": "title", "date": "date", "…": "…"}, "boilerplate": []}
+```
+
+- `path`: absolute, with `~` when under the home folder; `~` in the argument is expanded. The folder must exist.
+- `id`: default a slug of the folder name (ASCII, lower case, accents dropped), de-duplicated as `notes`, `notes-2`. An explicit `--id` already in use is refused, naming the clash.
+- `kind`: default `markdown-folder`; never guessed from the folder's contents. `highlight-scout-archive` only when asked for (`--kind highlight-scout-archive`), and the folder must have `readings/works/`.
+- markdown-folder defaults: include `**/*.md` and `**/*.txt`, no required frontmatter, no link template, no default author, one document per file. A `.txt` file with no frontmatter title is titled by its file stem and stays undated.
+- Refused (exit 2, registry unchanged): a missing path or a file, a path already registered (`path … already registered as \`<id>\``), a clashing id, a bad glob, a registry that does not parse.
+- Creates the registry when missing. Does not build the index; the human output ends `next: scout index build <id>`.
+
+Library: `scout_corpus::api::add_corpus(AddCorpus) -> Result<CorpusConfig>` (the user registry); `scout_corpus::register::RegistryStore::new(registry_path, index_dir).add(&AddCorpus)` for an explicit registry. `AddCorpus` is a serde struct with every field but `path` optional: `{"path": "~/Notes", "id": null, "name": null, "kind": null, "author": null, "include": [], "exclude": []}`.
+
+## `scout corpora remove <id> [--keep-index] --json` — schema_version 1
+
+```json
+{"schema_version": 1, "id": "notes", "path": "~/Notes", "index_kept": false, "deleted": ["/abs/…/notes.sqlite", "/abs/…/notes.vectors.sqlite"]}
+```
+
+Removes the registry entry and, unless `--keep-index`, the corpus's word index and meaning vectors (with SQLite side files); `deleted` lists the files removed. The source folder is never touched. An unknown id is the usual `unknown corpus` error (exit 2); no registry is `RegistryMissing` (exit 3).
+
+Library: `scout_corpus::api::remove_corpus(id, keep_index) -> Result<Removed>`, or `RegistryStore::remove`.
+
+## Registry writes
+
+`add`, `remove` and `init-defaults` write the registry atomically (a temp file in the same directory, then a rename); a failed write leaves the old file as it was. `add` appends the new `[[corpus]]` table and `remove` cuts the entry's lines, so the rest of the file, comments included, stays byte-for-byte; when a hand-edited layout cannot be edited that way, the file is regenerated with its leading comment block kept. `init-defaults` writes an empty registry whose comment explains `scout corpora add`. With no registry, every other command fails with `no corpus registry at <path>; add a folder with \`scout corpora add <folder>\`` (exit 3).

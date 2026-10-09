@@ -223,7 +223,7 @@ impl std::fmt::Display for RegistryMissing {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "no corpus registry at {}; run `scout corpora init-defaults`",
+            "no corpus registry at {}; add a folder with `scout corpora add <folder>`",
             self.0.display()
         )
     }
@@ -301,71 +301,21 @@ impl Registry {
         Ok(toml::to_string_pretty(self)?)
     }
 
-    /// The three default corpora. `highlights` is included only when the
-    /// Highlight Scout config names an archive path.
-    pub fn defaults() -> Registry {
-        let writing = "~/gitrepos/02_writing-creation/writing";
-        let mut corpora = vec![
-            CorpusConfig {
-                id: "writing".into(),
-                name: "Writing".into(),
-                kind: CorpusKind::MarkdownFolder,
-                path: writing.into(),
-                include: vec!["**/*.md".into()],
-                exclude: vec![
-                    "cache/**".into(),
-                    "_sources/**".into(),
-                    "indexes/**".into(),
-                    "docs/**".into(),
-                    "tweets/**".into(),
-                ],
-                require_frontmatter: vec!["genre".into()],
-                field_map: FieldMap {
-                    author: "authors".into(),
-                    public_url: writing_public_url(),
-                    ..FieldMap::default()
-                },
-                default_author: Some("Dominik Lukeš".into()),
-                boilerplate: vec![],
-                link: Some(WRITEFLEX_LINK.into()),
-                document_unit: DocumentUnit::File,
-            },
-            CorpusConfig {
-                id: "tweets".into(),
-                name: "Tweets".into(),
-                kind: CorpusKind::MarkdownFolder,
-                path: format!("{writing}/tweets"),
-                include: vec!["**/*.md".into()],
-                exclude: vec![],
-                require_frontmatter: vec![],
-                field_map: FieldMap {
-                    author: "authors".into(),
-                    public_url: writing_public_url(),
-                    ..FieldMap::default()
-                },
-                default_author: Some("Dominik Lukeš".into()),
-                boilerplate: vec![],
-                link: Some(WRITEFLEX_LINK.into()),
-                document_unit: DocumentUnit::Tweet,
-            },
-        ];
-        if let Some(archive) = highlight_scout_archive_path() {
-            corpora.push(CorpusConfig {
-                id: "highlights".into(),
-                name: "Highlights".into(),
-                kind: CorpusKind::HighlightScoutArchive,
-                path: archive,
-                include: vec![],
-                exclude: vec![],
-                require_frontmatter: vec![],
-                field_map: FieldMap::default(),
-                default_author: None,
-                boilerplate: vec![],
-                link: None,
-                document_unit: DocumentUnit::File,
-            });
+    /// Render the registry file: `header` (comment lines), then the
+    /// entries. An empty registry is the header alone, so a later append of
+    /// a `[[corpus]]` table stays valid TOML.
+    pub fn render(&self, header: &str) -> Result<String> {
+        let mut out = String::from(header);
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
         }
-        Registry { corpora }
+        if !self.corpora.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&self.to_toml()?);
+        }
+        Ok(out)
     }
 }
 
@@ -378,19 +328,120 @@ pub fn highlight_scout_archive_path() -> Option<String> {
     v.get("archive_path")?.as_str().map(|s| s.to_string())
 }
 
-/// Write the default registry to `path`. Refuses to overwrite unless `force`.
-/// Returns false (and writes nothing) when the file exists and `force` is off.
-pub fn init_defaults(path: &Path, force: bool) -> Result<bool> {
+/// The header of a registry written by `init-defaults` or by the first
+/// `corpora add`.
+pub const REGISTRY_HEADER: &str = "# Scout corpus registry. One [[corpus]] per corpus.\n\
+# Add a folder with `scout corpora add <folder>`, then build its index with\n\
+# `scout index build <id>`. `scout corpora remove <id>` takes one out again.\n";
+
+/// What `init-defaults` writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Preset {
+    /// An empty registry whose header explains `scout corpora add`.
+    #[default]
+    Empty,
+    /// The maintainer's own corpora: the `--preset dominik` block below.
+    Maintainer,
+}
+
+impl Preset {
+    fn registry(self) -> Registry {
+        match self {
+            Preset::Empty => Registry::default(),
+            Preset::Maintainer => maintainer_preset(),
+        }
+    }
+
+    fn header(self) -> &'static str {
+        match self {
+            Preset::Empty => REGISTRY_HEADER,
+            Preset::Maintainer => "# Scout corpus registry. One [[corpus]] per corpus.\n# Written by `scout corpora init-defaults`.\n",
+        }
+    }
+}
+
+// ---- `--preset dominik` -------------------------------------------------
+// The maintainer's own three corpora, written only by
+// `scout corpora init-defaults --preset dominik` (a hidden flag, deliberately
+// absent from `--help` and from every error message). `highlights` is
+// included only when the Highlight Scout config names an archive path.
+fn maintainer_preset() -> Registry {
+    let writing = "~/gitrepos/02_writing-creation/writing";
+    let mut corpora = vec![
+        CorpusConfig {
+            id: "writing".into(),
+            name: "Writing".into(),
+            kind: CorpusKind::MarkdownFolder,
+            path: writing.into(),
+            include: vec!["**/*.md".into()],
+            exclude: vec![
+                "cache/**".into(),
+                "_sources/**".into(),
+                "indexes/**".into(),
+                "docs/**".into(),
+                "tweets/**".into(),
+            ],
+            require_frontmatter: vec!["genre".into()],
+            field_map: FieldMap {
+                author: "authors".into(),
+                public_url: writing_public_url(),
+                ..FieldMap::default()
+            },
+            default_author: Some("Dominik Lukeš".into()),
+            boilerplate: vec![],
+            link: Some(WRITEFLEX_LINK.into()),
+            document_unit: DocumentUnit::File,
+        },
+        CorpusConfig {
+            id: "tweets".into(),
+            name: "Tweets".into(),
+            kind: CorpusKind::MarkdownFolder,
+            path: format!("{writing}/tweets"),
+            include: vec!["**/*.md".into()],
+            exclude: vec![],
+            require_frontmatter: vec![],
+            field_map: FieldMap {
+                author: "authors".into(),
+                public_url: writing_public_url(),
+                ..FieldMap::default()
+            },
+            default_author: Some("Dominik Lukeš".into()),
+            boilerplate: vec![],
+            link: Some(WRITEFLEX_LINK.into()),
+            document_unit: DocumentUnit::Tweet,
+        },
+    ];
+    if let Some(archive) = highlight_scout_archive_path() {
+        corpora.push(CorpusConfig {
+            id: "highlights".into(),
+            name: "Highlights".into(),
+            kind: CorpusKind::HighlightScoutArchive,
+            path: archive,
+            include: vec![],
+            exclude: vec![],
+            require_frontmatter: vec![],
+            field_map: FieldMap::default(),
+            default_author: None,
+            boilerplate: vec![],
+            link: None,
+            document_unit: DocumentUnit::File,
+        });
+    }
+    Registry { corpora }
+}
+// ---- end `--preset dominik` ---------------------------------------------
+
+/// Write a starter registry to `path`: empty by default, or a preset.
+/// Refuses to overwrite unless `force`; returns false (and writes nothing)
+/// when the file exists and `force` is off. The write is atomic and holds
+/// the registry lock (see [`crate::register`]).
+pub fn init_defaults(path: &Path, force: bool, preset: Preset) -> Result<bool> {
+    crate::register::check_registry_location(path, &crate::register::registered_sources(path))?;
+    let _lock = crate::register::lock_registry(path)?;
     if path.exists() && !force {
         return Ok(false);
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let body = format!(
-        "# Scout corpus registry. One [[corpus]] per corpus.\n# Written by `scout corpora init-defaults`.\n\n{}",
-        Registry::defaults().to_toml()?
-    );
-    std::fs::write(path, body)?;
+    let body = preset.registry().render(preset.header())?;
+    crate::register::write_atomic(path, &body, |a, b| std::fs::rename(a, b))?;
     Ok(true)
 }

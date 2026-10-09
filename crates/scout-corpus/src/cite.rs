@@ -200,7 +200,7 @@ fn push_links(out: &mut String, links: &[(&str, Option<&str>)], md: bool) {
     }
 }
 
-/// `— Dominik Lukeš (@techczech), tweet, 26 July 2025 · [public](…)`; the
+/// `— A. Writer (@handle), tweet, 26 July 2025 · [public](…)`; the
 /// archive link stands in when there is no public URL.
 fn tweet_attribution(src: &CiteSource, md: bool) -> String {
     let mut who = src
