@@ -2,7 +2,7 @@
 //! Formatting only; every number comes from `scout-corpus`.
 
 use scout_corpus::api::{
-    CorporaList, CorpusShow, IndexBuildReport, IndexStatusReport, InitDefaults,
+    CorporaList, CorpusShow, IndexBuildReport, IndexStatusReport, InitDefaults, Removed,
 };
 use scout_corpus::clean::CleanReport;
 use scout_corpus::colloc::{CollocResults, CompareResults};
@@ -12,6 +12,7 @@ use scout_corpus::ngrams::NgramResults;
 use scout_corpus::rowdist::RowDist;
 use scout_corpus::similar::SimilarResults;
 use scout_corpus::verify::VerifyResult;
+use scout_corpus::CorpusConfig;
 use std::process::ExitCode;
 
 /// Exit 0 with results, 1 without.
@@ -572,15 +573,44 @@ pub fn print_init_defaults(r: &InitDefaults) {
     }
 }
 
+pub fn print_added(c: &CorpusConfig) {
+    println!("added {} ({}) {}", c.id, c.kind.as_str(), c.path);
+    if !c.include.is_empty() {
+        println!("  include {}", c.include.join(", "));
+    }
+    if !c.exclude.is_empty() {
+        println!("  exclude {}", c.exclude.join(", "));
+    }
+    println!("next: scout index build {}", c.id);
+}
+
+pub fn print_removed(r: &Removed) {
+    println!("removed {} ({} left untouched)", r.id, r.path);
+    if r.index_kept {
+        println!("  index kept");
+    } else if r.deleted.is_empty() {
+        println!("  no index to delete");
+    } else {
+        for p in &r.deleted {
+            println!("  deleted {p}");
+        }
+    }
+}
+
 pub fn print_corpora(r: &CorporaList) {
     println!("{:<11} {:<24} {:<8} path", "id", "kind", "index");
     for c in &r.corpora {
         println!(
-            "{:<11} {:<24} {:<8} {}",
+            "{:<11} {:<24} {:<8} {}{}",
             c.id,
             c.kind,
             if c.index_built { "built" } else { "missing" },
-            c.path
+            c.path,
+            if c.folder_exists {
+                ""
+            } else {
+                "  (folder missing)"
+            }
         );
     }
 }

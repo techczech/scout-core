@@ -100,7 +100,7 @@ pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
     meta_get(conn, GENERATION_KEY)
 }
 
-fn remove_index_files(path: &Path) -> Result<()> {
+pub(crate) fn remove_index_files(path: &Path) -> Result<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let p = PathBuf::from(format!("{}{}", path.display(), suffix));
         if p.exists() {

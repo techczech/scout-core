@@ -17,7 +17,7 @@
 //!
 //! highlighted_at: 2021-04-03 | tags: a, b | color: yellow
 //!
-//! an optional note (Dominik's, not the author's: not indexed)
+//! an optional note (the reader's, not the author's: not indexed)
 //!
 //! ---
 //! ```
