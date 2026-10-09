@@ -2,8 +2,16 @@
 //! read-modify-write of the registry file, plus kind detection.
 //!
 //! - The only files written are the registry (atomically: a temp file in
-//!   the same directory, then a rename) and, on remove, the corpus's own
-//!   index files. A corpus's source folder is never written or deleted.
+//!   the same directory, created exclusively, then a rename), its lock file
+//!   and, on remove, the corpus's own index files. A corpus's source folder
+//!   is never written or deleted: an index file that lies inside any
+//!   registered source folder is refused, and a folder that holds the index
+//!   store (or lies inside it) cannot be registered.
+//! - Every read-modify-write holds an exclusive lock on `<registry>.lock`
+//!   (beside the registry), so concurrent adds and removes, in threads or
+//!   processes, never lose an update.
+//! - Removal deletes the index files first and unregisters only when every
+//!   one is gone, so a failed removal can be retried.
 //! - An edit keeps the rest of the file byte-for-byte where it can (a new
 //!   entry is appended; a removed entry's lines are cut). When the edited
 //!   text would not parse back to exactly the intended registry, the file
@@ -19,6 +27,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Schema version of the `corpora remove --json` body.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -38,8 +47,7 @@ pub struct AddCorpus {
     pub id: Option<String>,
     /// Default: the folder name.
     pub name: Option<String>,
-    /// Default: detected (a Highlight Scout archive has `readings/works/`),
-    /// else markdown-folder.
+    /// Default: detected (see [`detect_kind`]), else markdown-folder.
     pub kind: Option<CorpusKind>,
     /// The author of documents that name none.
     pub author: Option<String>,
@@ -115,12 +123,13 @@ impl RegistryStore {
     /// Register a folder; creates the registry when missing. Does not build
     /// the index.
     pub fn add(&self, req: &AddCorpus) -> Result<CorpusConfig> {
+        let _lock = lock_registry(&self.path)?;
         let existing = self.read()?;
         let reg = existing
             .as_ref()
             .map(|(_, r)| r.clone())
             .unwrap_or_default();
-        let cfg = new_config(req, &reg)?;
+        let cfg = new_config(req, &reg, &self.index_dir)?;
         let mut want = reg.clone();
         want.corpora.push(cfg.clone());
         let text = match &existing {
@@ -145,9 +154,14 @@ impl RegistryStore {
         Ok(cfg)
     }
 
-    /// Unregister a corpus and, unless `keep_index`, delete its index files.
-    /// The source folder is never touched.
+    /// Unregister a corpus and, unless `keep_index`, delete its index files
+    /// first. The source folder is never touched. When an index file cannot
+    /// be deleted (or must not be: it lies inside a registered source
+    /// folder, or another corpus's id differs only by case and so shares
+    /// it), the error names it and the corpus stays registered, so a retry
+    /// (or `keep_index`) works.
     pub fn remove(&self, id: &str, keep_index: bool) -> Result<Removed> {
+        let _lock = lock_registry(&self.path)?;
         let Some((old, reg)) = self.read()? else {
             return Err(RegistryMissing(self.path.clone()).into());
         };
@@ -156,12 +170,12 @@ impl RegistryStore {
         let mut want = reg.clone();
         want.corpora.remove(pos);
         let text = spliced_or_rendered(cut_entry(&old, pos, reg.corpora.len()), &want, &old)?;
-        write_atomic(&self.path, &text, self.rename)?;
         let deleted = if keep_index {
             vec![]
         } else {
-            delete_index_files(&self.index_dir, id)?
+            delete_index_files(&self.index_dir, id, &reg)?
         };
+        write_atomic(&self.path, &text, self.rename)?;
         Ok(Removed {
             schema_version: SCHEMA_VERSION,
             id: cfg.id,
@@ -172,38 +186,99 @@ impl RegistryStore {
     }
 }
 
-/// A folder's corpus kind: a Highlight Scout archive has `readings/works/`.
+/// A folder's corpus kind. A Highlight Scout archive is recognised by the
+/// layout its writers (Highlight Scout, `scout-archive`) always create,
+/// `readings/works/` and `readings/fulltext/`, and by a work file in
+/// `readings/works/` whose frontmatter carries `source_system:` and
+/// `source_id:` (an archive with no works yet passes on the layout alone).
+/// Anything else, including a plain folder that happens to have a
+/// `readings/works/` directory, is a markdown-folder.
 pub fn detect_kind(dir: &Path) -> CorpusKind {
-    if dir.join("readings").join("works").is_dir() {
-        CorpusKind::HighlightScoutArchive
-    } else {
-        CorpusKind::MarkdownFolder
+    let works = dir.join("readings").join("works");
+    if !works.is_dir() || !dir.join("readings").join("fulltext").is_dir() {
+        return CorpusKind::MarkdownFolder;
+    }
+    let first_work = std::fs::read_dir(&works).ok().and_then(|it| {
+        it.filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "md") && p.is_file())
+    });
+    match first_work {
+        None => CorpusKind::HighlightScoutArchive,
+        Some(p) if is_work_file(&p) => CorpusKind::HighlightScoutArchive,
+        Some(_) => CorpusKind::MarkdownFolder,
     }
 }
 
+/// True when the file opens with frontmatter naming `source_system` and
+/// `source_id` (the head of an ADR-0003 v2 work file).
+fn is_work_file(p: &Path) -> bool {
+    use std::io::{BufRead, BufReader};
+    let Ok(f) = std::fs::File::open(p) else {
+        return false;
+    };
+    let mut lines = BufReader::new(f).lines().map_while(|l| l.ok()).take(60);
+    if lines.next().as_deref().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    let (mut system, mut source_id) = (false, false);
+    for l in lines {
+        if l.trim_end() == "---" {
+            break;
+        }
+        system |= l.starts_with("source_system:");
+        source_id |= l.starts_with("source_id:");
+    }
+    system && source_id
+}
+
 /// Validate a request against the registry and build the new entry.
-fn new_config(req: &AddCorpus, reg: &Registry) -> Result<CorpusConfig> {
+fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<CorpusConfig> {
     if req.path.trim().is_empty() {
         bail!("no folder given");
     }
-    let abs = normalise(&expand_home(req.path.trim()))?;
-    if !abs.exists() {
-        bail!("no folder at {}", abs.display());
-    }
+    let given = std::path::absolute(expand_home(req.path.trim()))
+        .with_context(|| format!("resolve {}", req.path.trim()))?;
+    // The filesystem resolves symlinks before `..`, so `link/../x` is the
+    // `x` beside the link's target, not beside the link.
+    let abs = match given.canonicalize() {
+        Ok(c) => c,
+        Err(_) => bail!("no folder at {}", normalise(&given)?.display()),
+    };
     if !abs.is_dir() {
         bail!("{} is a file, not a folder", abs.display());
     }
-    let canon = abs.canonicalize().unwrap_or_else(|_| abs.clone());
     for c in &reg.corpora {
-        let root = c.root();
-        let theirs = root
-            .canonicalize()
-            .unwrap_or_else(|_| normalise(&root).unwrap_or(root));
-        if theirs == canon {
+        if source_root(c) == abs {
             bail!("path {} already registered as `{}`", abs.display(), c.id);
         }
     }
-    let folder = abs
+    let store = index::canonical_prefix(index_dir);
+    if store.starts_with(&abs) {
+        bail!(
+            "{} holds the index store {}; refusing to register it (its index files would \
+             live inside the source folder)",
+            abs.display(),
+            store.display()
+        );
+    }
+    if abs.starts_with(&store) {
+        bail!(
+            "{} is inside the index store {}; refusing to register it",
+            abs.display(),
+            store.display()
+        );
+    }
+    // Stored as the user spelled it (a symlink kept as a symlink, e.g. a
+    // stable link to a cloud-storage mount), cleaned of `.`; only a path
+    // with `..` is stored canonical, since its meaning depends on symlinks.
+    // Validation and guards above always use the canonical path.
+    let spelled = if given.components().any(|c| c == Component::ParentDir) {
+        abs.clone()
+    } else {
+        normalise(&given)?
+    };
+    let folder = spelled
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "corpus".into());
@@ -217,9 +292,11 @@ fn new_config(req: &AddCorpus, reg: &Registry) -> Result<CorpusConfig> {
             {
                 bail!("corpus id {id:?} must be ASCII letters, digits, - or _");
             }
-            if let Some(c) = reg.corpora.iter().find(|c| c.id == id) {
+            if let Some(c) = reg.corpora.iter().find(|c| ids_clash(&c.id, id)) {
                 bail!(
-                    "corpus id `{id}` is already registered (for {}); choose another --id",
+                    "corpus id `{id}` is already registered as `{}` (for {}); ids may not \
+                     differ only by case; choose another --id",
+                    c.id,
                     c.path
                 );
             }
@@ -250,7 +327,7 @@ fn new_config(req: &AddCorpus, reg: &Registry) -> Result<CorpusConfig> {
         id,
         name,
         kind,
-        path: stored_path(&abs),
+        path: stored_path(&spelled),
         include,
         exclude: req.exclude.clone(),
         require_frontmatter: vec![],
@@ -268,7 +345,8 @@ fn new_config(req: &AddCorpus, reg: &Registry) -> Result<CorpusConfig> {
 }
 
 /// Absolute and lexically clean (`.` and `..` resolved, no trailing `/`);
-/// symlinks are kept as written.
+/// symlinks are kept as written. Only for paths that do not exist (error
+/// messages, missing source folders): an existing path is canonicalised.
 fn normalise(p: &Path) -> Result<PathBuf> {
     let abs = std::path::absolute(p).with_context(|| format!("resolve {}", p.display()))?;
     let mut out = PathBuf::new();
@@ -284,14 +362,32 @@ fn normalise(p: &Path) -> Result<PathBuf> {
     Ok(out)
 }
 
-/// The registry form of an absolute path: `~/…` under the home folder.
+/// A registered corpus's source folder, canonical when it exists, else
+/// lexically clean.
+fn source_root(c: &CorpusConfig) -> PathBuf {
+    let root = c.root();
+    root.canonicalize()
+        .unwrap_or_else(|_| normalise(&root).unwrap_or(root))
+}
+
+/// Index files are named by id, and a case-insensitive filesystem (the
+/// macOS default) treats `notes` and `NOTES` as one file: such ids clash.
+fn ids_clash(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// The registry form of an absolute path: `~/…` when under the home
+/// folder, as spelled or canonical.
 fn stored_path(abs: &Path) -> String {
     if let Some(home) = dirs::home_dir() {
-        if abs == home {
-            return "~".into();
-        }
-        if let Ok(rest) = abs.strip_prefix(&home) {
-            return format!("~/{}", rest.to_string_lossy());
+        let canon = home.canonicalize().unwrap_or_else(|_| home.clone());
+        for h in [home, canon] {
+            if abs == h {
+                return "~".into();
+            }
+            if let Ok(rest) = abs.strip_prefix(&h) {
+                return format!("~/{}", rest.to_string_lossy());
+            }
         }
     }
     abs.to_string_lossy().into_owned()
@@ -320,7 +416,7 @@ fn slug(name: &str) -> String {
 }
 
 fn unique_id(base: &str, reg: &Registry) -> String {
-    let taken = |id: &str| reg.corpora.iter().any(|c| c.id == id);
+    let taken = |id: &str| reg.corpora.iter().any(|c| ids_clash(&c.id, id));
     if !taken(base) {
         return base.to_string();
     }
@@ -384,29 +480,79 @@ fn cut_entry(text: &str, pos: usize, count: usize) -> String {
     out
 }
 
+/// Hold an exclusive advisory lock on `<registry>.lock` (beside the
+/// registry) until the returned file is dropped. Serialises every
+/// read-modify-write of the registry across threads and processes. The lock
+/// file is never written to (opened without truncation) and never deleted.
+pub(crate) fn lock_registry(path: &Path) -> Result<std::fs::File> {
+    let dir = parent_dir(path);
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let lock = dir.join(format!(".{}.lock", file_name(path)));
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(&lock)
+        .with_context(|| format!("open {}", lock.display()))?;
+    f.lock()
+        .with_context(|| format!("lock {}", lock.display()))?;
+    Ok(f)
+}
+
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "corpora.toml".into())
+}
+
+/// An unpredictable temp-file name beside `path`: pid, time, a per-process
+/// counter and a randomly seeded hash.
+fn temp_name(path: &Path) -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(nanos);
+    h.write_u64(n);
+    format!(
+        ".{}.{}.{n}.{:016x}.tmp",
+        file_name(path),
+        std::process::id(),
+        h.finish()
+    )
+}
+
 /// Write `text` to `path` atomically: a temp file in the same directory,
-/// flushed, then renamed over `path`. On any failure the temp file is
+/// created exclusively (`O_EXCL`: an existing file or symlink of that name
+/// is never opened, so nothing it points at is truncated), flushed, then
+/// renamed over `path`. On any failure a temp file this call created is
 /// removed and `path` is as it was.
 pub fn write_atomic(path: &Path, text: &str, rename: RenameFn) -> Result<()> {
-    let dir = path
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let dir = parent_dir(path);
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "corpora.toml".into());
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let tmp = dir.join(temp_name(path));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .with_context(|| format!("create {}", tmp.display()))?;
     let result = (|| -> Result<()> {
-        let mut f =
-            std::fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
-        drop(f);
         rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
         Ok(())
     })();
+    drop(f);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -414,20 +560,57 @@ pub fn write_atomic(path: &Path, text: &str, rename: RenameFn) -> Result<()> {
 }
 
 /// Delete a corpus's word index and meaning vectors (with SQLite side
-/// files) from `index_dir`; returns the files removed.
-fn delete_index_files(index_dir: &Path, id: &str) -> Result<Vec<String>> {
-    let mut deleted = Vec::new();
-    for base in [
+/// files) from `index_dir`; returns the files removed. Refuses, deleting
+/// nothing, when the index dir lies inside any registered source folder
+/// or another registered id differs from `id` only by case (the files are
+/// shared). Otherwise every file is tried, and an error names the files
+/// left behind.
+fn delete_index_files(index_dir: &Path, id: &str, reg: &Registry) -> Result<Vec<String>> {
+    let bases = [
         index::index_path_in(index_dir, id),
         index::vectors_path_in(index_dir, id),
-    ] {
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let p = PathBuf::from(format!("{}{suffix}", base.display()));
-            if p.is_file() {
-                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
-                deleted.push(p.display().to_string());
-            }
+    ];
+    let files: Vec<PathBuf> = bases.iter().flat_map(|b| index::sqlite_files(b)).collect();
+    if files.is_empty() {
+        return Ok(vec![]);
+    }
+    if let Some(other) = reg
+        .corpora
+        .iter()
+        .find(|c| c.id != id && ids_clash(&c.id, id))
+    {
+        bail!(
+            "corpus `{id}` left registered: its index files are shared with `{}` (ids differ \
+             only by case); remove it with --keep-index",
+            other.id
+        );
+    }
+    let store = index::canonical_prefix(index_dir);
+    for c in &reg.corpora {
+        let root = source_root(c);
+        if store.starts_with(&root) {
+            bail!(
+                "corpus `{id}` left registered: its index files in {} are inside the source \
+                 folder {} of `{}`; refusing to delete them (use --keep-index to unregister only)",
+                store.display(),
+                root.display(),
+                c.id
+            );
         }
+    }
+    let mut deleted = Vec::new();
+    let mut errors = Vec::new();
+    for b in &bases {
+        match index::remove_index_files(b) {
+            Ok(gone) => deleted.extend(gone.into_iter().map(|p| p.display().to_string())),
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
+    if !errors.is_empty() {
+        bail!(
+            "corpus `{id}` left registered (run the remove again to retry): {}",
+            errors.join("; ")
+        );
     }
     Ok(deleted)
 }
