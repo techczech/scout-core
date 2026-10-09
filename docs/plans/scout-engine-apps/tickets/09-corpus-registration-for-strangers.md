@@ -13,7 +13,7 @@
 
 1. `scout corpora add <path> [--id <id>] [--name <name>] [--kind markdown-folder|highlight-scout-archive] [--author <name>] [--include <glob>…] [--exclude <glob>…] [--json]`
    - Path must exist and be a directory; `~` expanded; stored as given (with `~` when under home).
-   - `--kind` defaults by detection: a Highlight Scout archive is recognised by its marker files; otherwise `markdown-folder`.
+   - `--kind` defaults to `markdown-folder`; archive is explicit (`--kind highlight-scout-archive`, which requires `readings/works/` in the folder). Decided in fix round 2: no detection from folder contents.
    - `--id` defaults to a slug of the folder name, de-duplicated (`notes`, `notes-2`); explicit id that clashes → error naming the clash.
    - Defaults for markdown-folder: include `**/*.md` and `**/*.txt`, no required frontmatter, no link template, no default author, document unit File.
    - Creates the registry if missing. Prints what was added and the next command (`scout index build <id>`). Does NOT build the index.
@@ -42,7 +42,7 @@
 | `.txt` without frontmatter | index build | indexed, titled by stem |
 | init-defaults | no flag | empty generic registry; grep finds no `gitrepos`, `Lukeš`, `writeflex` |
 
-**Seams under test:** registry read-modify-write (atomic), `api::add_corpus/remove_corpus`, kind detection.
+**Seams under test:** registry read-modify-write (atomic), `api::add_corpus/remove_corpus`, explicit-kind validation.
 **Sweep after:** `grep -rn "gitrepos\|Lukeš\|dominik" crates` returns only the `--preset dominik` block; Dominik's live `scout corpora list` output identical before/after the build (no write command run against his registry during tests: use a temp HOME/XDG dir).
 **Review:** owed (write path + public interface): Fable 5.1 for an Opus build.
 **Status:** built, review owed

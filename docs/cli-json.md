@@ -537,7 +537,7 @@ The added registry entry, exactly as written to the registry (the `[[corpus]]` t
 
 - `path`: absolute, with `~` when under the home folder; `~` in the argument is expanded. The folder must exist.
 - `id`: default a slug of the folder name (ASCII, lower case, accents dropped), de-duplicated as `notes`, `notes-2`. An explicit `--id` already in use is refused, naming the clash.
-- `kind`: default detected: `highlight-scout-archive` when the folder has `readings/works/`, else `markdown-folder`.
+- `kind`: default `markdown-folder`; never guessed from the folder's contents. `highlight-scout-archive` only when asked for (`--kind highlight-scout-archive`), and the folder must have `readings/works/`.
 - markdown-folder defaults: include `**/*.md` and `**/*.txt`, no required frontmatter, no link template, no default author, one document per file. A `.txt` file with no frontmatter title is titled by its file stem and stays undated.
 - Refused (exit 2, registry unchanged): a missing path or a file, a path already registered (`path … already registered as \`<id>\``), a clashing id, a bad glob, a registry that does not parse.
 - Creates the registry when missing. Does not build the index; the human output ends `next: scout index build <id>`.

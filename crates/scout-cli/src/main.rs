@@ -304,7 +304,8 @@ enum CorporaCmd {
         /// Display name (default: the folder name).
         #[arg(long)]
         name: Option<String>,
-        /// Default: detected (a Highlight Scout archive), else markdown-folder.
+        /// Default: markdown-folder. A Highlight Scout archive must be named
+        /// (`--kind highlight-scout-archive`); its folder needs readings/works/.
         #[arg(long, value_enum)]
         kind: Option<KindArg>,
         /// Author of documents that name none.
