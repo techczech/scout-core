@@ -29,6 +29,7 @@ pub mod markdown;
 pub mod ngrams;
 pub mod normalize;
 pub mod profile;
+pub mod register;
 pub mod registry;
 pub mod rowdist;
 pub mod search;
@@ -49,7 +50,10 @@ pub use filter::{DocFilter, SliceSpec};
 pub use index::{BuildReport, IndexMissing, IndexStatus, NoIndexedCorpus};
 pub use keyness::{KeynessRequest, KeynessResults};
 pub use ngrams::{NgramRequest, NgramResults};
-pub use registry::{CiteStyle, CorpusConfig, CorpusKind, DocumentUnit, Registry, RegistryMissing};
+pub use register::{AddCorpus, Removed};
+pub use registry::{
+    CiteStyle, CorpusConfig, CorpusKind, DocumentUnit, Preset, Registry, RegistryMissing,
+};
 pub use rowdist::RowDistBy;
 pub use search::{CitedPassage, PassageId, PassageNotFound, SearchRequest, SearchResults};
 pub use semantic::{Embedder, HashEmbedder, SearchMode};

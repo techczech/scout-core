@@ -19,7 +19,9 @@ use crate::filter::{DocFilter, SliceSpec};
 use crate::index::{self, BuildReport, IndexStatus, NoIndexedCorpus};
 use crate::keyness::{self, KeynessRequest, KeynessResults};
 use crate::ngrams::{self, NgramRequest, NgramResults};
-use crate::registry::{self, Registry};
+use crate::register::RegistryStore;
+pub use crate::register::{AddCorpus, Removed};
+use crate::registry::{self, CorpusConfig, Preset, Registry};
 use crate::search::{self, CitedPassage, PassageId, SearchRequest, SearchResults};
 use crate::semantic::{self, store, Embedder, Freshness, SearchMode};
 use crate::similar::{self, SimilarRequest, SimilarResults};
@@ -383,6 +385,9 @@ pub struct CorpusEntry {
     pub root: String,
     pub index_path: String,
     pub index_built: bool,
+    /// False when the source folder is gone; the index is kept and still
+    /// searchable (`corpora list` shows `folder missing`).
+    pub folder_exists: bool,
 }
 
 /// `corpora list --json`.
@@ -521,14 +526,16 @@ fn entry(cfg: &crate::CorpusConfig, dir: &Path) -> CorpusEntry {
         root: cfg.root().display().to_string(),
         index_path: p.display().to_string(),
         index_built: p.exists(),
+        folder_exists: cfg.root().is_dir(),
     }
 }
 
-/// `corpora init-defaults`: write the default registry to the user registry
-/// path (`$SCOUT_CONFIG`, else `~/.config/scout/corpora.toml`).
-pub fn init_defaults(force: bool) -> Result<InitDefaults> {
+/// `corpora init-defaults`: write a starter registry to the user registry
+/// path (`$SCOUT_CONFIG`, else `~/.config/scout/corpora.toml`): empty, with a
+/// comment on `scout corpora add`, unless a preset is named.
+pub fn init_defaults(force: bool, preset: Preset) -> Result<InitDefaults> {
     let path = registry::registry_path();
-    let wrote = registry::init_defaults(&path, force)?;
+    let wrote = registry::init_defaults(&path, force, preset)?;
     let reg = Registry::load_from(&path)?;
     let dir = index::index_dir();
     Ok(InitDefaults {
@@ -536,6 +543,20 @@ pub fn init_defaults(force: bool) -> Result<InitDefaults> {
         wrote,
         corpora: reg.corpora.iter().map(|c| entry(c, &dir)).collect(),
     })
+}
+
+/// `corpora add`: register a folder in the user registry (created when
+/// missing). Validation is the CLI's: the folder must exist, its path and
+/// id must be new. Does not build the index. See [`RegistryStore::add`] for
+/// an explicit registry path and index dir.
+pub fn add_corpus(req: AddCorpus) -> Result<CorpusConfig> {
+    RegistryStore::from_env().add(&req)
+}
+
+/// `corpora remove`: unregister a corpus from the user registry and delete
+/// its index files unless `keep_index`. Never touches the source folder.
+pub fn remove_corpus(id: &str, keep_index: bool) -> Result<Removed> {
+    RegistryStore::from_env().remove(id, keep_index)
 }
 
 impl Engine {

@@ -17,7 +17,7 @@ pub struct SourceFile {
     pub size: i64,
 }
 
-fn build_globs(patterns: &[String]) -> Result<GlobSet> {
+pub(crate) fn build_globs(patterns: &[String]) -> Result<GlobSet> {
     let mut b = GlobSetBuilder::new();
     for p in patterns {
         b.add(Glob::new(p).with_context(|| format!("bad glob {p:?}"))?);
