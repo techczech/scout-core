@@ -420,6 +420,18 @@ fn a_registry_inside_a_registered_source_refuses_every_write() {
 }
 
 #[test]
+fn adding_a_missing_folder_that_would_hold_the_registry_creates_nothing() {
+    // SCOUT_CONFIG=<tmp>/new/corpora.toml with <tmp>/new absent, then
+    // `corpora add <tmp>/new`: refused before the lock could create it.
+    let tmp = tempfile::tempdir().unwrap();
+    let new = tmp.path().join("new");
+    let s = RegistryStore::new(new.join("corpora.toml"), tmp.path().join("indexes"));
+    let e = s.add(&add(&new)).unwrap_err().to_string();
+    assert!(e.contains("no folder at"), "{e}");
+    assert!(!new.exists(), "{} was created", new.display());
+}
+
+#[test]
 fn a_registry_beside_a_source_folder_is_fine() {
     // SCOUT_CONFIG=/data/corpora.toml, then `corpora add /data/notes`.
     let tmp = tempfile::tempdir().unwrap();
