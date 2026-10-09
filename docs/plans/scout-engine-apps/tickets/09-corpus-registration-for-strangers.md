@@ -46,4 +46,4 @@
 **Seams under test:** registry read-modify-write (atomic), `api::add_corpus/remove_corpus`, explicit-kind validation.
 **Sweep after:** `grep -rn "gitrepos\|Lukeš\|dominik" crates` returns only the `--preset dominik` block; Dominik's live `scout corpora list` output identical before/after the build (no write command run against his registry during tests: use a temp HOME/XDG dir).
 **Review:** owed (write path + public interface): Fable 5.1 for an Opus build.
-**Status:** built, review owed
+**Status:** landed (Sol 6.1 safe to land, round 6)
