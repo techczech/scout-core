@@ -358,24 +358,83 @@ fn an_explicit_archive_kind_needs_readings_works() {
     assert!(cfg.include.is_empty(), "the adapter's own default applies");
 }
 
+/// The entries of a folder, sorted.
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
 #[test]
-fn add_refuses_a_folder_holding_or_inside_the_registry_folder() {
+fn a_new_folder_holding_the_registry_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("corpus");
     fs::create_dir_all(src.join("notes")).unwrap();
-    // The registry lives inside the folder being added; indexes elsewhere.
+    // The registry file would live inside the folder being added.
     let reg = src.join("config/corpora.toml");
     let s = RegistryStore::new(&reg, tmp.path().join("indexes"));
     let e = s.add(&add(&src)).unwrap_err().to_string();
-    assert!(e.contains("holds the corpus registry's folder"), "{e}");
+    assert!(e.contains("lies inside the source folder"), "{e}");
     assert!(!src.join("config").exists(), "no lock or registry written");
+}
 
-    // A folder inside the registry's folder.
-    let (s, _, _) = store(tmp.path());
-    let inside = tmp.path().join("config/sub");
-    fs::create_dir_all(&inside).unwrap();
-    let e = s.add(&add(&inside)).unwrap_err().to_string();
-    assert!(e.contains("inside the corpus registry's folder"), "{e}");
+#[test]
+fn a_registry_inside_a_registered_source_refuses_every_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let corpus = tmp.path().join("corpus");
+    fs::create_dir_all(&corpus).unwrap();
+    let corpus = corpus.canonicalize().unwrap();
+    // Written by hand: /corpus/corpora.toml registers /corpus.
+    let reg = corpus.join("corpora.toml");
+    let text = format!(
+        "[[corpus]]\nid = \"corpus\"\nname = \"Corpus\"\nkind = \"markdown-folder\"\npath = \"{}\"\n",
+        corpus.display()
+    );
+    fs::write(&reg, &text).unwrap();
+    let idx = tmp.path().join("indexes");
+    fs::create_dir_all(&idx).unwrap();
+    fs::write(idx.join("corpus.sqlite"), "x").unwrap();
+    let s = RegistryStore::new(&reg, &idx);
+    let other = tmp.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+
+    let e = s.add(&add(&other)).unwrap_err().to_string();
+    assert!(e.contains("lies inside the source folder"), "{e}");
+    let e = s.remove("corpus", false).unwrap_err().to_string();
+    assert!(e.contains("lies inside the source folder"), "{e}");
+    let e = scout_corpus::registry::init_defaults(&reg, true, scout_corpus::Preset::default())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("lies inside the source folder"), "{e}");
+
+    assert_eq!(
+        names_in(&corpus),
+        vec!["corpora.toml"],
+        "no lock or temp file"
+    );
+    assert_eq!(fs::read_to_string(&reg).unwrap(), text);
+    assert!(idx.join("corpus.sqlite").exists());
+}
+
+#[test]
+fn a_registry_beside_a_source_folder_is_fine() {
+    // SCOUT_CONFIG=/data/corpora.toml, then `corpora add /data/notes`.
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let notes = data.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let reg = data.join("corpora.toml");
+    let s = RegistryStore::new(&reg, tmp.path().join("indexes"));
+    assert_eq!(s.add(&add(&notes)).unwrap().id, "notes");
+    assert_eq!(load(&reg).corpora.len(), 1);
+    assert_eq!(
+        names_in(&notes),
+        Vec::<String>::new(),
+        "nothing written in the source"
+    );
 }
 
 #[cfg(unix)]
@@ -414,6 +473,33 @@ fn a_symlinked_registry_is_not_replaced() {
     assert!(e.contains("is a symlink"), "{e}");
     assert!(fs::symlink_metadata(&reg).unwrap().file_type().is_symlink());
     assert_eq!(fs::read_to_string(&real).unwrap(), "# mine\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn removing_through_a_symlinked_registry_deletes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, reg, idx) = store(tmp.path());
+    let notes = tmp.path().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    // A valid registry holding `notes`, reached through a symlink.
+    let real = tmp.path().join("dotfiles-corpora.toml");
+    RegistryStore::new(&real, &idx).add(&add(&notes)).unwrap();
+    let text = fs::read_to_string(&real).unwrap();
+    fs::create_dir_all(reg.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &reg).unwrap();
+    fs::create_dir_all(&idx).unwrap();
+    fs::write(idx.join("notes.sqlite"), "x").unwrap();
+    fs::write(idx.join("notes.vectors.sqlite"), "x").unwrap();
+
+    let e = RegistryStore::new(&reg, &idx)
+        .remove("notes", false)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("is a symlink"), "{e}");
+    assert!(idx.join("notes.sqlite").exists());
+    assert!(idx.join("notes.vectors.sqlite").exists());
+    assert_eq!(fs::read_to_string(&real).unwrap(), text);
 }
 
 #[cfg(unix)]

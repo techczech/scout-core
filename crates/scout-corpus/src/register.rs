@@ -6,7 +6,10 @@
 //!   and, on remove, the corpus's own index files. A corpus's source folder
 //!   is never written or deleted: an index file that lies inside any
 //!   registered source folder is refused, and a folder that holds the index
-//!   store (or lies inside it) cannot be registered.
+//!   store (or lies inside it) cannot be registered. Every write (add,
+//!   remove, init-defaults) first runs one precondition,
+//!   [`check_registry_location`]: the registry is not a symlink and lies
+//!   inside no source folder (for add, including the new one).
 //! - Every read-modify-write holds an exclusive lock on `<registry>.lock`
 //!   (beside the registry), so concurrent adds and removes, in threads or
 //!   processes, never lose an update.
@@ -126,19 +129,22 @@ impl RegistryStore {
     /// the index.
     pub fn add(&self, req: &AddCorpus) -> Result<CorpusConfig> {
         // Before the lock: taking it creates the lock file, which must not
-        // land inside the folder being refused.
+        // land inside a source folder, registered or new.
+        let mut sources = registered_sources(&self.path);
         if let Ok(abs) =
             std::path::absolute(expand_home(req.path.trim())).and_then(|p| p.canonicalize())
         {
-            refuse_store_overlaps(&abs, &self.index_dir, &self.path)?;
+            refuse_index_store_overlap(&abs, &self.index_dir)?;
+            sources.push(abs);
         }
+        check_registry_location(&self.path, &sources)?;
         let _lock = lock_registry(&self.path)?;
         let existing = self.read()?;
         let reg = existing
             .as_ref()
             .map(|(_, r)| r.clone())
             .unwrap_or_default();
-        let cfg = new_config(req, &reg, &self.index_dir, &self.path)?;
+        let cfg = new_config(req, &reg, &self.index_dir)?;
         let mut want = reg.clone();
         want.corpora.push(cfg.clone());
         let text = match &existing {
@@ -170,6 +176,7 @@ impl RegistryStore {
     /// it), the error names it and the corpus stays registered, so a retry
     /// (or `keep_index`) works.
     pub fn remove(&self, id: &str, keep_index: bool) -> Result<Removed> {
+        check_registry_location(&self.path, &registered_sources(&self.path))?;
         let _lock = lock_registry(&self.path)?;
         let Some((old, reg)) = self.read()? else {
             return Err(RegistryMissing(self.path.clone()).into());
@@ -196,12 +203,7 @@ impl RegistryStore {
 }
 
 /// Validate a request against the registry and build the new entry.
-fn new_config(
-    req: &AddCorpus,
-    reg: &Registry,
-    index_dir: &Path,
-    registry: &Path,
-) -> Result<CorpusConfig> {
+fn new_config(req: &AddCorpus, reg: &Registry, index_dir: &Path) -> Result<CorpusConfig> {
     if req.path.trim().is_empty() {
         bail!("no folder given");
     }
@@ -221,7 +223,7 @@ fn new_config(
             bail!("path {} already registered as `{}`", abs.display(), c.id);
         }
     }
-    refuse_store_overlaps(&abs, index_dir, registry)?;
+    refuse_index_store_overlap(&abs, index_dir)?;
     // Stored as the user spelled it (a symlink kept as a symlink, e.g. a
     // stable link to a cloud-storage mount), cleaned of `.`; only a path
     // with `..` is stored canonical, since its meaning depends on symlinks.
@@ -323,34 +325,58 @@ fn normalise(p: &Path) -> Result<PathBuf> {
 }
 
 /// Refuse a (canonical) source folder that holds, or lies inside, the index
-/// store or the registry's directory: the index files, the registry, its
-/// temp files and its lock file would then be written inside a source.
-fn refuse_store_overlaps(abs: &Path, index_dir: &Path, registry: &Path) -> Result<()> {
-    let stores = [
-        ("the index store", index::canonical_prefix(index_dir)),
-        (
-            "the corpus registry's folder",
-            index::canonical_prefix(parent_dir(registry)),
-        ),
-    ];
-    for (what, store) in stores {
-        if store.starts_with(abs) {
+/// store: index files would be written inside a source.
+fn refuse_index_store_overlap(abs: &Path, index_dir: &Path) -> Result<()> {
+    let store = index::canonical_prefix(index_dir);
+    if store.starts_with(abs) {
+        bail!(
+            "{} holds the index store {}; refusing to register it (scout would write inside \
+             the source folder)",
+            abs.display(),
+            store.display()
+        );
+    }
+    if abs.starts_with(&store) {
+        bail!(
+            "{} is inside the index store {}; refusing to register it",
+            abs.display(),
+            store.display()
+        );
+    }
+    Ok(())
+}
+
+/// The precondition of every registry write (add, remove, init-defaults),
+/// run before the lock is taken and before anything is deleted: the
+/// registry file is not a symlink, and its location (canonical parent dir
+/// plus file name) lies inside none of `sources` (canonical source
+/// folders). Otherwise the registry, its temp files and its lock file would
+/// be written inside a source folder.
+pub(crate) fn check_registry_location(registry: &Path, sources: &[PathBuf]) -> Result<()> {
+    refuse_symlink(registry)?;
+    let loc = index::canonical_prefix(parent_dir(registry)).join(file_name(registry));
+    for src in sources {
+        if loc.starts_with(src) {
             bail!(
-                "{} holds {what} {}; refusing to register it (scout would write inside \
-                 the source folder)",
-                abs.display(),
-                store.display()
-            );
-        }
-        if abs.starts_with(&store) {
-            bail!(
-                "{} is inside {what} {}; refusing to register it",
-                abs.display(),
-                store.display()
+                "the corpus registry {} lies inside the source folder {}; refusing to write \
+                 it there (move the registry, or point SCOUT_CONFIG elsewhere)",
+                loc.display(),
+                src.display()
             );
         }
     }
     Ok(())
+}
+
+/// The registered source folders, canonical where they exist, from a
+/// lock-free read of the registry. A missing or unparseable registry gives
+/// none (the locked read that follows reports a parse error).
+pub(crate) fn registered_sources(registry: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(registry)
+        .ok()
+        .and_then(|t| Registry::parse(&t).ok())
+        .map(|r| r.corpora.iter().map(source_root).collect())
+        .unwrap_or_default()
 }
 
 /// A registered corpus's source folder, canonical when it exists, else
@@ -547,10 +573,9 @@ fn temp_name(path: &Path) -> String {
 /// created exclusively (`O_EXCL`: an existing file or symlink of that name
 /// is never opened, so nothing it points at is truncated), flushed, then
 /// renamed over `path`. On any failure a temp file this call created is
-/// removed and `path` is as it was. A `path` that is a symlink is refused
-/// (replacing it would silently swap the link for a plain file).
+/// removed and `path` is as it was. Callers refuse a symlinked registry
+/// first ([`check_registry_location`]).
 pub fn write_atomic(path: &Path, text: &str, rename: RenameFn) -> Result<()> {
-    refuse_symlink(path)?;
     let dir = parent_dir(path);
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let tmp = dir.join(temp_name(path));

@@ -42,6 +42,7 @@
 | `.txt` without frontmatter | index build | indexed, titled by stem |
 | init-defaults | no flag | empty generic registry; grep finds no `gitrepos`, `Lukeš`, `writeflex` |
 
+**Dependencies:** `libc` (unix only) for O_NOFOLLOW on the lock file.
 **Seams under test:** registry read-modify-write (atomic), `api::add_corpus/remove_corpus`, explicit-kind validation.
 **Sweep after:** `grep -rn "gitrepos\|Lukeš\|dominik" crates` returns only the `--preset dominik` block; Dominik's live `scout corpora list` output identical before/after the build (no write command run against his registry during tests: use a temp HOME/XDG dir).
 **Review:** owed (write path + public interface): Fable 5.1 for an Opus build.
