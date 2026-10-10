@@ -1,0 +1,16 @@
+{
+  "name": "topic-tagger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Model-made topic layer for the highlights archive (writes analysis/topics/<run-id>/ only).",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0"
+  }
+}
