@@ -246,6 +246,135 @@ fn an_out_path_through_a_link_and_back_up_is_refused_and_writes_in_neither_place
     assert_eq!(names(base), ["link", "real"]);
 }
 
+/// The seventh review's case: a record whose `merged_into` names no
+/// record is read as not merged, but its file still holds the value. Were
+/// the seed to create a record of that id, the next read would merge the
+/// old record into the new one.
+#[test]
+fn a_merged_into_that_names_no_record_or_closes_a_cycle_stops_the_run() {
+    let rec = |id: &str, member: &str, into: &str| {
+        format!("---\nid: {id}\nmembers: [{member}]\nmerged_into: {into}\n---\n")
+    };
+    // `2026-09-gemini-launch` is the id this run would give 2026-09/E02.
+    let dangling = vec![(
+        "2026-09-alpha",
+        rec("2026-09-alpha", "2026-09/E04", "2026-09-gemini-launch"),
+        "names no record",
+    )];
+    let cycle = vec![
+        ("one", rec("one", "2026-09/E04", "two"), "closes a cycle"),
+        ("two", rec("two", "2026-09/E10", "three"), "closes a cycle"),
+        (
+            "three",
+            rec("three", "2026-09/E11", "one"),
+            "closes a cycle",
+        ),
+    ];
+    let own = vec![("self", rec("self", "2026-09/E04", "self"), "closes a cycle")];
+    for case in [dangling, cycle, own] {
+        for apply in [true, false] {
+            let a = archive();
+            let out = a.path().join("analysis/events");
+            for (id, text, _) in &case {
+                put(&out, &format!("{id}.md"), text);
+            }
+            // A healthy record beside them changes nothing.
+            put(
+                &out,
+                "fine.md",
+                "---\nid: fine\nmembers: [2026-10/E01]\n---\n",
+            );
+            let before = tree(a.path());
+            let e = seed(&opts(a.path(), None, apply)).unwrap_err().to_string();
+            let dir = fs::canonicalize(&out).unwrap();
+            for (id, _, why) in &case {
+                let line = format!("{}: merged_into ", dir.join(format!("{id}.md")).display());
+                assert!(e.contains(&line), "{id}: {e}");
+                assert!(
+                    e.contains(&format!("{why}; fix or clear merged_into first")),
+                    "{id}: {e}"
+                );
+            }
+            assert!(!e.contains("fine.md"), "{e}");
+            assert!(e.contains("nothing was written"), "{e}");
+            assert_eq!(tree(a.path()), before);
+        }
+    }
+}
+
+#[test]
+fn a_merged_into_chain_that_holds_is_seeded_around_and_left_as_it_is() {
+    let a = archive();
+    let out = a.path().join("analysis/events");
+    put(
+        &out,
+        "first.md",
+        "---\nid: first\nmembers: [2026-09/E02]\nmerged_into: second\n---\n",
+    );
+    put(
+        &out,
+        "second.md",
+        "---\nid: second\nmembers: [2026-09/E03]\nmerged_into: third\n---\n",
+    );
+    put(&out, "third.md", "---\nid: third\nmembers: []\n---\n");
+    let before = tree(&out);
+    let dry = seed(&opts(a.path(), None, false)).unwrap();
+    assert_eq!((dry.already_in_a_record, dry.to_create), (2, 8));
+    assert_eq!(tree(&out), before);
+    let r = seed(&opts(a.path(), None, true)).unwrap();
+    assert_eq!((r.already_in_a_record, r.created), (2, 8));
+    let set = read_all(&out);
+    assert!(set.unmerged.is_empty() && set.warnings.is_empty());
+    for id in ["2026-09/E02", "2026-09/E03", "first", "second", "third"] {
+        assert_eq!(set.resolve(id), Some("third"), "{id}");
+    }
+    for (p, bytes) in &before {
+        assert_eq!(&fs::read(p).unwrap(), bytes);
+    }
+    assert_eq!(seed(&opts(a.path(), None, true)).unwrap().created, 0);
+}
+
+/// The seventh review's case: which names are one name is the file
+/// system's to say. On APFS an existing `2026-09-ſtory.MD` (U+017F) is
+/// where `2026-09-story.md` leads, which no lower-casing shows. The run
+/// stops before its first write instead of after it.
+#[test]
+fn a_planned_name_the_file_system_already_has_stops_the_run_before_any_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    put_briefing(
+        tmp.path(),
+        "2026-09",
+        &[("E01", "Alpha", None, &[]), ("E02", "Story", None, &[])],
+    );
+    let out = tmp.path().join("analysis/events");
+    let other = put(&out, "2026-09-\u{17f}tory.MD", "not a record\n");
+    // Probe: does this file system take the two spellings for one name?
+    if fs::symlink_metadata(out.join("2026-09-story.md")).is_err() {
+        eprintln!("this file system keeps the two names apart: skipped");
+        let r = seed(&opts(tmp.path(), None, true)).unwrap();
+        assert_eq!(r.created, 2);
+        return;
+    }
+    let before = tree(tmp.path());
+    for apply in [false, true] {
+        let e = seed(&opts(tmp.path(), None, apply))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("2026-09-story.md: this record would be created, but the name already leads to an entry of the out folder"),
+            "{e}"
+        );
+        assert!(!e.contains("2026-09-alpha.md"), "{e}");
+        assert!(e.contains("nothing was written"), "{e}");
+        assert_eq!(tree(tmp.path()), before);
+        assert_eq!(names(&out).len(), 1);
+    }
+    // With that entry gone both records are made.
+    fs::remove_file(other).unwrap();
+    assert_eq!(seed(&opts(tmp.path(), None, true)).unwrap().created, 2);
+    assert_eq!(read_all(&out).records.len(), 2);
+}
+
 #[test]
 fn a_record_too_large_for_the_reader_stops_the_run_before_any_write() {
     // The description alone is exactly the cap; with its frontmatter the

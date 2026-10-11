@@ -89,6 +89,21 @@ pub struct EventSet {
     pub refused: Vec<Refused>,
     /// One line per skipped file, unusable `merged_into` or member conflict.
     pub warnings: Vec<String>,
+    /// Records whose `merged_into` was cleared here, with the value their
+    /// file still holds.
+    pub unmerged: Vec<Unmerged>,
+}
+
+/// A record whose `merged_into` is not in effect: it names no record or
+/// closes a cycle. The file keeps the value; the set's record has `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unmerged {
+    /// The record's id.
+    pub id: String,
+    /// The `merged_into` of its file.
+    pub merged_into: String,
+    /// `names no record` or `closes a cycle`.
+    pub why: &'static str,
 }
 
 /// A record file the reader skipped.
@@ -173,14 +188,31 @@ impl EventSet {
         }
         for (k, why) in broken {
             if let Some(r) = self.records.get_mut(&k) {
+                let was = r.merged_into.take().unwrap_or_default();
                 self.warnings.push(format!(
-                    "{}: merged_into {:?} {why}; treated as not merged",
+                    "{}: merged_into {was:?} {why}; treated as not merged",
                     file_of(&r.id),
-                    r.merged_into.as_deref().unwrap_or_default()
                 ));
-                r.merged_into = None;
+                self.unmerged.push(Unmerged {
+                    id: r.id.clone(),
+                    merged_into: was,
+                    why,
+                });
             }
         }
+    }
+
+    /// The records as their files have them: each `merged_into` this set
+    /// cleared ([`EventSet::unmerged`]) put back. What a later read of the
+    /// folder starts from, whatever records it holds by then.
+    pub fn as_on_disk(&self) -> Vec<EventRecord> {
+        let mut records = self.records.clone();
+        for u in &self.unmerged {
+            if let Some(r) = records.get_mut(&fold(&u.id)) {
+                r.merged_into = Some(u.merged_into.clone());
+            }
+        }
+        records.into_values().collect()
     }
 
     /// The record at the end of `key`'s merge chain (cycles are gone).

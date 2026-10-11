@@ -10,17 +10,31 @@
 //!   [`events::read_dir`], the function an index build reads them with. If
 //!   it skips any file, the seed stops: counting a skipped record's
 //!   members as held would leave those events without a usable record.
+//!   It also stops when a record there has a `merged_into` the reader
+//!   does not follow (it names no record, or closes a cycle): the file
+//!   still holds the value, and a new record of that id would take the
+//!   old record and its members over at the next read.
 //! - Every record the seed means to write is rendered to bytes and given
 //!   to [`events::parse_bytes`], the function every record the reader
 //!   accepts has passed through (size cap, UTF-8, control characters,
-//!   frontmatter, YAML, fields). What comes back must equal the record meant. Then the whole
-//!   set, old and new, goes through [`EventSet::from_records`]: no id may
-//!   repeat and every new member must resolve to its new record.
+//!   frontmatter, YAML, fields). What comes back must equal the record
+//!   meant. Then the whole set, the old records as their files have them
+//!   ([`EventSet::as_on_disk`]) and the new, goes through
+//!   [`EventSet::from_records`]: no id may repeat, every new member must
+//!   resolve to its new record, and every id held before the run (a
+//!   record id or a monthly id) must be held by the same event after it.
+//! - Which file names are one name is the file system's to say (letter
+//!   case, and on APFS more: an existing `ſtory.MD` is where `story.md`
+//!   leads). The plan keeps off every name it can see in the folder,
+//!   lower-cased; then, when the out folder exists, each planned name is
+//!   looked up there (`symlink_metadata`), and one that leads to anything
+//!   stops the run. The seed computes no equivalence of its own.
 //! - Only then is anything written, and a failure of any check leaves the
-//!   out folder exactly as it was (it is not even created). Once writing
-//!   has begun a run can still stop (a write fails, or a file of a
-//!   record's name appeared since the folder was read): the records made
-//!   so far stay, they are whole, and a second run makes the rest.
+//!   out folder exactly as it was (it is not even created), in a dry run
+//!   as with `apply`. Once writing has begun a run can still stop (a
+//!   write fails, or a file of a record's name appeared since the names
+//!   were looked up): the records made so far stay, they are whole, and a
+//!   second run makes the rest.
 //!
 //! Every input goes through the one reader of its format:
 //!
@@ -241,6 +255,7 @@ pub fn seed(opts: &SeedOptions) -> Result<SeedReport> {
     let existing = read_existing(&dir)?;
     let (planned, mut report) = plan(&opts.archive, &existing)?;
     verify(&planned, &existing)?;
+    preflight_names(&dir, planned.iter().map(|p| p.record.id.as_str()))?;
     report.archive = opts.archive.display().to_string();
     report.apply = opts.apply;
     let dir = if opts.apply {
@@ -258,7 +273,7 @@ pub fn seed(opts: &SeedOptions) -> Result<SeedReport> {
                 .with_context(|| format!("write {}", dir.join(&name).display()))?;
             if !made {
                 bail!(
-                    "{}: appeared after the folder was read; it was not touched. {} of {} records were created; run again",
+                    "{}: appeared after the names were looked up; it was not touched. {} of {} records were created; run again",
                     dir.join(&name).display(),
                     report.created,
                     planned.len()
@@ -302,13 +317,55 @@ fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Ask the file system whether each planned record name is free in `dir`
+/// (nothing is asked when the folder is missing). The file system is the
+/// authority on which names are one name: it may ignore letter case, or
+/// fold characters (on APFS an existing `ſtory.MD` answers to `story.md`),
+/// and the seed does not work such rules out. Any planned name that
+/// already leads to something stops the run, before the first write.
+fn preflight_names<'a>(dir: &Path, ids: impl Iterator<Item = &'a str>) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("{}: the out folder", dir.display())),
+        Ok(_) => {}
+    }
+    let mut faults = Vec::new();
+    for id in ids {
+        let at = dir.join(format!("{id}.md"));
+        match std::fs::symlink_metadata(&at) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("look for {}", at.display())),
+            Ok(_) => faults.push(format!(
+                "{}: this record would be created, but the name already leads to an entry of the out folder (one the file system treats as the same name, under another spelling); rename or remove that entry",
+                at.display()
+            )),
+        }
+    }
+    fail_with(faults)
+}
+
+/// `Ok` for no faults; else one error of at most [`MAX_FAULTS`] of them.
+fn fail_with(mut faults: Vec<String>) -> Result<()> {
+    if faults.is_empty() {
+        return Ok(());
+    }
+    let more = faults.len().saturating_sub(MAX_FAULTS);
+    faults.truncate(MAX_FAULTS);
+    if more > 0 {
+        faults.push(format!("and {more} more"));
+    }
+    faults.push("nothing was written".into());
+    bail!("{}", faults.join("\n"));
+}
+
 /// The records already in `dir`, as the reader has them, and the names in
 /// use there.
 struct Existing {
     set: Option<EventSet>,
-    /// Lower-case ids no new record may take: every record's id, and the
-    /// name of every entry of the folder without its `.md` (so a new file
-    /// name is free on a file system that ignores case, too).
+    /// Lower-case ids no new record is given: every record's id, and the
+    /// name of every entry of the folder without its `.md`. This keeps the
+    /// plan off the names it can see are in use; whether a planned name is
+    /// really free is the file system's to say ([`preflight_names`]).
     taken: BTreeSet<String>,
 }
 
@@ -337,6 +394,25 @@ fn read_existing(dir: &Path) -> Result<Existing> {
                 n => format!("these {n} records are"),
             }
         ));
+        bail!("{}", lines.join("\n"));
+    }
+    // A `merged_into` not in effect: the file still names a record that
+    // is not there (this run might create one of that id, and the old
+    // record would then merge into it) or closes a cycle.
+    if !set.unmerged.is_empty() {
+        let mut lines: Vec<String> = set
+            .unmerged
+            .iter()
+            .map(|u| {
+                format!(
+                    "{}: merged_into {:?} {}; fix or clear merged_into first",
+                    dir.join(format!("{}.md", u.id)).display(),
+                    u.merged_into,
+                    u.why
+                )
+            })
+            .collect();
+        lines.push("nothing was written".into());
         bail!("{}", lines.join("\n"));
     }
     taken.extend(set.records.keys().cloned());
@@ -481,9 +557,10 @@ fn plan(archive: &Path, existing: &Existing) -> Result<(Vec<Planned>, SeedReport
 /// Most faults named in one error.
 const MAX_FAULTS: usize = 20;
 
-/// Give every planned record to the reader. An error names each monthly
-/// event whose record the reader would refuse, or read as something other
-/// than the record meant.
+/// Give every planned record to the reader, then the folder as it would
+/// be. An error names each monthly event whose record the reader would
+/// refuse, or read as something other than the record meant, and each id
+/// held before the run that would be held by another event after it.
 fn verify(planned: &[Planned], existing: &Existing) -> Result<()> {
     let mut faults: Vec<String> = Vec::new();
     for p in planned {
@@ -501,18 +578,27 @@ fn verify(planned: &[Planned], existing: &Existing) -> Result<()> {
         }
     }
     if faults.is_empty() {
-        // The whole folder as it would be: no id twice, every new member
-        // resolving to its new record.
-        let old = existing
-            .set
-            .iter()
-            .flat_map(|s| s.records.values().cloned());
+        // The whole folder as it would be, from the old records as their
+        // files have them (a `merged_into` the reader cleared is still in
+        // the file): no id twice, every new member resolving to its new
+        // record, and everything held before the run (record ids and
+        // monthly ids alike) held by the same event after it.
+        let old = existing.set.iter().flat_map(EventSet::as_on_disk);
         let all: Vec<EventRecord> = old
             .chain(planned.iter().map(|p| p.record.clone()))
             .collect();
         let set = EventSet::from_records(PathBuf::new(), all);
         for r in &set.refused {
             faults.push(format!("{}: {}", r.file, r.why));
+        }
+        for (id, before) in existing.set.iter().flat_map(|s| &s.aliases) {
+            let after = set.aliases.get(id);
+            if after != Some(before) {
+                faults.push(format!(
+                    "{id}: held by {before:?} now, and by {} once the new records are there",
+                    after.map_or("no event".to_string(), |a| format!("{a:?}"))
+                ));
+            }
         }
         for p in planned {
             if set.resolve(&p.member) != Some(p.record.id.as_str()) {
@@ -523,16 +609,7 @@ fn verify(planned: &[Planned], existing: &Existing) -> Result<()> {
             }
         }
     }
-    if faults.is_empty() {
-        return Ok(());
-    }
-    let more = faults.len().saturating_sub(MAX_FAULTS);
-    faults.truncate(MAX_FAULTS);
-    if more > 0 {
-        faults.push(format!("and {more} more"));
-    }
-    faults.push("nothing was written".into());
-    bail!("{}", faults.join("\n"));
+    fail_with(faults)
 }
 
 // ---------- writing ----------
@@ -662,6 +739,74 @@ mod tests {
             fs::read_to_string(d.path().join("other.md")).unwrap(),
             "mine\n"
         );
+    }
+
+    fn record(id: &str, member: &str, merged_into: Option<&str>) -> EventRecord {
+        EventRecord {
+            id: id.into(),
+            name: id.into(),
+            members: vec![member.into()],
+            merged_into: merged_into.map(String::from),
+            ..EventRecord::default()
+        }
+    }
+
+    fn planned(id: &str, member: &str) -> Planned {
+        let record = record(id, member, None);
+        Planned {
+            member: member.into(),
+            text: render_record(&record),
+            record,
+        }
+    }
+
+    /// `seed` refuses a folder with a `merged_into` that is not in effect
+    /// before it plans. This is the check behind that one: the folder as
+    /// it would be is built from the records as their files have them.
+    #[test]
+    fn a_new_record_that_would_take_over_an_old_ones_members_is_refused() {
+        let old = vec![record("alpha", "2026-09/E01", Some("beta"))];
+        let set = EventSet::from_records(PathBuf::new(), old);
+        // The reader has cleared it; the file has not.
+        assert_eq!(set.records["alpha"].merged_into, None);
+        assert_eq!(set.as_on_disk()[0].merged_into.as_deref(), Some("beta"));
+        assert_eq!(set.resolve("2026-09/E01"), Some("alpha"));
+        let existing = Existing {
+            set: Some(set),
+            taken: BTreeSet::new(),
+        };
+        let e = verify(&[planned("beta", "2026-09/E02")], &existing)
+            .unwrap_err()
+            .to_string();
+        for line in [
+            "2026-09/e01: held by \"alpha\" now, and by \"beta\" once the new records are there",
+            "alpha: held by \"alpha\" now, and by \"beta\"",
+            "nothing was written",
+        ] {
+            assert!(e.contains(line), "{line}\n{e}");
+        }
+        // A new record of another id leaves every old id where it was.
+        verify(&[planned("gamma", "2026-09/E02")], &existing).unwrap();
+        // A new record cannot take a member an old record holds either.
+        let e = verify(&[planned("gamma", "2026-09/E01")], &existing).unwrap_err();
+        assert!(e.to_string().contains("would not resolve to its record"));
+    }
+
+    #[test]
+    fn a_planned_name_that_leads_to_an_entry_is_refused_before_any_write() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("taken.md"), "mine\n").unwrap();
+        fs::create_dir(d.path().join("folder.md")).unwrap();
+        let e = preflight_names(d.path(), ["free", "taken", "folder"].into_iter())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("taken.md: this record would be created"), "{e}");
+        assert!(e.contains("folder.md: this record would be created"), "{e}");
+        assert!(!e.contains("free.md") && e.contains("nothing was written"));
+        preflight_names(d.path(), ["free", "also-free"].into_iter()).unwrap();
+        // A folder that is not there holds no name.
+        preflight_names(&d.path().join("missing"), ["taken"].into_iter()).unwrap();
+        assert_eq!(names(d.path()), ["folder.md", "taken.md"]);
     }
 
     #[test]
