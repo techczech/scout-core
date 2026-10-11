@@ -1,10 +1,16 @@
 //! What the seed reads from the archive (never written): the monthly
 //! events of the briefing files and the tag rows that name an event.
+//!
+//! The tag rows come from the topic layer's own reader. The briefing
+//! `<period>-events.json` files have no other reader in this workspace
+//! (the tagger in `tools/topic-tagger` writes them), so their rules are
+//! here, and they are strict: a file that is not what a briefing file
+//! must be stops the run with the file named; none is skipped.
 
-use super::naming::{is_period, split_monthly_id};
+use super::naming::{is_period, monthly_id};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The folder of briefing files, relative to the archive root.
@@ -45,9 +51,16 @@ fn events_file_period(name: &str) -> Option<&str> {
 }
 
 /// Monthly events from the briefings folder, by monthly id
-/// (`2026-09/E21`). Only plain files directly in the folder are read (no
-/// link is followed, no folder walked). A file that is not what a briefing
-/// file must be stops the run.
+/// (`2026-09/E21`). Only entries directly in the folder are looked at (no
+/// folder is walked) and only plain files are read (no link is followed).
+/// Anything under a briefing file's name that is not what a briefing file
+/// must be stops the run, with the file named: not a plain file, not JSON,
+/// not an object, a `month` that is not the file name's period, no
+/// `events` list, an event that is not an object, an event `id` that is
+/// not `E<number>` or is there twice (ids compared as the index compares
+/// them: `e01` is `E01`), a `name` or `description` that is
+/// not text, `aliases` that is not a list of text. (`name`, `description`
+/// and `aliases` may be absent or null.)
 pub(crate) fn read_monthly_events(archive: &Path) -> Result<BTreeMap<String, MonthlyEvent>> {
     let dir = archive.join(BRIEFINGS_DIR);
     let mut out = BTreeMap::new();
@@ -63,129 +76,116 @@ pub(crate) fn read_monthly_events(archive: &Path) -> Result<BTreeMap<String, Mon
         let Some(period) = name.to_str().and_then(events_file_period) else {
             continue;
         };
-        if e.file_type().is_ok_and(|t| t.is_file()) {
-            files.push((period.to_string(), e.path()));
+        // The entry's own type: a link is not followed.
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            bail!("{}: not a plain file", e.path().display());
         }
+        files.push((period.to_string(), e.path()));
     }
     files.sort();
     for (period, file) in files {
-        let at = file.display();
-        let bytes = std::fs::read(&file).with_context(|| format!("read {at}"))?;
-        let doc: Value = match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(e) => bail!("{at}: not JSON ({e})"),
-        };
-        if let Some(month) = doc.get("month") {
-            if month.as_str() != Some(period.as_str()) {
-                bail!("{at}: \"month\" is {month}, the file name says {period}");
-            }
+        let bytes = std::fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+        for (id, event) in parse_briefing(&bytes, &period)
+            .map_err(|why| anyhow::anyhow!("{}: {why}", file.display()))?
+        {
+            // One period, one file name: an id cannot come from two files.
+            out.insert(id, event);
         }
-        let Some(events) = doc.get("events").and_then(Value::as_array) else {
-            bail!("{at}: no \"events\" list");
+    }
+    Ok(out)
+}
+
+/// The events of one briefing file's bytes by monthly id, or what is
+/// wrong with the file.
+fn parse_briefing(
+    bytes: &[u8],
+    period: &str,
+) -> std::result::Result<BTreeMap<String, MonthlyEvent>, String> {
+    let doc: Value = serde_json::from_slice(bytes).map_err(|e| format!("not JSON ({e})"))?;
+    let Some(doc) = doc.as_object() else {
+        return Err("not a JSON object".into());
+    };
+    if let Some(month) = doc.get("month") {
+        if month.as_str() != Some(period) {
+            return Err(format!("\"month\" is {month}, the file name says {period}"));
+        }
+    }
+    let Some(events) = doc.get("events").and_then(Value::as_array) else {
+        return Err("no \"events\" list".into());
+    };
+    let mut out = BTreeMap::new();
+    for (i, ev) in events.iter().enumerate() {
+        let Some(ev) = ev.as_object() else {
+            return Err(format!("event {} of the list is not an object", i + 1));
         };
-        for ev in events {
-            let number = ev.get("id").and_then(Value::as_str).unwrap_or_default();
-            let id = format!("{period}/{number}");
-            if split_monthly_id(&id).is_none() {
-                bail!(
-                    "{at}: event id {} is not E<number>",
-                    ev.get("id").unwrap_or(&Value::Null)
-                );
-            }
-            let text = |k: &str| ev.get(k).and_then(Value::as_str).unwrap_or_default();
-            let aliases = ev
-                .get("aliases")
-                .and_then(Value::as_array)
-                .map(|l| {
-                    l.iter()
-                        .filter_map(Value::as_str)
-                        .map(one_line)
-                        .filter(|a| !a.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let event = MonthlyEvent {
-                name: one_line(text("name")),
-                aliases,
-                description: text("description").trim().to_string(),
-            };
-            if out.insert(id.clone(), event).is_some() {
-                bail!("{at}: event {id} appears twice");
-            }
+        // The id as the index would compare it (`e01`, ` E01 ` are E01).
+        let raw = ev.get("id").unwrap_or(&Value::Null);
+        let number = crate::normalize::fold(raw.as_str().unwrap_or_default());
+        let Some(id) = monthly_id(&format!("{period}/{number}")) else {
+            return Err(format!("event id {raw} is not E<number>"));
+        };
+        // Text, or absent or null (empty).
+        let text = |k: &str| match ev.get(k) {
+            None | Some(Value::Null) => Ok(""),
+            Some(Value::String(s)) => Ok(s.as_str()),
+            Some(_) => Err(format!("event {id}: \"{k}\" is not text")),
+        };
+        let aliases = match ev.get("aliases") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(l)) => l
+                .iter()
+                .map(|a| a.as_str().map(one_line))
+                .collect::<Option<Vec<String>>>()
+                .ok_or_else(|| format!("event {id}: \"aliases\" is not a list of text"))?
+                .into_iter()
+                .filter(|a| !a.is_empty())
+                .collect(),
+            Some(_) => return Err(format!("event {id}: \"aliases\" is not a list of text")),
+        };
+        let event = MonthlyEvent {
+            name: one_line(text("name")?),
+            aliases,
+            description: text("description")?.trim().to_string(),
+        };
+        if out.insert(id.clone(), event).is_some() {
+            return Err(format!("event {id} appears twice"));
         }
     }
     Ok(out)
 }
 
 /// The tag rows of `analysis/topics/current.jsonl` grouped by their
-/// `event`, rows in the order their keys first appear (the last row per
-/// key counts, as the reader has it). Lines that are not a JSON object
-/// with a `key` are passed over. Corrections are not applied here: the
-/// reader applies them at query time.
+/// `event` (as [`monthly_id`] spells it), each event's rows in key order. The rows are the ones
+/// [`crate::topics::read_tag_rows`] gives, which is how an index build
+/// reads the file: a line that is not a valid row is passed over and the
+/// last valid row of a key counts. Nothing is parsed here. Corrections
+/// are not read (see the module notes of `event_seed`).
 pub(crate) fn read_tagged_items(archive: &Path) -> Result<BTreeMap<String, Vec<TaggedItem>>> {
-    let file = archive.join(crate::topics::LAYER_FILE);
-    let bytes = match std::fs::read(&file) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(e) => return Err(e).with_context(|| format!("read {}", file.display())),
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let mut rows: Vec<Value> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
-    for line in text.split('\n') {
-        let Ok(row) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        let Some(key) = row.get("key").and_then(Value::as_str).map(str::trim) else {
-            continue;
-        };
-        if key.is_empty() {
-            continue;
-        }
-        match at.get(key) {
-            Some(&i) => rows[i] = row,
-            None => {
-                at.insert(key.to_string(), rows.len());
-                rows.push(row);
-            }
-        }
-    }
     let mut by_event: BTreeMap<String, Vec<TaggedItem>> = BTreeMap::new();
-    for row in &rows {
-        let Some(event) = row.get("event").and_then(Value::as_str).map(str::trim) else {
+    let Some(rows) = crate::topics::read_tag_rows(archive)? else {
+        return Ok(by_event);
+    };
+    for row in rows.items.values() {
+        // Which monthly event the row is in: the index's own comparison.
+        let Some(event) = row.info.event.as_deref().and_then(monthly_id) else {
             continue;
         };
-        if split_monthly_id(event).is_none() {
-            continue;
-        }
         let date = row
-            .get("date")
-            .and_then(Value::as_str)
-            .filter(|d| starts_with_a_date(d))
+            .date
+            .as_deref()
+            .filter(|d| starts_with_a_date(d) && crate::topics::valid_month(&d[..7]))
             .map(|d| d[..10].to_string());
-        let themes = row
-            .get("themes")
-            .and_then(Value::as_array)
-            .map(|l| {
-                l.iter()
-                    .filter_map(Value::as_str)
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default();
         let event_name = row
-            .get("event_name")
-            .and_then(Value::as_str)
+            .info
+            .event_name
+            .as_deref()
             .map(one_line)
             .filter(|n| !n.is_empty());
-        by_event
-            .entry(event.to_string())
-            .or_default()
-            .push(TaggedItem {
-                date,
-                themes,
-                event_name,
-            });
+        by_event.entry(event).or_default().push(TaggedItem {
+            date,
+            themes: row.info.themes.clone(),
+            event_name,
+        });
     }
     Ok(by_event)
 }

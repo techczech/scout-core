@@ -224,6 +224,8 @@ struct Membership {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerItem {
     pub path: Option<String>,
+    /// The row's `date` as written (`month` in `info` is derived from it).
+    pub date: Option<String>,
     pub info: TopicInfo,
 }
 
@@ -369,33 +371,10 @@ pub fn read_layer(root: &Path) -> Result<Option<Layer>> {
 /// decides how the layer and the corrections are read (`lasting` below).
 /// Without one, nothing of lasting events is applied.
 fn read_beside(root: &Path) -> Result<Beside> {
-    let mut out = Layer {
-        layer_path: root.join(LAYER_FILE),
-        items: BTreeMap::new(),
-        bad_lines: 0,
-        corrections: 0,
-        corrections_unmatched: 0,
-        corrections_bad_lines: 0,
-        events: None,
-    };
-    let mut members: BTreeMap<String, Membership> = BTreeMap::new();
     let mut h = Sha1::new();
     let records = crate::events::read_hashed(root, &mut h)?;
     let lasting = records.is_some();
-    let found = stream_lines(
-        &root.join(LAYER_FILE),
-        MAX_LINE_BYTES,
-        &mut h,
-        |l| match l {
-            Line::Text(t) => {
-                if !add_layer_line(&mut out.items, &mut members, lasting, t) {
-                    out.bad_lines += 1;
-                }
-            }
-            Line::Bad => out.bad_lines += 1,
-        },
-    )?;
-    if !found {
+    let Some(rows) = read_tag_rows_hashed(root, lasting, &mut h)? else {
         // No tags: the records are still read, hashed and (by `refresh`)
         // stored, so `scout events --min-items 0` lists them.
         let hash = match records {
@@ -407,7 +386,17 @@ fn read_beside(root: &Path) -> Result<Beside> {
             records_alone: records,
             hash,
         });
-    }
+    };
+    let mut members = rows.members;
+    let mut out = Layer {
+        layer_path: root.join(LAYER_FILE),
+        items: rows.items,
+        bad_lines: rows.bad_lines,
+        corrections: 0,
+        corrections_unmatched: 0,
+        corrections_bad_lines: 0,
+        events: None,
+    };
     h.update([0u8]);
     let (mut applied, mut unknown, mut bad) = (0, 0, 0);
     stream_lines(
@@ -436,6 +425,50 @@ fn read_beside(root: &Path) -> Result<Beside> {
         records_alone: None,
         hash: hex(h),
     })
+}
+
+/// The tag rows of the layer file, before any correction: what
+/// [`read_tag_rows_hashed`] gives.
+pub(crate) struct TagRows {
+    /// The last valid row of each key, by key.
+    pub items: BTreeMap<String, LayerItem>,
+    /// Each row's `events` list (kept only when read as `lasting`).
+    members: BTreeMap<String, Membership>,
+    /// Lines that are not a valid row.
+    pub bad_lines: usize,
+}
+
+/// The tag rows of the corpus at `root` as an index build has them before
+/// corrections; `None` when there is no layer file. For a reader that is
+/// not the build (`scout events seed`): the same function the build reads
+/// the file with, so both keep the same rows.
+pub(crate) fn read_tag_rows(root: &Path) -> Result<Option<TagRows>> {
+    read_tag_rows_hashed(root, false, &mut Sha1::new())
+}
+
+/// The one reader of the layer file ([`read_beside`], and so every index
+/// build, reads it here), feeding `hash` every byte. A line is a row when
+/// it is valid UTF-8 within [`MAX_LINE_BYTES`], parses as a JSON object
+/// with every known field of its type, and has a non-blank `key`; any
+/// other non-blank line is counted in `bad_lines` and changes nothing. A
+/// later row replaces an earlier row of the same key, so the last VALID
+/// row of a key is the one kept. `lasting`: also keep each row's `events`
+/// list (a corpus with a records folder).
+fn read_tag_rows_hashed(root: &Path, lasting: bool, hash: &mut Sha1) -> Result<Option<TagRows>> {
+    let mut rows = TagRows {
+        items: BTreeMap::new(),
+        members: BTreeMap::new(),
+        bad_lines: 0,
+    };
+    let found = stream_lines(&root.join(LAYER_FILE), MAX_LINE_BYTES, hash, |l| match l {
+        Line::Text(t) => {
+            if !add_layer_line(&mut rows.items, &mut rows.members, lasting, t) {
+                rows.bad_lines += 1;
+            }
+        }
+        Line::Bad => rows.bad_lines += 1,
+    })?;
+    Ok(found.then_some(rows))
 }
 
 /// Parse one layer line into `items` (a repeated key replaces the earlier
@@ -467,6 +500,7 @@ fn add_layer_line(
                 .collect(),
         );
     }
+    let month = month_of(l.date.as_deref(), l.month.as_deref());
     let info = TopicInfo {
         key: key.clone(),
         themes: l.themes.unwrap_or_default(),
@@ -475,7 +509,7 @@ fn add_layer_line(
         event_name: l.event_name,
         events: None,
         ai_related: l.ai_related,
-        month: month_of(l.date.as_deref(), l.month.as_deref()),
+        month,
         confidence: l.confidence,
         run_id: l.run_id,
         prompt_version: l.prompt_version,
@@ -485,6 +519,7 @@ fn add_layer_line(
         key,
         LayerItem {
             path: l.path.filter(|p| !p.trim().is_empty()),
+            date: l.date,
             info,
         },
     );

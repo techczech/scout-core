@@ -33,6 +33,25 @@ pub(crate) fn split_monthly_id(id: &str) -> Option<(&str, &str)> {
         .then_some((period, number))
 }
 
+/// The monthly event a written id names, in the one spelling the seed
+/// uses (`2026-09/E21`, `2022-Q2/E01`); `None` when it names none.
+///
+/// Which ids are the same event is the index's rule, not one of the
+/// seed's: [`crate::normalize::fold`], the function `EventSet::resolve`
+/// and every `event:` match compare ids under (surrounding whitespace and
+/// letter case do not count). So `" 2026-09/e21 "` is `2026-09/E21` here
+/// exactly as it is in the index, and what comes back folds to the same
+/// value as what went in. Only the shape (`<period>/E<digits>`) is checked
+/// here, on the folded id.
+pub(crate) fn monthly_id(written: &str) -> Option<String> {
+    let folded = crate::normalize::fold(written);
+    let (period, number) = folded.split_once('/')?;
+    let digits = number.strip_prefix('e')?;
+    let period = period.to_ascii_uppercase();
+    (is_period(&period) && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("{period}/E{digits}"))
+}
+
 /// Monthly ids in order: by period, then by event number.
 pub(crate) fn by_monthly_id(a: &str, b: &str) -> Ordering {
     let (Some((pa, na)), Some((pb, nb))) = (split_monthly_id(a), split_monthly_id(b)) else {
@@ -200,6 +219,40 @@ pub(crate) fn majority_themes<'a>(items: impl IntoIterator<Item = &'a [String]>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_monthly_id_is_the_same_event_as_the_index_has_it() {
+        use crate::normalize::fold;
+        for (written, id) in [
+            ("2026-09/E21", "2026-09/E21"),
+            ("2026-09/e21", "2026-09/E21"),
+            (" \t2026-09/e21\u{a0}\n", "2026-09/E21"),
+            ("2022-q2/e01", "2022-Q2/E01"),
+            ("2022-Q2/E1", "2022-Q2/E1"),
+        ] {
+            assert_eq!(monthly_id(written).as_deref(), Some(id), "{written:?}");
+            // Never a different event than the index makes of it.
+            assert_eq!(fold(id), fold(written), "{written:?}");
+            assert!(split_monthly_id(id).is_some());
+        }
+        // E1 and E01 are two events to the index, and so here.
+        assert_ne!(monthly_id("2026-09/E1"), monthly_id("2026-09/E01"));
+        for no in [
+            "2026-09 / E21",
+            "2026-09/ E21",
+            "2026-09/E 21",
+            "2026-09/E",
+            "2026-09/21",
+            "2026-13/E01",
+            "2022-Q5/E01",
+            "2026-09/E01/x",
+            "2026-09-gemini-launch",
+            "\u{ff12}026-09/E01",
+            "",
+        ] {
+            assert_eq!(monthly_id(no), None, "{no:?}");
+        }
+    }
 
     const AWKWARD: &str = "He said: \"it's #1\" — naïve café, 100% [sic] & more";
 

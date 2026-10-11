@@ -19,9 +19,33 @@
 //! - Only then is anything written, and a failure of any check leaves the
 //!   out folder exactly as it was (it is not even created).
 //!
-//! Reads (never writes): `<archive>/analysis/context/briefings/<period>-events.json`
-//! (names holding `.superseded-` are ignored; the folder is not walked),
-//! `<archive>/analysis/topics/current.jsonl` and the out folder.
+//! Every input goes through the one reader of its format:
+//!
+//! - Tag rows, `<archive>/analysis/topics/current.jsonl`:
+//!   `topics::read_tag_rows`, the function an index build reads the file
+//!   with (its bad-line rules; the last valid row of a key counts). The
+//!   seed takes each row's `key`, `event`, `date`, `themes` and
+//!   `event_name` from it and parses nothing itself.
+//! - Which monthly event an id names (a tag row's `event`, a briefing
+//!   event's `id`, a record's `members`) is decided under the index's own
+//!   comparison, `normalize::fold`: `naming::monthly_id` for the first
+//!   two, [`EventSet::resolve`] for "a record already holds it". The seed
+//!   writes the id as `<period>/E<digits>`.
+//! - Corrections (`analysis/topics/corrections.jsonl`) and a row's
+//!   `events` list are NOT read: the seed makes a record for every monthly
+//!   id a tag row's `event` or a briefing file names, whatever a correction
+//!   later says about one item. An event only a correction names gets no
+//!   record here.
+//! - Records already in the out folder: [`events::read_dir`], above.
+//! - Briefing files,
+//!   `<archive>/analysis/context/briefings/<period>-events.json` (names
+//!   holding `.superseded-` are ignored; the folder is not walked): the
+//!   seed is their only reader in this workspace (`event_seed/sources.rs`).
+//!   A file that is not a plain file, not JSON, or wrongly shaped stops
+//!   the run before any write, with the file named.
+//! - The names in use in the out folder: a folder listing, no format.
+//!
+//! None of these is written.
 //!
 //! Writes (only with `apply`): the out folder when it is missing, and new
 //! record files directly inside it, each `<id>.md` with a slug id, each
@@ -33,6 +57,24 @@
 //! taken out. It must be a real folder, not a symlink. Symlinks in the
 //! folders above it are accepted (macOS `/tmp` is one) and resolved once;
 //! the report names the resolved folder.
+//!
+//! Threat model. A single-user desktop tool; no hostile process runs
+//! beside it.
+//!
+//! - Defended: a symlink or hard link standing at the out folder or at any
+//!   record name when the run looks (the folder is refused; a record name
+//!   in use, by a link of either kind, a folder or a file, is never opened
+//!   and the run stops); overwriting (every file is opened
+//!   create-exclusive, no-follow); traversal through ids (an id is a slug,
+//!   the file name a bare `<slug>.md`); partial state after a refusal
+//!   (every check runs before the first write and a refused run leaves the
+//!   out folder as it was, not even created).
+//! - Not defended: another process replacing the out folder while the seed
+//!   runs. The folder is checked once and each record is then created by
+//!   path, so if the folder is renamed away and a symlink put in its place
+//!   between two writes, the later records land where the link points. The
+//!   writes are not anchored to a directory descriptor (driver's ruling,
+//!   2026-10-11: outside the threat model).
 
 mod naming;
 mod render;
