@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { selectWorks } from './works.js';
 import { packItems } from './batching.js';
 import { estimateRunUsd, addUsage } from './cost.js';
-import { DISCOVERY_SYSTEM, PROMPT_VERSION, vocabularySystem } from './prompts.js';
+import { DISCOVERY_SYSTEM, PROMPT_VERSION_V1, vocabularySystem } from './prompts.js';
 import { collectBatches, runPool, submitBatches, tagBatch, waitForBatches } from './model.js';
 import { applyVocabulary, summarise } from './results.js';
 import { consolidate } from './consolidate.js';
@@ -58,7 +58,7 @@ export async function executeRun(opts, { client, log = () => {} } = {}) {
     api: opts.batchApi ? 'message-batches (50% off)' : 'messages',
     started: started.toISOString(),
     finished: null,
-    prompt_version: PROMPT_VERSION,
+    prompt_version: PROMPT_VERSION_V1,
     prompt_text: system,
     selection_rule: `works whose latest highlighted_at is in ${opts.from}..${opts.to}; text = title, author, type, date, highlights, capped at 12000 chars`,
     item_count: items.length,

@@ -4,11 +4,11 @@ import { estimateTokens } from './cost.js';
 export const DEFAULT_MAX_ITEMS = 20;
 export const DEFAULT_MAX_TOKENS = 25000; // far under the 100K price step
 
-export function packItems(items, { maxItems = DEFAULT_MAX_ITEMS, maxTokens = DEFAULT_MAX_TOKENS } = {}) {
+export function packItems(items, { maxItems = DEFAULT_MAX_ITEMS, maxTokens = DEFAULT_MAX_TOKENS, estimate = estimateTokens } = {}) {
   const batches = [];
   let cur = null;
   for (const item of items) {
-    const t = estimateTokens(item.text);
+    const t = estimate(item.text);
     if (!cur || cur.items.length >= maxItems || (cur.estTokens + t > maxTokens && cur.items.length > 0)) {
       cur = { items: [], estTokens: 0 };
       batches.push(cur);
