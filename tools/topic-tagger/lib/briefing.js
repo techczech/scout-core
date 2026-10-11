@@ -110,7 +110,7 @@ status: generated
 model: ${meta.model}
 prompt_version: ${BRIEFING_PROMPT_VERSION}
 generated: ${meta.generated}
-source: "${meta.items} archive items whose latest highlight is in ${month} (condensed: date, author, title, first ${VIEW_CHARS} chars)"
+source: "${meta.items} archive items whose latest highlight is in ${month} (condensed: date, author, title, first ${meta.view_chars_per_item || VIEW_CHARS} chars)"
 ---
 
 # Month briefing: ${month}

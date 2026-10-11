@@ -66,9 +66,9 @@ export function renderReviewV2(d) {
 <div class="sum">${stat(run.item_count, 'items')}${stat(run.tagged_items, 'tagged')}${stat(pct(run.ai_share), 'AI share')}${stat(d.themes.length, 'themes')}${stat(d.events.length, 'events')}${stat(pct(cs.token_hit_rate), 'cache hit (tokens)')}${stat('$' + total.toFixed(2), 'cost')}</div>
 <h2 id="context">Context the tagger saw</h2>
 <p class="meta">Prompt: ${esc(run.prompt_tokens_system)} system tokens + up to ${esc(run.prompt_max_user_tokens_counted ?? run.prompt_max_user_tokens_estimated)} per batch (cap ${esc(run.prompt_cap)}); largest prompt sent: ${esc(cs.max_prompt_tokens)} tokens.</p>
-<details><summary>Reader profile (DRAFT)</summary><p class="meta"><a href="${esc(d.profileHref)}">${esc(d.profileHref)}</a></p>${mdToHtml(d.profileMd)}</details>
+<details><summary>Reader profile</summary><p class="meta"><a href="${esc(d.profileHref)}">${esc(d.profileHref)}</a></p>${mdToHtml(d.profileMd)}</details>
 <details><summary>Month briefing</summary><p class="meta"><a href="${esc(d.briefingHref)}">${esc(d.briefingHref)}</a></p>${mdToHtml(d.briefingMd)}</details>
-<h2 id="themes">Themes (draft list) with counts</h2>${themes}
+<h2 id="themes">Themes with counts</h2>${themes}
 <h2 id="entities">Top ${d.entities.length} entities</h2>${ents}
 <h2 id="events">Events and their items</h2>${events}
 <h2 id="qa">QA agreement (${esc(run.qa_model || '')} re-tag vs ${esc(run.model)})</h2>${qaTable(d.qa)}

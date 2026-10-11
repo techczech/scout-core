@@ -76,13 +76,14 @@ export function buildFixture() {
     presentation: { title: 'MondAI Round Up - September 2026', title_page_subtitle: 'July 13 - September 13, 2026' },
     landing_intro: 'Model releases take up **much** of it.',
     sections: [{ title: 'Model Releases', items: ['a'] }],
-    content_library: [{ external_id: 'a', title: 'GPT-6 Astra', date: '2026-08-30', summary: 'OpenAI released [Astra](https://x).' }],
+    content_library: [{ external_id: 'a', title: 'GPT-6 Astra', date: '2026-08-30', summary: 'OpenAI released [Astra](https://x).' },
+      { external_id: 'b', title: 'Maths letter', date: '2026-09-04', summary: 'Fields Medallists wrote.' }, { external_id: 'c', title: 'c', date: 'Sep 5, 2026', summary: 's' }, { external_id: 'd', title: 'd', date: '2026-09-10', summary: 's' }],
   }));
   return { root, stream, rdir };
 }
 
 // A fake Anthropic client. Tagging answers derive from each item's text; usage mimics caching.
-export function fakeClient({ calls = [] } = {}) {
+export function fakeClient({ calls = [], clean = false } = {}) {
   const msg = (obj, usage) => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(obj) }], usage });
   let tagRequests = 0;
   const answer = (params) => {
@@ -112,7 +113,7 @@ export function fakeClient({ calls = [] } = {}) {
       const ai = /AI|Astra|proof|mathematic/i.test(body);
       return {
         id, ai_related: ai,
-        themes: ai ? ['AI and mathematics', 'Not a theme'] : [],
+        themes: ai ? (clean ? ['AI and mathematics'] : ['AI and mathematics', 'Not a theme']) : [],
         entities: /Astra/.test(body) ? ['Astra', 'astra', 'OpenAI'] : [],
         event: /proof|mathematic/i.test(body) ? 'E02' : (/Astra/.test(body) ? 'E01' : ''),
         relevance: ai ? 'Fits his interest in how mathematicians reacted to AI proof claims this month' : '',

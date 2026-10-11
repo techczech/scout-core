@@ -58,3 +58,20 @@ export function validateThemes(parsed) {
 export function themesForPrompt(themes) {
   return themes.map((t) => `- ${t.name}: ${t.definition} Include: ${t.include} Exclude: ${t.exclude}`).join('\n');
 }
+
+// ---- final themes (all monthly briefings) ----
+export const THEMES_FINAL_PROMPT_VERSION = 'themes-final-v1';
+
+export const THEMES_FINAL_SYSTEM = `${THEMES_SYSTEM.split('Produce about 40 themes')[0]}This is the final list for the 2025-2026 part of the archive. You get the reader profile, a briefing for every month from January 2025 to October 2026, the draft list with how often each draft theme was used when tagging September 2026 (and which names the tagger tried that were not on the list), and his own Readwise tags.
+- Keep what worked in the draft; merge themes that were rarely used or overlapped; add themes that the briefings show recurring across months but the draft lacks. A theme must cover material in several months, not one.
+- Non-AI themes: include them only where the 2025-2026 material needs them (items here are mostly about AI). Older, non-AI parts of the archive (anthropology, history, religion) will get their own pass later, so do not force such themes now, but do not drop one the evidence supports.
+
+Produce 40 to 50 themes. For each: a short name (2-7 words, sentence case), a one-sentence definition, "include" (what belongs, with concrete examples from the briefings), "exclude" (what goes elsewhere and to which theme). Add short "notes" on what changed from the draft and why. Use his own vocabulary where it is clear.`;
+
+export function themesFinalUserMessage({ profile, briefings, draft, septStats, readwiseTags }) {
+  const months = briefings.map(({ month, text }) => `<briefing month="${month}">\n${text}\n</briefing>`).join('\n\n');
+  const d = draft.themes.map((t) => `${septStats.themeCounts[t.name] || 0}\t${t.name}: ${t.definition} Include: ${t.include} Exclude: ${t.exclude}`).join('\n');
+  const off = Object.entries(septStats.offList || {}).map(([n, c]) => `${c}\t${n}`).join('\n') || '(none)';
+  const tags = readwiseTags.tags.map((t) => `${t.count}\t${t.tag}`).join('\n');
+  return `<reader_profile>\n${profile}\n</reader_profile>\n\n<monthly_briefings>\n${months}\n</monthly_briefings>\n\n<draft_themes note="items tagged in September 2026 (of ${septStats.items}), name: definition">\n${d}\n</draft_themes>\n\n<names_tried_off_list note="count, name the tagger proposed that was not a theme">\n${off}\n</names_tried_off_list>\n\n<readwise_tags note="count, tag">\n${tags}\n</readwise_tags>`;
+}
