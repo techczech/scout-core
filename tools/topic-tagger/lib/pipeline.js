@@ -17,6 +17,7 @@ import { aliasMap } from './tag-results.js';
 import { callJson, tagAll, cacheStats } from './tag-run.js';
 import { qaSample, agreement, shuffle } from './qa.js';
 import { renderReviewV2 } from './review-v2.js';
+import { mdToHtml, esc } from './markdown.js';
 import { exampleFor } from './review.js';
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
@@ -111,6 +112,19 @@ export function stageProfileSources(env) {
   writeJson(p.readwiseTags, { generated: new Date().toISOString(), source: 'highlighted_at lines "| tags: ..." in readings/works, case-folded', ...tags });
   env.log(`readwise tags: ${tags.distinct_tags} distinct, top ${tags.tags.length} written`);
   return { readwiseTags: p.readwiseTags, profileExists: existsSync(p.profile) };
+}
+
+// Standalone page for reading the profile locally (light/dark, phone width, no external requests).
+export function stageProfileHtml(env) {
+  const p = paths(env);
+  if (!existsSync(p.profile)) throw new Error(`no profile at ${p.profile}`);
+  const md = readFileSync(p.profile, 'utf8');
+  const status = (md.match(/^status: (.*)$/m) || [])[1] || '';
+  const css = ':root{color-scheme:light dark;--bg:#fff;--fg:#1c1c1e;--mut:#6b6b70;--a:#0b57d0}@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#e8e8ea;--mut:#9a9aa0;--a:#8ab4f8}}body{font:17px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0 auto;padding:1rem;max-width:44rem}h2{font-size:1.5rem}h3{font-size:1.15rem;margin-top:1.8rem}.meta{color:var(--mut);font-size:.85rem}a{color:var(--a)}';
+  const out = p.profile.replace(/\.md$/, '.html');
+  writeText(out, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reader profile</title><style>${css}</style></head><body><p class="meta">${esc(status)} · source: <a href="reader-profile.md">reader-profile.md</a></p>${mdToHtml(md)}</body></html>`);
+  env.log(`profile page: ${out}`);
+  return { html: out };
 }
 
 // ---------- stage 2: month briefing ----------

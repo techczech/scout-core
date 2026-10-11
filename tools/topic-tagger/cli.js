@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // topic-tagger CLI. Run with ANTHROPIC_API_KEY injected by the estate bws helper (never stored).
 //   v2 (context-aware, one month):  cli.js <stage> --month YYYY-MM [--run-id id]
-//     stages: profile-sources | briefing | themes | enrich | tag | qa | review | all
+//     stages: profile-sources | profile-html | briefing | themes | enrich | tag | qa | review | all
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
@@ -11,7 +11,7 @@ import { consolidateRun, executeRun } from './lib/run.js';
 import { DEFAULT_MAX_ITEMS, DEFAULT_MAX_TOKENS } from './lib/batching.js';
 import * as v2 from './lib/pipeline.js';
 
-const STAGES = ['profile-sources', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all'];
+const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all'];
 const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all']);
 const log = (m) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
 const home = (p) => join(homedir(), p);
@@ -79,7 +79,7 @@ async function runV2(stage) {
     client: PAID.has(stage) ? new Anthropic({ maxRetries: 4 }) : null, log,
   };
   const steps = stage === 'all' ? ['briefing', 'themes', 'enrich', 'tag', 'qa', 'review'] : [stage];
-  const fns = { 'profile-sources': v2.stageProfileSources, briefing: v2.stageBriefing, themes: v2.stageThemes, enrich: v2.stageEnrich, tag: v2.stageTag, qa: v2.stageQa, review: v2.stageReview };
+  const fns = { 'profile-sources': v2.stageProfileSources, 'profile-html': v2.stageProfileHtml, briefing: v2.stageBriefing, themes: v2.stageThemes, enrich: v2.stageEnrich, tag: v2.stageTag, qa: v2.stageQa, review: v2.stageReview };
   const out = {};
   for (const s of steps) { log(`== ${s}`); out[s] = await fns[s](env); }
   console.log(JSON.stringify({ runId: env.runId, ...out }, null, 2));

@@ -59,6 +59,9 @@ test('v2 stages end to end with a fake client: files, ids, cache stats, cost cap
   const p = v2.paths(e);
 
   v2.stageProfileSources(e);
+  const ph = readFileSync(v2.stageProfileHtml(e).html, 'utf8');
+  assert.match(ph, /<h2>Reader<\/h2>/);
+  assert.ok(!/<script|src=/.test(ph));
   const tags = JSON.parse(readFileSync(p.readwiseTags, 'utf8'));
   assert.deepEqual(tags.tags.map((t) => t.tag), ['ai', 'mathematics']); // 'like' excluded
 
@@ -122,6 +125,12 @@ test('cost cap aborts a paid stage before any request', async () => {
   const calls = [];
   await assert.rejects(() => v2.stageBriefing(env(root, stream, rdir, fakeClient({ calls }), { maxUsd: 0.0001 })), /exceeds cap/);
   assert.equal(calls.length, 0);
+});
+
+test('markdown: bold, italics, lists; asterisks inside words left alone', async () => {
+  const { mdToHtml } = await import('../lib/markdown.js');
+  assert.equal(mdToHtml('He translated *Women, Fire* and **this** a*b*c'), '<p>He translated <i>Women, Fire</i> and <b>this</b> a*b*c</p>');
+  assert.equal(mdToHtml('- *A* x'), '<ul>\n<li><i>A</i> x</li>\n</ul>');
 });
 
 test('review page escapes model text and renders profile markdown', () => {
