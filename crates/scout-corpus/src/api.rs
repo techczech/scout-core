@@ -659,6 +659,22 @@ pub fn remove_corpus(id: &str, keep_index: bool) -> Result<Removed> {
     RegistryStore::from_env().remove(id, keep_index)
 }
 
+/// The one rule for whose event a facet value is. When any searched
+/// corpus has a records folder, an event belongs to its corpus: the same
+/// id in two corpora is two values, each with `corpus`. When none has, the
+/// event facet is what it was before lasting events: one value per id over
+/// all the searched corpora together, without `corpus`.
+fn events_are_per_corpus<'a>(
+    searched: impl IntoIterator<Item = &'a rusqlite::Connection>,
+) -> Result<bool> {
+    for conn in searched {
+        if crate::topics::has_records_folder(conn)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 impl Engine {
     /// The user registry and the platform index directory (honouring
     /// `SCOUT_CONFIG` and `SCOUT_DATA_DIR`), as the CLI uses them.
@@ -890,22 +906,26 @@ impl Engine {
         counter.event_floor(q.min_event_items);
         let mut used = Vec::new();
         let mut plan = search::Plan::parse(&q.query)?;
+        let mut searched = Vec::new();
         for c in &corpora {
-            if !(named.is_empty() || named.iter().any(|n| n == c.id())) {
-                continue;
+            if named.is_empty() || named.iter().any(|n| n == c.id()) {
+                searched.push((c, index::open_existing(&c.config, c.index_path())?));
             }
-            let conn = index::open_existing(&c.config, c.index_path())?;
-            // Events are per corpus: counted, named and sized within it.
-            counter.corpus(c.id());
-            let (p, docs) = search::matching_docs(&conn, &q.query)?;
+        }
+        let per_corpus = events_are_per_corpus(searched.iter().map(|(_, conn)| conn))?;
+        for (c, conn) in &searched {
+            if per_corpus {
+                counter.corpus(c.id());
+            }
+            let (p, docs) = search::matching_docs(conn, &q.query)?;
             plan = p;
             for d in &docs {
                 counter.add(d);
             }
-            counter.add_event_records(&crate::events::load(&conn)?);
+            counter.add_event_records(&crate::events::load(conn)?);
             if q.min_event_items > 1 {
                 // An event's size is counted as `scout events` counts it.
-                for d in crate::filter::load_docs(&conn)?.values() {
+                for d in crate::filter::load_docs(conn)?.values() {
                     if d.tokens > 0 {
                         counter.add_event_size(d);
                     }
@@ -950,15 +970,21 @@ impl Engine {
         let mut notes = vec![];
         let corpora = self.scope(&q.in_, &mut notes)?;
         let mut counter = FacetCounter::default();
+        let mut searched = Vec::new();
         for c in &corpora {
-            let conn = index::open_existing(&c.config, c.index_path())?;
-            counter.corpus(c.id());
-            for d in crate::filter::load_docs(&conn)?.values() {
+            searched.push((c, index::open_existing(&c.config, c.index_path())?));
+        }
+        let per_corpus = events_are_per_corpus(searched.iter().map(|(_, conn)| conn))?;
+        for (c, conn) in &searched {
+            if per_corpus {
+                counter.corpus(c.id());
+            }
+            for d in crate::filter::load_docs(conn)?.values() {
                 if d.topic.is_some() && d.tokens > 0 && filter.matches(d) {
                     counter.add(d);
                 }
             }
-            counter.add_event_records(&crate::events::load(&conn)?);
+            counter.add_event_records(&crate::events::load(conn)?);
         }
         let facet = counter.facet(field, q.top);
         Ok(Reply {

@@ -1,5 +1,5 @@
 {
- "about": "Event record files and the verdict the reader gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs (the Rust reader, events.rs) and tools/topic-tagger/test/event-record-fixtures.test.js (the seed stage, lib/event-record.js); both must agree with this file. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
+ "about": "Event record files and the verdict the reader (crates/scout-corpus/src/events.rs) gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs. The reader is the one implementation of the record format: `scout events seed` reads and checks records with it. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
  "cases": [
   {
    "file": "valid-full.md",
@@ -172,6 +172,12 @@
    "note": "the id is compared as written, not under the fold"
   },
   {
+   "file": "tagged-id.md",
+   "verdict": "reject",
+   "why": "id \"YQ==\" does not match the file name",
+   "note": "an explicit YAML tag (!!binary) is not applied: the id is the text as written"
+  },
+  {
    "file": "id-list.md",
    "verdict": "reject",
    "why": "id is not a single value"
@@ -281,7 +287,7 @@
   {
    "file": "nested-100000-deep.md",
    "verdict": "reject",
-   "why": "bad YAML",
+   "why": "nested deeper than 3 levels",
    "make": {
     "repeat": {
      "prefix": "---\nid: nested-100000-deep\nextra:\n  ",
@@ -289,8 +295,7 @@
      "count": 100000,
      "suffix": "a\n---\n"
     }
-   },
-   "note": "the two libraries word this differently"
+   }
   },
   {
    "file": "not-utf8.md",

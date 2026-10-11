@@ -1,10 +1,9 @@
 //! The shared event-record cases: every file of
 //! `tests/fixtures/event-records/` must get from the reader
 //! ([`scout_corpus::events::read`]) the verdict `verdicts.json` names for
-//! it. The seed stage's own check of existing records
-//! (`tools/topic-tagger/lib/event-record.js`) runs over the same folder in
-//! `tools/topic-tagger/test/event-record-fixtures.test.js`, so the two
-//! cannot drift apart unnoticed: a rule added to either needs a case here.
+//! it. The reader is the one implementation of the record format (`scout
+//! events seed` reads and checks records with it), so a rule added to it
+//! needs a case here and nowhere else.
 
 use scout_corpus::events;
 use serde_json::Value;

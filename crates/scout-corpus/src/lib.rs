@@ -21,6 +21,7 @@ pub mod clean;
 pub mod colloc;
 pub mod concord;
 pub mod event_list;
+pub mod event_seed;
 pub mod events;
 pub mod filter;
 pub mod freq;

@@ -7,8 +7,11 @@
 //!   gives for the fixture (its `TopicInfo` had no `events`, its
 //!   corrections read `themes`, `entities`, `event`, `event_name` and
 //!   `ai_related` and nothing else).
-//! - An event id names an event within one corpus. Two corpora holding the
-//!   same id hold two events: facets count, name and size them apart.
+//! - Where any searched corpus has a records folder, an event id names an
+//!   event within one corpus: two corpora holding the same id hold two
+//!   events, and facets count, name and size them apart. Where none has,
+//!   the event facet is the one from before lasting events: one value per
+//!   id over the searched corpora together, without `corpus`.
 
 use scout_corpus::api::{self, EventsQuery, FacetsQuery, SearchQuery, TopicsQuery};
 use scout_corpus::registry::{CorpusConfig, CorpusKind, DocumentUnit, FieldMap};
@@ -324,14 +327,21 @@ fn the_same_archive_with_a_records_folder_reads_the_events_list_and_the_correcti
 }
 
 /// Two corpora, each with its own event under the SAME id. `records`
-/// gives each a record `shared` (different names) holding its monthly
-/// event; without it the shared id is the monthly id itself.
+/// says which of alpha and beta has a records folder, holding a record
+/// `shared` (different names) for its monthly event; a corpus without one
+/// has the monthly id itself.
 struct Two {
     _dirs: Vec<tempfile::TempDir>,
     engine: Engine,
 }
 
-fn two_corpora(records: bool, works_in_alpha: u32) -> Two {
+fn two_corpora(records: [bool; 2], works_in_alpha: u32) -> Two {
+    two_corpora_with(records, works_in_alpha, false)
+}
+
+/// [`two_corpora`]; `empty_folder` gives beta a records folder with
+/// nothing in it.
+fn two_corpora_with(records: [bool; 2], works_in_alpha: u32, empty_folder: bool) -> Two {
     let (a, b, data) = (
         tempfile::tempdir().unwrap(),
         tempfile::tempdir().unwrap(),
@@ -350,14 +360,20 @@ fn two_corpora(records: bool, works_in_alpha: u32) -> Two {
         topics::LAYER_FILE,
         &row(9, Some(("2026-09/E01", "Beta story")), ""),
     );
-    if records {
-        for (root, name) in [(a.path(), "Alpha lasting"), (b.path(), "Beta lasting")] {
+    for (root, name, has) in [
+        (a.path(), "Alpha lasting", records[0]),
+        (b.path(), "Beta lasting", records[1]),
+    ] {
+        if has {
             write(
                 root,
                 &format!("{}/shared.md", events::EVENTS_DIR),
                 &format!("---\nid: shared\nname: {name}\nmembers: [2026-09/E01]\n---\n"),
             );
         }
+    }
+    if empty_folder {
+        fs::create_dir_all(b.path().join(events::EVENTS_DIR)).unwrap();
     }
     let cfgs = vec![config("alpha", a.path()), config("beta", b.path())];
     for c in &cfgs {
@@ -385,70 +401,142 @@ fn event_facet(e: &Engine, in_: &[&str], min: usize) -> Value {
     serde_json::to_value(&body).unwrap()["facets"]["event"].clone()
 }
 
+/// An event value of `scout topics events`: value, count, name, corpus.
+type EventItem = (String, usize, Option<String>, Option<String>);
+
+fn topics_events(e: &Engine) -> (usize, Vec<EventItem>) {
+    let topics = e
+        .topics(&TopicsQuery {
+            field: "events".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .body;
+    let items = topics
+        .items
+        .iter()
+        .map(|i| (i.value.clone(), i.count, i.name.clone(), i.corpus.clone()))
+        .collect();
+    (topics.distinct, items)
+}
+
+fn item(value: &str, count: usize, name: &str, corpus: Option<&str>) -> EventItem {
+    (
+        value.into(),
+        count,
+        Some(name.into()),
+        corpus.map(String::from),
+    )
+}
+
 #[test]
-fn facets_keep_the_events_of_two_corpora_apart_under_one_id() {
-    for (records, id, names) in [
-        (true, "shared", ["Alpha lasting", "Beta lasting"]),
-        (false, "2026-09/E01", ["Alpha story", "Beta story"]),
-    ] {
-        let t = two_corpora(records, 1);
-        let e = &t.engine;
-        // `scout events`: two events, one per corpus.
-        let listed = e.events(&EventsQuery::default()).unwrap().body;
-        assert_eq!(listed.distinct, 2);
-        // The review's reproduction: one event of count 2 under the first
-        // name. Two events of one item each, each with its own name.
-        assert_eq!(
-            event_facet(e, &[], 1),
-            json!({"distinct": 2, "items": [
-                {"value": id, "count": 1, "name": names[0], "corpus": "alpha"},
-                {"value": id, "count": 1, "name": names[1], "corpus": "beta"},
-            ]}),
-            "records: {records}"
-        );
-        // Neither has two items in its corpus, so the floor leaves both out.
-        assert_eq!(
-            event_facet(e, &[], 2),
-            json!({"distinct": 0, "items": []}),
-            "records: {records}"
-        );
-        // `scout topics events` lists them the same way.
-        let topics = e
-            .topics(&TopicsQuery {
-                field: "events".into(),
-                ..Default::default()
-            })
-            .unwrap()
-            .body;
-        let got: Vec<_> = topics
-            .items
-            .iter()
-            .map(|i| (i.count, i.name.as_deref(), i.corpus.as_deref()))
-            .collect();
-        assert_eq!(
-            got,
+fn with_records_facets_keep_the_events_of_two_corpora_apart_under_one_id() {
+    let t = two_corpora([true, true], 1);
+    let e = &t.engine;
+    // `scout events`: two events, one per corpus.
+    let listed = e.events(&EventsQuery::default()).unwrap().body;
+    assert_eq!(listed.distinct, 2);
+    // Two events of one item each, each with its own name.
+    assert_eq!(
+        event_facet(e, &[], 1),
+        json!({"distinct": 2, "items": [
+            {"value": "shared", "count": 1, "name": "Alpha lasting", "corpus": "alpha"},
+            {"value": "shared", "count": 1, "name": "Beta lasting", "corpus": "beta"},
+        ]})
+    );
+    // Neither has two items in its corpus, so the floor leaves both out.
+    assert_eq!(event_facet(e, &[], 2), json!({"distinct": 0, "items": []}));
+    // `scout topics events` lists them the same way.
+    assert_eq!(
+        topics_events(e),
+        (
+            2,
             vec![
-                (1, Some(names[0]), Some("alpha")),
-                (1, Some(names[1]), Some("beta"))
+                item("shared", 1, "Alpha lasting", Some("alpha")),
+                item("shared", 1, "Beta lasting", Some("beta")),
             ]
-        );
-        assert_eq!(topics.distinct, 2);
-        // One corpus searched: the value has no `corpus`, as before.
-        assert_eq!(
-            event_facet(e, &["beta"], 1),
-            json!({"distinct": 1, "items": [{"value": id, "count": 1, "name": names[1]}]})
-        );
-        // The query still takes the id in each corpus: both works match,
-        // and `--in` narrows to one corpus's event.
-        assert_eq!(hits(e, &format!("event:{id}")), vec![1, 9]);
-        assert_eq!(hits(e, &format!("event:{id} in:beta")), vec![9]);
-    }
+        )
+    );
+    // One corpus searched: the value has no `corpus`.
+    assert_eq!(
+        event_facet(e, &["beta"], 1),
+        json!({"distinct": 1, "items": [{"value": "shared", "count": 1, "name": "Beta lasting"}]})
+    );
+    // The query still takes the id in each corpus: both works match, and
+    // `--in` narrows to one corpus's event.
+    assert_eq!(hits(e, "event:shared"), vec![1, 9]);
+    assert_eq!(hits(e, "event:shared in:beta"), vec![9]);
+}
+
+#[test]
+fn without_any_records_folder_the_event_facet_is_one_value_per_id_as_before() {
+    // What `main` gave before lasting events for two corpora sharing a
+    // monthly id: one value, both documents, the most frequent layer name
+    // (a tie: the alphabetically first), and no `corpus`.
+    let t = two_corpora([false, false], 1);
+    let e = &t.engine;
+    let one = json!({"distinct": 1, "items": [
+        {"value": "2026-09/E01", "count": 2, "name": "Alpha story"},
+    ]});
+    assert_eq!(event_facet(e, &[], 1), one);
+    assert_eq!(
+        topics_events(e),
+        (1, vec![item("2026-09/E01", 2, "Alpha story", None)])
+    );
+    // The floor measures that one value: two items over the two corpora.
+    assert_eq!(event_facet(e, &[], 2), one);
+    assert_eq!(event_facet(e, &[], 3), json!({"distinct": 0, "items": []}));
+    assert_eq!(
+        event_facet(e, &["beta"], 1),
+        json!({"distinct": 1, "items": [{"value": "2026-09/E01", "count": 1, "name": "Beta story"}]})
+    );
+    assert_eq!(hits(e, "event:2026-09/E01"), vec![1, 9]);
+    assert_eq!(hits(e, "event:2026-09/E01 in:beta"), vec![9]);
+}
+
+#[test]
+fn one_records_folder_among_the_searched_corpora_makes_events_per_corpus() {
+    // Alpha has records, beta has none.
+    let t = two_corpora([true, false], 1);
+    let e = &t.engine;
+    assert_eq!(
+        event_facet(e, &[], 1),
+        json!({"distinct": 2, "items": [
+            {"value": "2026-09/E01", "count": 1, "name": "Beta story", "corpus": "beta"},
+            {"value": "shared", "count": 1, "name": "Alpha lasting", "corpus": "alpha"},
+        ]})
+    );
+    assert_eq!(
+        topics_events(e),
+        (
+            2,
+            vec![
+                item("2026-09/E01", 1, "Beta story", Some("beta")),
+                item("shared", 1, "Alpha lasting", Some("alpha")),
+            ]
+        )
+    );
+    // The rule looks at the corpora searched, not at the registry: beta
+    // alone has no records folder and one corpus never carries `corpus`.
+    assert_eq!(
+        event_facet(e, &["beta"], 1),
+        json!({"distinct": 1, "items": [{"value": "2026-09/E01", "count": 1, "name": "Beta story"}]})
+    );
+    // A records folder with nothing in it is a records folder.
+    let t = two_corpora_with([false, false], 1, true);
+    assert_eq!(
+        event_facet(&t.engine, &[], 1),
+        json!({"distinct": 2, "items": [
+            {"value": "2026-09/E01", "count": 1, "name": "Alpha story", "corpus": "alpha"},
+            {"value": "2026-09/E01", "count": 1, "name": "Beta story", "corpus": "beta"},
+        ]})
+    );
 }
 
 #[test]
 fn the_event_floor_measures_each_event_in_its_own_corpus() {
     // Alpha's event has two items, beta's one: three under the shared id.
-    let t = two_corpora(true, 2);
+    let t = two_corpora([true, true], 2);
     assert_eq!(
         event_facet(&t.engine, &[], 2),
         json!({"distinct": 1, "items": [

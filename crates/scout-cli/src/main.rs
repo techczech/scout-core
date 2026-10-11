@@ -117,8 +117,12 @@ enum Cmd {
         json: bool,
     },
     /// List events with their record fields, item counts and counts per
-    /// month (lasting events where the corpus has records).
+    /// month (lasting events where the corpus has records); `events seed`
+    /// creates the record files.
+    #[command(args_conflicts_with_subcommands = true)]
     Events {
+        #[command(subcommand)]
+        cmd: Option<EventsCmd>,
         /// Only events with an item in this layer month (YYYY-MM or YYYY).
         #[arg(long)]
         month: Option<String>,
@@ -345,6 +349,28 @@ impl Scope {
 }
 
 #[derive(Subcommand)]
+enum EventsCmd {
+    /// Create one record file for every monthly event no record holds yet
+    /// (`<out>/<id>.md`). No model call. Without --apply nothing is
+    /// written. Prints its counts as one JSON line. Stops before any write
+    /// when a record already in the out folder, or one about to be
+    /// written, is one `index build` would skip.
+    Seed {
+        /// The archive folder (holds analysis/context/briefings and
+        /// analysis/topics/current.jsonl).
+        #[arg(long)]
+        archive: std::path::PathBuf,
+        /// Where records go (default: <archive>/analysis/events). Must be
+        /// the folder itself, not a symlink to it.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Write the records.
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CorporaCmd {
     /// List registered corpora.
     List {
@@ -544,6 +570,30 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 cmd: Cmd::Corpora { cmd },
             },
         },
+        // The seed reads an archive folder, not the registry or an index.
+        Cmd::Events {
+            cmd:
+                Some(EventsCmd::Seed {
+                    archive,
+                    out,
+                    apply,
+                }),
+            ..
+        } => {
+            let r = scout_corpus::event_seed::seed(&scout_corpus::event_seed::SeedOptions {
+                archive,
+                out,
+                apply,
+            })?;
+            println!("{}", serde_json::to_string(&r)?);
+            if !r.apply {
+                eprintln!(
+                    "dry run: nothing written; {} records would be created in {} (add --apply)",
+                    r.to_create, r.out
+                );
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
         cmd => Cli { cmd },
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
@@ -614,7 +664,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             out(engine.topics(&q), json, topic_views::print_topics)
         }
+        Cmd::Events { cmd: Some(_), .. } => unreachable!("handled before the engine loads"),
         Cmd::Events {
+            cmd: None,
             month,
             in_,
             min_items,

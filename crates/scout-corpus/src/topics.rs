@@ -870,6 +870,21 @@ pub(crate) fn refresh(
     Ok((report, records))
 }
 
+/// Whether the corpus had a records folder (`analysis/events/`, empty or
+/// not) when this index was last built. False for an index built before
+/// lasting events.
+pub fn has_records_folder(conn: &Connection) -> Result<bool> {
+    let with_layer = meta_get(conn, REPORT_KEY)?
+        .and_then(|s| serde_json::from_str::<Option<TopicReport>>(&s).ok())
+        .flatten()
+        .is_some_and(|r| r.events.is_some());
+    let alone = meta_get(conn, EVENTS_REPORT_KEY)?
+        .and_then(|s| serde_json::from_str::<Option<EventsReport>>(&s).ok())
+        .flatten()
+        .is_some();
+    Ok(with_layer || alone)
+}
+
 /// Every document's tags, by document key; empty for an index built
 /// before the topic layer existed.
 pub fn load(conn: &Connection) -> Result<BTreeMap<String, TopicInfo>> {

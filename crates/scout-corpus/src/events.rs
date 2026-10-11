@@ -42,6 +42,7 @@ use yaml_rust2::scanner::TScalarStyle;
 pub const EVENTS_DIR: &str = "analysis/events";
 /// Largest record file read, in bytes; a larger one is skipped.
 pub const MAX_RECORD_BYTES: u64 = 1 << 20;
+const TOO_LARGE: &str = "larger than 1 MiB";
 /// Deepest YAML nesting read in a record's frontmatter: the mapping (1),
 /// a list value (2) and one level inside an ignored value (3). A record
 /// that nests deeper is skipped.
@@ -85,8 +86,18 @@ pub struct EventSet {
     pub aliases: BTreeMap<String, String>,
     /// Record files skipped as malformed.
     pub skipped: usize,
+    /// Each skipped file with the reason; `skipped` of them.
+    pub refused: Vec<Refused>,
     /// One line per skipped file, unusable `merged_into` or member conflict.
     pub warnings: Vec<String>,
+}
+
+/// A record file the reader skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    /// The file's name in the records folder.
+    pub file: String,
+    pub why: String,
 }
 
 /// What a build did with the records (`index build` reports it).
@@ -117,12 +128,13 @@ impl EventSet {
         for r in records {
             let key = fold(&r.id);
             if key.is_empty() || set.records.contains_key(&key) {
+                let why = format!("repeated or empty id {:?}", r.id);
                 set.skipped += 1;
-                set.warnings.push(format!(
-                    "{}: repeated or empty id {:?}",
-                    file_of(&r.id),
-                    r.id
-                ));
+                set.warnings.push(format!("{}: {why}", file_of(&r.id)));
+                set.refused.push(Refused {
+                    file: format!("{}.md", r.id),
+                    why,
+                });
                 continue;
             }
             set.records.insert(key, r);
@@ -269,9 +281,8 @@ enum Entry {
 /// names and bytes to `hash`, then one zero byte (no file name is empty,
 /// so what a caller hashes next cannot read as a further record).
 /// `Ok(false)` when the folder is missing; nothing is hashed then.
-fn scan(root: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Result<bool> {
-    let dir = root.join(EVENTS_DIR);
-    let rd = match std::fs::read_dir(&dir) {
+fn scan(dir: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Result<bool> {
+    let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e)
             if matches!(
@@ -294,7 +305,7 @@ fn scan(root: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Resu
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.starts_with('.') || !name.ends_with(".md") {
+        if record_stem(name).is_none() {
             continue;
         }
         hash.update(name.as_bytes());
@@ -302,10 +313,10 @@ fn scan(root: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Resu
         // Not followed: a record is a plain file of this folder.
         let entry = match std::fs::symlink_metadata(&path) {
             Ok(m) if !m.is_file() => Entry::Refused("not a plain file"),
-            Ok(m) if m.len() > MAX_RECORD_BYTES => Entry::Refused("larger than 1 MiB"),
+            Ok(m) if m.len() > MAX_RECORD_BYTES => Entry::Refused(TOO_LARGE),
             Ok(_) => match read_capped(&path) {
                 Ok(Some(b)) => Entry::Bytes(b),
-                Ok(None) => Entry::Refused("larger than 1 MiB"),
+                Ok(None) => Entry::Refused(TOO_LARGE),
                 Err(_) => Entry::Refused("cannot be read"),
             },
             Err(_) => Entry::Refused("cannot be read"),
@@ -347,7 +358,29 @@ fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
 /// Feed the records folder to `hash` (nothing when it is missing), so a
 /// build can tell whether the records changed. False when it is missing.
 pub(crate) fn hash_into(root: &Path, hash: &mut Sha1) -> Result<bool> {
-    scan(root, hash, |_, _| {})
+    scan(&root.join(EVENTS_DIR), hash, |_, _| {})
+}
+
+/// The record id a file of the records folder must carry: its name
+/// without `.md` (every trailing `.md`). `None` for a name that is not a
+/// record file (no `.md` ending, or a leading `.`); such a file is not
+/// looked at.
+pub fn record_stem(file_name: &str) -> Option<&str> {
+    (file_name.ends_with(".md") && !file_name.starts_with('.'))
+        .then(|| file_name.trim_end_matches(".md"))
+}
+
+/// The record in a file's bytes, or why the reader skips it: the size cap,
+/// UTF-8 and [`parse_record`]. Every record the index reads has passed
+/// through here, and so has every record `scout events seed` writes.
+pub fn parse_bytes(bytes: &[u8], stem: &str) -> std::result::Result<EventRecord, String> {
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(TOO_LARGE.to_string());
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => parse_record(text, stem),
+        Err(_) => Err("not valid UTF-8".to_string()),
+    }
 }
 
 /// Read the lasting events of the corpus at `root`; `None` when it has no
@@ -356,30 +389,47 @@ pub fn read(root: &Path) -> Result<Option<EventSet>> {
     read_hashed(root, &mut Sha1::new())
 }
 
+/// [`read`] over a records folder given directly (`scout events seed
+/// --out`); `None` when there is no such folder. Warnings still label
+/// files as `analysis/events/<name>`.
+pub fn read_dir(dir: &Path) -> Result<Option<EventSet>> {
+    read_dir_hashed(dir, &mut Sha1::new())
+}
+
 /// [`read`], feeding `hash` exactly the bytes it read.
 pub(crate) fn read_hashed(root: &Path, hash: &mut Sha1) -> Result<Option<EventSet>> {
+    read_dir_hashed(&root.join(EVENTS_DIR), hash)
+}
+
+fn read_dir_hashed(dir: &Path, hash: &mut Sha1) -> Result<Option<EventSet>> {
     let mut records = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let found = scan(root, hash, |name, entry| {
+    let mut refused: Vec<Refused> = Vec::new();
+    let found = scan(dir, hash, |name, entry| {
         let parsed = match entry {
             Entry::Refused(why) => Err(why.to_string()),
-            Entry::Bytes(b) => match std::str::from_utf8(&b) {
-                Ok(text) => parse_record(text, name.trim_end_matches(".md")),
-                Err(_) => Err("not valid UTF-8".to_string()),
-            },
+            Entry::Bytes(b) => parse_bytes(&b, record_stem(name).unwrap_or(name)),
         };
         match parsed {
             Ok(r) => records.push(r),
-            Err(why) => skipped.push(format!("{EVENTS_DIR}/{name}: {why}; skipped")),
+            Err(why) => refused.push(Refused {
+                file: name.to_string(),
+                why,
+            }),
         }
     })?;
     if !found {
         return Ok(None);
     }
-    let mut set = EventSet::from_records(root.join(EVENTS_DIR), records);
-    set.skipped += skipped.len();
-    skipped.append(&mut set.warnings);
-    set.warnings = skipped;
+    let mut set = EventSet::from_records(dir.to_path_buf(), records);
+    set.skipped += refused.len();
+    let mut warnings: Vec<String> = refused
+        .iter()
+        .map(|r| format!("{EVENTS_DIR}/{}: {}; skipped", r.file, r.why))
+        .collect();
+    warnings.append(&mut set.warnings);
+    set.warnings = warnings;
+    refused.append(&mut set.refused);
+    set.refused = refused;
     Ok(Some(set))
 }
 

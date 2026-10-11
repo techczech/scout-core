@@ -17,9 +17,9 @@ pub struct FacetItem {
     /// Events: the event's name (its record's, else the layer's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Events, and only when the counted documents come from more than one
-    /// corpus: the corpus the event belongs to. Events are per corpus, so
-    /// the same id in two corpora is two values.
+    /// Events, and only when more than one corpus was searched and any of
+    /// them has a records folder: the corpus the event belongs to (the
+    /// same id in two corpora is then two values).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corpus: Option<String>,
 }
@@ -150,12 +150,14 @@ struct CorpusEvents {
 /// fields do, so a facet's count is the document total of the matching
 /// `theme:` / `entity:` / `event:` / `month:` query.
 ///
-/// Several corpora may feed one counter: call [`FacetCounter::corpus`]
-/// before feeding each one. Themes, entities and months are counted
-/// across the corpora. Events are not: an event belongs to its corpus, so
-/// the same id in two corpora gives two values, each counted, named and
-/// sized (the `event_floor`) within its own corpus, and each carrying
-/// `corpus`. With one corpus (or none named) no value carries `corpus`.
+/// Several corpora may feed one counter. Themes, entities and months are
+/// counted across them. Events are too, one value per id, unless the
+/// caller names each corpus with [`FacetCounter::corpus`] before feeding
+/// it: then an event belongs to its corpus, so the same id in two corpora
+/// gives two values, each counted, named and sized (the `event_floor`)
+/// within its own corpus, and each carrying `corpus`. With one corpus
+/// named, or none, no value carries `corpus`. The engine names corpora
+/// exactly when a searched corpus has a records folder.
 #[derive(Debug, Default)]
 pub struct FacetCounter {
     pub documents: usize,
