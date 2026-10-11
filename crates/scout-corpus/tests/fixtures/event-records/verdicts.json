@@ -336,6 +336,47 @@
    }
   },
   {
+   "file": "doc-end-then-broken.md",
+   "verdict": "reject",
+   "why": "document end marker",
+   "note": "a `...` line ends the YAML document: the broken tail after it would go unread"
+  },
+  {
+   "file": "doc-end-then-document.md",
+   "verdict": "reject",
+   "why": "document end marker",
+   "note": "a second document after `...`"
+  },
+  {
+   "file": "doc-end-then-garbage.md",
+   "verdict": "reject",
+   "why": "document end marker",
+   "note": "anything after `...`"
+  },
+  {
+   "file": "doc-end-last.md",
+   "verdict": "reject",
+   "why": "document end marker",
+   "note": "`...` with nothing after it: no document end marker is read in a frontmatter"
+  },
+  {
+   "file": "second-document.md",
+   "verdict": "reject",
+   "why": "more than one document",
+   "note": "`--- text` on a line starts a second document"
+  },
+  {
+   "file": "second-document-broken.md",
+   "verdict": "reject",
+   "why": "bad YAML",
+   "note": "an error anywhere in the frontmatter, here in a second document"
+  },
+  {
+   "file": "valid-dots.md",
+   "verdict": "accept",
+   "note": "dots in a value, indented in a block scalar and in the body are not a document end marker"
+  },
+  {
    "file": ".hidden.md",
    "verdict": "ignored",
    "note": "a name starting with . is not a record"

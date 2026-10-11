@@ -17,7 +17,10 @@
 //!   set, old and new, goes through [`EventSet::from_records`]: no id may
 //!   repeat and every new member must resolve to its new record.
 //! - Only then is anything written, and a failure of any check leaves the
-//!   out folder exactly as it was (it is not even created).
+//!   out folder exactly as it was (it is not even created). Once writing
+//!   has begun a run can still stop (a write fails, or a file of a
+//!   record's name appeared since the folder was read): the records made
+//!   so far stay, they are whole, and a second run makes the rest.
 //!
 //! Every input goes through the one reader of its format:
 //!
@@ -47,28 +50,39 @@
 //!
 //! None of these is written.
 //!
-//! Writes (only with `apply`): the out folder when it is missing, and new
-//! record files directly inside it, each `<id>.md` with a slug id, each
+//! Writes (only with `apply`): the out folder when it is missing (with
+//! any missing folder above it), and new record files directly inside it, each `<id>.md` with a slug id, each
 //! opened create-exclusive and no-follow. No existing file is opened for
 //! writing, renamed or removed; no temporary or log file is made. The
 //! run's counts go to the caller.
 //!
 //! The out folder is the path given, made absolute with `.` and `..`
 //! taken out. It must be a real folder, not a symlink. Symlinks in the
-//! folders above it are accepted (macOS `/tmp` is one) and resolved once;
-//! the report names the resolved folder.
+//! folders above it are accepted (macOS `/tmp` is one) and resolved when
+//! the folder is looked at (before the plan and, with `apply`, once more
+//! after it is made); the report names the resolved folder.
 //!
 //! Threat model. A single-user desktop tool; no hostile process runs
 //! beside it.
 //!
-//! - Defended: a symlink or hard link standing at the out folder or at any
-//!   record name when the run looks (the folder is refused; a record name
-//!   in use, by a link of either kind, a folder or a file, is never opened
-//!   and the run stops); overwriting (every file is opened
-//!   create-exclusive, no-follow); traversal through ids (an id is a slug,
-//!   the file name a bare `<slug>.md`); partial state after a refusal
-//!   (every check runs before the first write and a refused run leaves the
-//!   out folder as it was, not even created).
+//! - Holds, whatever is in the out folder when the run looks:
+//!   - The out folder itself is not a symlink (refused), so records are
+//!     not created through a link standing in its place.
+//!   - An existing name is never opened for writing, truncated, renamed or
+//!     removed, whatever it is (a file, a symlink dangling or not, a hard
+//!     link to a file elsewhere, a folder). A new record takes a free name
+//!     and is opened create-exclusive and no-follow, so its bytes go to a
+//!     new file of its own and reach nothing through a link.
+//!   - Symlinks and folders under a record name are not read as records:
+//!     the reader refuses them and the seed stops. A hard-linked regular
+//!     file is read like any other file: as a record when it is a valid
+//!     one, refused when it is not. Reading it is harmless; there is no
+//!     link-count check.
+//!   - No traversal through ids: an id is a slug, the file name a bare
+//!     `<slug>.md`.
+//!   - No partial state after a failed check: every check runs before the
+//!     first write. (A stop during the writes leaves whole records only;
+//!     see above.)
 //! - Not defended: another process replacing the out folder while the seed
 //!   runs. The folder is checked once and each record is then created by
 //!   path, so if the folder is renamed away and a symlink put in its place

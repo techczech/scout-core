@@ -137,7 +137,23 @@ impl Flat {
     }
 }
 
-/// Read the first YAML document of `front` into a [`Flat`].
+/// Is there a document end marker in `front`: a line that is `...`, alone
+/// or followed by whitespace? YAML reads such a line as the end of the
+/// document wherever it stands (content of a block scalar is indented, so
+/// an indented `...` is not one).
+fn has_document_end(front: &str) -> bool {
+    front.lines().any(|l| {
+        l.strip_prefix("...")
+            .is_some_and(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+    })
+}
+
+/// Read `front`, which must be exactly one YAML document, into a [`Flat`].
+///
+/// The whole frontmatter is read, to the end of the YAML stream: an error
+/// anywhere in it, a second document (`--- x` on a line of its own) or a
+/// document end marker (`...`, which would let anything stand after it)
+/// refuses the record. So no part of a frontmatter block goes unchecked.
 ///
 /// The parser is driven one event at a time (`Parser::next_token`, a state
 /// machine over explicit stacks) and never through `Parser::load`, which
@@ -147,14 +163,24 @@ impl Flat {
 /// scanner may look ahead of the parser; it has no recursion and refuses
 /// more than 255 open flow brackets itself, "recursion limit exceeded".)
 fn read_flat(front: &str) -> std::result::Result<Flat, String> {
+    if has_document_end(front) {
+        return Err("bad YAML (a document end marker `...` in the frontmatter)".into());
+    }
     let mut flat = Flat::default();
     let mut parser = Parser::new_from_str(front);
+    let mut documents = 0;
     loop {
         let (ev, _) = parser.next_token().map_err(|e| format!("bad YAML ({e})"))?;
-        if matches!(ev, Event::DocumentEnd | Event::StreamEnd) {
-            return Ok(flat);
+        match ev {
+            Event::StreamEnd => return Ok(flat),
+            Event::DocumentStart => {
+                documents += 1;
+                if documents > 1 {
+                    return Err("bad YAML (more than one document in the frontmatter)".into());
+                }
+            }
+            ev => flat.on_event(ev),
         }
-        flat.on_event(ev);
         if flat.too_deep {
             return Err(format!(
                 "bad YAML (nested deeper than {MAX_YAML_DEPTH} levels)"
@@ -274,6 +300,42 @@ mod tests {
         ] {
             let e = parse_record(text, "x").unwrap_err();
             assert!(e.contains(why), "{text:?}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_whole_frontmatter_is_one_yaml_document_read_to_its_end() {
+        for (front, why) in [
+            // The review's case: a valid head, `...`, a broken tail.
+            (
+                "id: x\nmembers: [2026-09/E01]\n...\nname: [unterminated\n",
+                "document end marker",
+            ),
+            ("id: x\n...\nid: y\n", "document end marker"),
+            ("id: x\n...\ngarbage: [\n", "document end marker"),
+            ("id: x\n...\n", "document end marker"),
+            ("id: x\n... \n", "document end marker"),
+            ("id: x\n...\t# done\n", "document end marker"),
+            ("...\nid: x\n", "document end marker"),
+            ("id: x\n--- second\n", "more than one document"),
+            ("id: x\n--- {id: x}\n", "more than one document"),
+            ("id: x\n--- [unterminated\n", "bad YAML"),
+            ("id: x\nname: fine\nmembers: [a\n", "bad YAML"),
+        ] {
+            let text = format!("---\n{front}---\nbody\n");
+            let e = parse_record(&text, "x").unwrap_err();
+            assert!(e.contains(why), "{front:?}: {e}");
+        }
+        // Not markers: dots inside a value, indented in a block scalar, a
+        // longer run of dots, and any line of the body.
+        for front in [
+            "id: x\nname: wait...\n",
+            "id: x\nname: \"...\"\n",
+            "id: x\nnote: |\n  one\n  ...\n  two\n",
+            "id: x\nname: >\n  ....\n",
+        ] {
+            let text = format!("---\n{front}---\n...\n--- more\n");
+            assert!(parse_record(&text, "x").is_ok(), "{front:?}");
         }
     }
 

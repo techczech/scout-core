@@ -33,6 +33,23 @@ fn a_record_the_reader_skips_stops_the_run_with_the_readers_reason() {
             "---\nid: !!binary YQ==\nmembers: [2026-09/E01]\n---\n",
             "id \"YQ==\" does not match the file name",
         ),
+        // The whole frontmatter is checked: a valid head that holds the
+        // member, a `...` line, then anything.
+        (
+            "doc-end.md",
+            "---\nid: doc-end\nmembers: [2026-09/E01]\n...\nname: [unterminated\n---\n",
+            "document end marker",
+        ),
+        (
+            "doc-end-clean.md",
+            "---\nid: doc-end-clean\nmembers: [2026-09/E01]\n...\n---\n",
+            "document end marker",
+        ),
+        (
+            "two-documents.md",
+            "---\nid: two-documents\nmembers: [2026-09/E01]\n--- second\n---\n",
+            "more than one document",
+        ),
         (
             "alias.md",
             "---\nx: &m [2026-09/E01]\nid: alias\nmembers: *m\n---\n",
@@ -242,6 +259,29 @@ fn links_planted_in_the_out_folder_are_left_alone_and_nothing_outside_changes() 
         let m = fs::symlink_metadata(out.join(format!("{id}.md"))).unwrap();
         assert!(m.is_file() && m.nlink() == 1, "{id} is a file of its own");
     }
+}
+
+/// A hard-linked regular file is read like any other: a valid record
+/// under a record name counts as one (there is no link-count check), and
+/// neither it nor the file it shares its bytes with is written.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_valid_record_is_read_as_a_record_and_never_written() {
+    use std::os::unix::fs::MetadataExt;
+    let a = archive();
+    let out = a.path().join("analysis/events");
+    fs::create_dir_all(&out).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let text = "---\nid: mine\nmembers: [2026-09/E02]\n---\n";
+    let original = put(outside.path(), "kept-elsewhere.md", text);
+    fs::hard_link(&original, out.join("mine.md")).unwrap();
+    let r = seed(&opts(a.path(), None, true)).unwrap();
+    assert_eq!((r.already_in_a_record, r.created), (1, 9));
+    let set = read_all(&out);
+    assert_eq!(set.resolve("2026-09/E02"), Some("mine"));
+    assert_eq!(fs::read_to_string(&original).unwrap(), text);
+    assert_eq!(fs::metadata(&original).unwrap().nlink(), 2);
+    assert_eq!(names(outside.path()), ["kept-elsewhere.md"]);
 }
 
 #[test]
