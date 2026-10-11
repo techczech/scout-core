@@ -1,20 +1,27 @@
 // Seed stage for lasting events (spec: archive-scout docs/specs/2026-10-11-lasting-events-spec.md).
-// Deterministic: no model call, no network. Every monthly event that has tagged items and is not yet in a
-// record's `members` becomes one record file `<out>/<id>.md`.
+// Deterministic: no model call, no network. Every monthly event (every event of every briefing file, with or
+// without tagged items, plus any event id only the tag rows name) that is not yet in a record's `members`
+// becomes one record file `<out>/<id>.md`.
 //
 // Reads (never writes): <archive>/analysis/context/briefings/<period>-events.json (names with `.superseded-`
 // are ignored; the folder is not walked) and <archive>/analysis/topics/current.jsonl (model tag rows;
 // corrections.jsonl is not applied here, the reader applies it at query time).
-// Writes (only with apply): new record files and one ledger line, both inside the resolved out folder.
-// A record file that exists is never rewritten or renamed.
-import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+// Writes (only with apply): new record files, each created with O_CREAT|O_EXCL|O_NOFOLLOW directly inside the
+// out folder, and the out folder itself (with any missing folder above it) when it is missing. Nothing else: no temporary file, no log file, and
+// no existing file is ever opened for writing, renamed or removed. The run's counts go to the caller (the CLI
+// prints them as one JSON line).
+//
+// The out folder: the path given (made absolute, `.` and `..` removed), which must be a real folder and not a
+// symlink. Symlinks in the folders ABOVE it are accepted (macOS /tmp and /var are such links) and resolved once;
+// every record is created under that resolved path, which the report gives as `out`.
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, stringify } from 'yaml';
 
 export const SLUG_MAX = 60;
 export const THEMES_MAX = 5;
-export const LEDGER_FILE = 'seed-log.jsonl';
+export const TOOL = 'topic-tagger events-seed';
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const EVENTS_FILE_RE = /^(\d{4}-(?:(?:0[1-9]|1[0-2])|Q[1-4]))-events\.json$/;
 const MONTHLY_ID_RE = /^(\d{4}-(?:(?:0[1-9]|1[0-2])|Q[1-4]))\/(E\d+)$/;
@@ -179,9 +186,11 @@ export function planSeed({ archiveRoot, outDir }) {
   const records = [];
   const notes = { collisions: [], fallback_slugs: [], truncated_slugs: [], non_ascii_names: [], no_briefing_entry: [], month_dates: [] };
   let alreadyMembers = 0;
-  for (const member of [...tagged.keys()].sort(byMonthlyId)) {
+  // Every briefing event, tagged or not, and every event id only the tag rows name.
+  const all = [...new Set([...monthly.keys(), ...tagged.keys()])].sort(byMonthlyId);
+  for (const member of all) {
     if (existing.members.has(member.toLowerCase())) { alreadyMembers++; continue; }
-    const items = tagged.get(member);
+    const items = tagged.get(member) || [];
     const [, period, number] = MONTHLY_ID_RE.exec(member);
     const brief = monthly.get(member);
     if (!brief) notes.no_briefing_entry.push(member);
@@ -194,6 +203,7 @@ export function planSeed({ archiveRoot, outDir }) {
     if (picked.truncated) notes.truncated_slugs.push({ id: picked.id, name, member });
     // eslint-disable-next-line no-control-regex
     if (/[^\x00-\x7f]/.test(name)) notes.non_ascii_names.push({ id: picked.id, name, member });
+    // No dated item (or no item at all): the first and last day of the event's month or quarter.
     const dates = items.map((r) => r.date).filter(isDate).map((d) => d.slice(0, 10)).sort();
     const span = dates.length ? { start: dates[0], end: dates[dates.length - 1] } : periodSpan(period);
     if (!dates.length) notes.month_dates.push(member);
@@ -215,65 +225,82 @@ export function planSeed({ archiveRoot, outDir }) {
   return {
     records,
     counts: {
+      monthly_events: all.length,
       briefing_events: monthly.size,
       monthly_events_with_items: tagged.size,
       briefing_events_without_items: withoutItems.length,
       already_in_a_record: alreadyMembers,
       to_create: records.length,
+      no_items: records.filter((r) => r.items === 0).length,
       one_item: records.filter((r) => r.items === 1).length,
     },
     notes: { ...notes, briefing_events_without_items: withoutItems },
   };
 }
 
-/** Write `text` to `<dir>/<name>` only if nothing is there; false when it exists. Never overwrites, never partial. */
-function createExclusive(dir, name, text) {
-  const target = resolve(dir, name);
-  if (dirname(target) !== dir) throw new Error(`${name}: outside the out folder`);
-  const tmp = join(dir, `.seed-${process.pid}-${name}.tmp`);
-  writeFileSync(tmp, text, { flag: 'wx' });
-  try {
-    linkSync(tmp, target);
-    return true;
-  } catch (err) {
-    if (err.code === 'EEXIST') return false;
-    throw err;
-  } finally {
-    unlinkSync(tmp);
+/**
+ * The folder records are created in: `outDir` made absolute, required to be a real folder (not a symlink, not a
+ * file), with the symlinks of the folders above it resolved. With `create` it is made when missing; without, a
+ * missing folder is returned as given (nothing is written in a dry run).
+ */
+export function resolveOutDir(outDir, { create = false } = {}) {
+  const wanted = resolve(outDir);
+  // Looked at before anything is made, and without following: a link here (dangling or not) is refused.
+  let st = lstatSync(wanted, { throwIfNoEntry: false });
+  if (!st && create) {
+    mkdirSync(wanted, { recursive: true });
+    st = lstatSync(wanted);
   }
+  if (!st) return wanted;
+  if (st.isSymbolicLink()) throw new Error(`${wanted}: the out folder is a symlink; give the folder itself`);
+  if (!st.isDirectory()) throw new Error(`${wanted}: the out folder is not a folder`);
+  return realpathSync(wanted);
 }
 
 /**
- * The seed stage. Without `apply` nothing is written (not even the out folder).
- * `now` and `version` go to the ledger line.
+ * Create `<dir>/<name>` holding `text`, only if no entry of that name is there (file, folder, or a link of any
+ * kind); false when one is. O_EXCL makes the new file itself, so the write cannot land in a file that existed
+ * (through a symlink or a hard link), and nothing else is created. `name` must be a bare `<slug>.md`.
+ */
+export function createExclusive(dir, name, text) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(name)) throw new Error(`${name}: not a record file name`);
+  const target = join(dir, name);
+  if (dirname(target) !== dir || basename(target) !== name) throw new Error(`${name}: outside the out folder`);
+  let fd;
+  try {
+    fd = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+  } catch (err) {
+    if (err.code === 'EEXIST') return false;
+    throw err;
+  }
+  try {
+    const buf = Buffer.from(text, 'utf8');
+    for (let at = 0; at < buf.length;) at += writeSync(fd, buf, at);
+  } catch (err) {
+    // The file is this call's own (O_EXCL made it): take the partial record away.
+    closeSync(fd);
+    fd = undefined;
+    unlinkSync(target);
+    throw err;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return true;
+}
+
+/**
+ * The seed stage. Without `apply` nothing is written (not even the out folder). With it, the only files written
+ * are new records in the out folder. Returns the run's counts with `date`, `tool` and `version`.
  */
 export function seedEvents({ archiveRoot, outDir, apply = false, now = new Date(), version = '0' }) {
-  const wanted = resolve(outDir || join(archiveRoot, 'analysis', 'events'));
-  if (apply) mkdirSync(wanted, { recursive: true });
-  const dir = existsSync(wanted) ? realpathSync(wanted) : wanted;
+  const dir = resolveOutDir(outDir || join(archiveRoot, 'analysis', 'events'), { create: apply });
   const plan = planSeed({ archiveRoot, outDir: dir });
-  const report = { archive: archiveRoot, out: dir, apply, ...plan.counts, created: 0, skipped_existing_file: 0, notes: plan.notes };
+  const report = { date: now.toISOString(), tool: TOOL, version, archive: archiveRoot, out: dir, apply, ...plan.counts, created: 0, skipped: plan.counts.already_in_a_record, skipped_existing_file: 0, notes: plan.notes };
   if (!apply) return report;
   for (const r of plan.records) {
-    if (!ID_RE.test(r.id)) throw new Error(`${r.id}: not a slug`);
     if (createExclusive(dir, `${r.id}.md`, r.text)) report.created++;
     else report.skipped_existing_file++;
   }
-  const line = {
-    date: now.toISOString(),
-    tool: 'topic-tagger events-seed',
-    version,
-    created: report.created,
-    skipped: plan.counts.already_in_a_record + report.skipped_existing_file,
-    already_in_a_record: plan.counts.already_in_a_record,
-    skipped_existing_file: report.skipped_existing_file,
-    monthly_events_with_items: plan.counts.monthly_events_with_items,
-    briefing_events_without_items: plan.counts.briefing_events_without_items,
-  };
-  const ledger = join(dir, LEDGER_FILE);
-  // Appending follows a link, so the ledger must be a plain file of this folder (or not there yet).
-  const st = lstatSync(ledger, { throwIfNoEntry: false });
-  if (st && !st.isFile()) throw new Error(`${ledger}: not a plain file; the ledger line was not written`);
-  appendFileSync(ledger, `${JSON.stringify(line)}\n`);
+  report.skipped = plan.counts.already_in_a_record + report.skipped_existing_file;
   return report;
 }

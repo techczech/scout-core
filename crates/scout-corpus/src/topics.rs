@@ -311,26 +311,47 @@ fn hex(h: Sha1) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The combined hash of the layer and corrections files, streamed; `None`
-/// when the layer file is missing.
-fn layer_hash(root: &Path) -> Result<Option<String>> {
+/// The hash stored for a corpus with neither a layer file nor a records
+/// folder.
+const NO_HASH: &str = "none";
+
+/// The combined hash of the layer file, the corrections file and the event
+/// records, streamed. The records are hashed whether or not there is a
+/// layer file (the corrections are read only with one); [`NO_HASH`] when
+/// the corpus has neither.
+fn layer_hash(root: &Path) -> Result<String> {
     let mut h = Sha1::new();
-    if !stream_lines(&root.join(LAYER_FILE), 0, &mut h, |_| {})? {
-        return Ok(None);
+    let layer = stream_lines(&root.join(LAYER_FILE), 0, &mut h, |_| {})?;
+    if layer {
+        h.update([0u8]);
+        stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
     }
-    h.update([0u8]);
-    stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
-    crate::events::hash_into(root, &mut h)?;
-    Ok(Some(hex(h)))
+    let records = crate::events::hash_into(root, &mut h)?;
+    Ok(if layer || records {
+        hex(h)
+    } else {
+        NO_HASH.into()
+    })
+}
+
+/// What a build reads beside the sources.
+struct Beside {
+    /// The topic layer, with the event records in `Layer::events`.
+    layer: Option<Layer>,
+    /// The event records of a corpus that has no layer file.
+    records_alone: Option<EventSet>,
+    /// The hash of exactly the bytes read ([`layer_hash`]).
+    hash: String,
 }
 
 /// Read the topic layer of the corpus at `root`; `None` when it has none.
 pub fn read_layer(root: &Path) -> Result<Option<Layer>> {
-    Ok(read_layer_hashed(root)?.map(|(l, _)| l))
+    Ok(read_beside(root)?.layer)
 }
 
-/// [`read_layer`] plus the hash of exactly the bytes it read.
-fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
+/// The layer and the event records, each read whether or not the other is
+/// there, plus the hash of exactly the bytes read.
+fn read_beside(root: &Path) -> Result<Beside> {
     let mut out = Layer {
         layer_path: root.join(LAYER_FILE),
         items: BTreeMap::new(),
@@ -356,7 +377,18 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
         },
     )?;
     if !found {
-        return Ok(None);
+        // No tags: the records are still read, hashed and (by `refresh`)
+        // stored, so `scout events --min-items 0` lists them.
+        let records_alone = crate::events::read_hashed(root, &mut h)?;
+        let hash = match records_alone {
+            Some(_) => hex(h),
+            None => NO_HASH.into(),
+        };
+        return Ok(Beside {
+            layer: None,
+            records_alone,
+            hash,
+        });
     }
     h.update([0u8]);
     let (mut applied, mut unknown, mut bad) = (0, 0, 0);
@@ -379,7 +411,11 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
     fill_event_names(&mut out.items);
     out.events = crate::events::read_hashed(root, &mut h)?;
     resolve_events(&mut out.items, &members, out.events.as_ref());
-    Ok(Some((out, hex(h))))
+    Ok(Beside {
+        layer: Some(out),
+        records_alone: None,
+        hash: hex(h),
+    })
 }
 
 /// Parse one layer line into `items` (a repeated key replaces the earlier
@@ -670,9 +706,13 @@ pub(crate) const TABLE_SQL: &str = "
 
 const HASH_KEY: &str = "topic_layer_hash";
 const REPORT_KEY: &str = "topic_report";
+/// The records report of a corpus that has no layer file.
+const EVENTS_REPORT_KEY: &str = "events_report";
 
-/// Copy a layer into the index's `topic_docs`, joined to its documents.
-/// `None` empties the table.
+/// Copy a layer into the index's `topic_docs`, joined to its documents,
+/// and its event records into the index's copy of them. `None` empties
+/// both; a build then stores the records of a corpus without a layer file
+/// itself ([`refresh`]).
 pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicReport>> {
     conn.execute("DELETE FROM topic_docs", [])?;
     crate::events::store(conn, layer.and_then(|l| l.events.as_ref()))?;
@@ -765,35 +805,47 @@ fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Bring the index's topic copy up to date with the layer at `root`
-/// (build time, inside the build transaction). Re-joins when the layer
-/// files' bytes or the documents (`docs_changed`) changed; otherwise keeps
-/// the stored copy and returns its report with `reloaded: false`.
+/// Bring the index's topic copy and its copy of the event records up to
+/// date with the files at `root` (build time, inside the build
+/// transaction). Re-joins when the layer files' or the records' bytes or
+/// the documents (`docs_changed`) changed; otherwise keeps the stored copy
+/// and returns its report with `reloaded: false`.
+///
+/// The records do not depend on the layer: a corpus with a records folder
+/// and no layer file has its records stored all the same, and their report
+/// is the second value (it is `None` whenever there is a layer, whose
+/// report then carries it as `TopicReport::events`).
 pub(crate) fn refresh(
     conn: &Connection,
     root: &Path,
     docs_changed: bool,
-) -> Result<Option<TopicReport>> {
-    let current = layer_hash(root)?.unwrap_or_else(|| "none".into());
+) -> Result<(Option<TopicReport>, Option<EventsReport>)> {
+    let current = layer_hash(root)?;
     if !docs_changed && meta_get(conn, HASH_KEY)?.as_deref() == Some(current.as_str()) {
         let stored: Option<TopicReport> = meta_get(conn, REPORT_KEY)?
             .and_then(|s| serde_json::from_str::<Option<TopicReport>>(&s).ok())
             .flatten();
-        return Ok(stored.map(|mut r| {
+        let records: Option<EventsReport> = meta_get(conn, EVENTS_REPORT_KEY)?
+            .and_then(|s| serde_json::from_str::<Option<EventsReport>>(&s).ok())
+            .flatten();
+        let stored = stored.map(|mut r| {
             r.reloaded = false;
             r
-        }));
+        });
+        return Ok((stored, records));
     }
     // Store the hash of the bytes actually parsed, so a file changed
     // between the check and the read is re-read next build.
-    let (layer, hash) = match read_layer_hashed(root)? {
-        Some((l, h)) => (Some(l), h),
-        None => (None, "none".to_string()),
-    };
-    let report = apply(conn, layer.as_ref())?;
-    meta_set(conn, HASH_KEY, &hash)?;
+    let beside = read_beside(root)?;
+    let report = apply(conn, beside.layer.as_ref())?;
+    if beside.layer.is_none() {
+        crate::events::store(conn, beside.records_alone.as_ref())?;
+    }
+    let records = beside.records_alone.as_ref().map(EventSet::report);
+    meta_set(conn, HASH_KEY, &beside.hash)?;
     meta_set(conn, REPORT_KEY, &serde_json::to_string(&report)?)?;
-    Ok(report)
+    meta_set(conn, EVENTS_REPORT_KEY, &serde_json::to_string(&records)?)?;
+    Ok((report, records))
 }
 
 /// Every document's tags, by document key; empty for an index built

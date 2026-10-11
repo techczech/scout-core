@@ -2,6 +2,7 @@
 //! topic line of `index build`. Formatting only.
 
 use scout_corpus::api::{EventsResults, FacetItem, FacetsResults, TopicsResults};
+use scout_corpus::events::EventsReport;
 use scout_corpus::topics::{Facet, TopicReport};
 
 fn rows(items: &[FacetItem]) {
@@ -104,6 +105,24 @@ pub fn print_events(r: &EventsResults) {
     }
 }
 
+/// The `index build` lines for a corpus's event records.
+pub fn print_events_report(e: &EventsReport) {
+    println!(
+        "{:<10} events: {} records ({} merged), {} monthly events held, {} files skipped",
+        "", e.records, e.merged, e.members, e.skipped
+    );
+    for w in &e.warnings {
+        println!("{:<10} warning: {w}", "");
+    }
+    if e.warnings_total > e.warnings.len() {
+        println!(
+            "{:<10} … and {} more warnings",
+            "",
+            e.warnings_total - e.warnings.len()
+        );
+    }
+}
+
 /// The `index build` line for a corpus with a topic layer.
 pub fn print_topic_report(t: &TopicReport) {
     let mut extra = Vec::new();
@@ -135,20 +154,7 @@ pub fn print_topic_report(t: &TopicReport) {
         t.tagged_documents
     );
     if let Some(e) = &t.events {
-        println!(
-            "{:<10} events: {} records ({} merged), {} monthly events held, {} files skipped",
-            "", e.records, e.merged, e.members, e.skipped
-        );
-        for w in &e.warnings {
-            println!("{:<10} warning: {w}", "");
-        }
-        if e.warnings_total > e.warnings.len() {
-            println!(
-                "{:<10} … and {} more warnings",
-                "",
-                e.warnings_total - e.warnings.len()
-            );
-        }
+        print_events_report(e);
     }
     if !t.unmatched_sample.is_empty() {
         println!(

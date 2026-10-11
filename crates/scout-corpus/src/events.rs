@@ -12,8 +12,13 @@
 //!   names no record, or that closes a cycle, is reported and that record
 //!   is treated as not merged.
 //! - A malformed record (no frontmatter, bad YAML, no `id`, an `id` that
-//!   is not the file stem, a repeated id, a wrongly typed field) is
-//!   skipped with a warning naming its file; the rest is read.
+//!   is not the file stem, a repeated id, a wrongly typed field, YAML
+//!   nested deeper than [`MAX_YAML_DEPTH`]) is skipped with a warning
+//!   naming its file; the rest is read.
+//! - Nothing here recurses over record content. The frontmatter is read
+//!   by pulling parser events one at a time ([`read_flat`]) and the pull
+//!   stops at the first value that nests too deep; merge chains are
+//!   walked in loops bounded by the number of records.
 //! - No folder: `read` gives `None` and the topic layer behaves as it did
 //!   before lasting events (monthly events only).
 //!
@@ -28,13 +33,17 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use yaml_rust2::parser::{Event, EventReceiver, Parser};
+use yaml_rust2::parser::{Event, Parser};
 use yaml_rust2::scanner::TScalarStyle;
 
 /// The records folder, relative to the corpus root.
 pub const EVENTS_DIR: &str = "analysis/events";
 /// Largest record file read, in bytes; a larger one is skipped.
 pub const MAX_RECORD_BYTES: u64 = 1 << 20;
+/// Deepest YAML nesting read in a record's frontmatter: the mapping (1),
+/// a list value (2) and one level inside an ignored value (3). A record
+/// that nests deeper is skipped.
+pub const MAX_YAML_DEPTH: usize = 3;
 /// Warnings kept in a build report (the total is always reported).
 pub const MAX_WARNINGS: usize = 50;
 
@@ -331,10 +340,9 @@ fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
 }
 
 /// Feed the records folder to `hash` (nothing when it is missing), so a
-/// build can tell whether the records changed.
-pub(crate) fn hash_into(root: &Path, hash: &mut Sha1) -> Result<()> {
-    scan(root, hash, |_, _| {})?;
-    Ok(())
+/// build can tell whether the records changed. False when it is missing.
+pub(crate) fn hash_into(root: &Path, hash: &mut Sha1) -> Result<bool> {
+    scan(root, hash, |_, _| {})
 }
 
 /// Read the lasting events of the corpus at `root`; `None` when it has no
@@ -388,6 +396,8 @@ enum Val {
 #[derive(Default)]
 struct Flat {
     depth: usize,
+    /// A value opened below [`MAX_YAML_DEPTH`]; reading stops there.
+    too_deep: bool,
     top_is_map: bool,
     key: Option<String>,
     list: Option<Vec<String>>,
@@ -398,6 +408,10 @@ struct Flat {
 
 impl Flat {
     fn open(&mut self, sequence: bool) {
+        if self.depth >= MAX_YAML_DEPTH {
+            self.too_deep = true;
+            return;
+        }
         match self.depth {
             0 => self.top_is_map = !sequence,
             1 if self.key.is_none() => self.fail("a key is not a plain name"),
@@ -438,7 +452,7 @@ fn is_null(v: &str, style: TScalarStyle) -> bool {
     style == TScalarStyle::Plain && matches!(v, "" | "~" | "null" | "Null" | "NULL")
 }
 
-impl EventReceiver for Flat {
+impl Flat {
     fn on_event(&mut self, ev: Event) {
         match ev {
             Event::Alias(_) => self.fail("YAML aliases are not read"),
@@ -457,6 +471,32 @@ impl EventReceiver for Flat {
                 _ => {}
             },
             _ => {}
+        }
+    }
+}
+
+/// Read the first YAML document of `front` into a [`Flat`].
+///
+/// The parser is driven one event at a time (`Parser::next_token`, a state
+/// machine over explicit stacks) and never through `Parser::load`, which
+/// calls itself once per nesting level and overflows the stack on a deeply
+/// nested value. The pull stops at the first value below
+/// [`MAX_YAML_DEPTH`], so the rest of such a record is not parsed. (The
+/// scanner may look ahead of the parser; it has no recursion and refuses
+/// more than 255 open flow brackets itself, "recursion limit exceeded".)
+fn read_flat(front: &str) -> std::result::Result<Flat, String> {
+    let mut flat = Flat::default();
+    let mut parser = Parser::new_from_str(front);
+    loop {
+        let (ev, _) = parser.next_token().map_err(|e| format!("bad YAML ({e})"))?;
+        if matches!(ev, Event::DocumentEnd | Event::StreamEnd) {
+            return Ok(flat);
+        }
+        flat.on_event(ev);
+        if flat.too_deep {
+            return Err(format!(
+                "bad YAML (nested deeper than {MAX_YAML_DEPTH} levels)"
+            ));
         }
     }
 }
@@ -480,10 +520,7 @@ fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
 /// Parse one record file; `stem` is its file name without `.md`.
 pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, String> {
     let (front, body) = split_frontmatter(text).ok_or("no frontmatter")?;
-    let mut flat = Flat::default();
-    Parser::new_from_str(front)
-        .load(&mut flat, false)
-        .map_err(|e| format!("bad YAML ({e})"))?;
+    let flat = read_flat(front)?;
     if let Some(e) = flat.err {
         return Err(format!("bad YAML ({e})"));
     }
@@ -660,6 +697,80 @@ mod tests {
         }
     }
 
+    /// Records nested 100,000 deep, in every shape that fits the size cap.
+    fn deep_records() -> Vec<(&'static str, String)> {
+        let n = 100_000;
+        vec![
+            (
+                "block lists",
+                format!("---\nid: x\nmembers:\n  {}a\n---\n", "- ".repeat(n)),
+            ),
+            (
+                "flow lists",
+                format!("---\nid: x\nmembers: {}\n---\n", "[".repeat(n)),
+            ),
+            (
+                "closed flow lists",
+                format!(
+                    "---\nid: x\nextra: {}{}\n---\n",
+                    "[".repeat(n),
+                    "]".repeat(n)
+                ),
+            ),
+            (
+                "flow mappings",
+                format!("---\nid: x\nextra: {}\n---\n", "{a: ".repeat(n)),
+            ),
+            (
+                "lists of mappings",
+                format!("---\nid: x\nextra:\n  {}a\n---\n", "- ? ".repeat(n)),
+            ),
+            ("at the top", format!("---\n{}a\n---\n", "- ".repeat(n))),
+        ]
+    }
+
+    #[test]
+    fn a_record_nested_100_000_deep_is_refused_without_deep_recursion() {
+        // A 64 KiB stack: one frame per nesting level would not fit.
+        let run = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                for (shape, text) in deep_records() {
+                    assert!(text.len() as u64 <= MAX_RECORD_BYTES, "{shape}");
+                    let e = parse_record(&text, "x").unwrap_err();
+                    // Bare `[[[[…` is stopped by the scanner's own cap of
+                    // 255 open brackets, reached while it looks ahead.
+                    let why = if shape.contains("flow lists") {
+                        "recursion limit exceeded"
+                    } else {
+                        "nested deeper than 3 levels"
+                    };
+                    assert!(e.contains(why), "{shape}: {e}");
+                }
+            })
+            .unwrap();
+        run.join().unwrap();
+    }
+
+    #[test]
+    fn nesting_is_read_to_three_levels_and_no_deeper() {
+        // Level 3 inside a key that is not a record field: ignored.
+        let ok = "---\nid: x\nextra: {nested: [1, 2]}\nmore:\n  - [a, b]\n---\n";
+        assert!(parse_record(ok, "x").is_ok());
+        // Level 3 inside a record field: the field is wrongly typed.
+        let e = parse_record("---\nid: x\nmembers: [[a]]\n---\n", "x").unwrap_err();
+        assert!(e.contains("members is not a list"), "{e}");
+        // Level 4 anywhere: the record is refused.
+        for deep in [
+            "---\nid: x\nextra: {a: {b: {c: 1}}}\n---\n",
+            "---\nid: x\nextra: [[[a]]]\n---\n",
+            "---\nid: x\nextra:\n  - - - a\n---\n",
+        ] {
+            let e = parse_record(deep, "x").unwrap_err();
+            assert!(e.contains("nested deeper than 3 levels"), "{deep:?}: {e}");
+        }
+    }
+
     #[test]
     fn members_and_merge_chains_resolve_to_the_last_record() {
         let set = EventSet::from_records(
@@ -720,12 +831,13 @@ mod tests {
         let recs = (0..n)
             .map(|i| {
                 let next = (i + 1 < n).then(|| format!("r{:04}", i + 1));
-                rec(&format!("r{i:04}"), &[], next.as_deref())
+                rec(&format!("r{i:04}"), &[&format!("m/{i}")], next.as_deref())
             })
             .collect();
         let set = EventSet::from_records(PathBuf::new(), recs);
         assert!(set.warnings.is_empty());
         assert_eq!(set.resolve("r0000"), Some("r0499"));
+        assert_eq!(set.resolve("m/0"), Some("r0499"));
     }
 
     #[test]

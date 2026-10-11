@@ -664,6 +664,9 @@ pub fn print_build(r: &IndexBuildReport) {
         if let Some(t) = &r.topics {
             crate::topic_views::print_topic_report(t);
         }
+        if let Some(e) = &r.events {
+            crate::topic_views::print_events_report(e);
+        }
     }
 }
 

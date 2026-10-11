@@ -285,6 +285,11 @@ pub struct BuildReport {
     /// (`analysis/topics/current.jsonl`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topics: Option<crate::topics::TopicReport>,
+    /// The event records of a corpus folder that has a records folder
+    /// (`analysis/events/`) and no topic layer. With a layer they are
+    /// reported as `topics.events`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<crate::events::EventsReport>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -626,7 +631,7 @@ pub fn build_within(
     // The topic layer beside the sources: re-joined when its files or the
     // documents changed. Not part of the fingerprint, so a new layer never
     // forces a full rebuild.
-    let topics = crate::topics::refresh(&tx, &root, full || docs_touched || removed > 0)?;
+    let (topics, events) = crate::topics::refresh(&tx, &root, full || docs_touched || removed > 0)?;
     meta_set(&tx, "fingerprint", &fp)?;
     meta_set(&tx, "engine", ENGINE_VERSION)?;
     meta_set(&tx, "corpus", &cfg.id)?;
@@ -662,6 +667,7 @@ pub fn build_within(
         elapsed_ms: started.elapsed().as_millis(),
         vectors: None,
         topics,
+        events,
     })
 }
 

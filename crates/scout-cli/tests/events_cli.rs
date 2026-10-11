@@ -223,3 +223,68 @@ fn events_and_the_facet_floor_match_the_facade_and_build_reports_the_records() {
     );
     assert_eq!(files(&h), before, "the archive folder is never written");
 }
+
+#[test]
+fn records_without_any_tags_are_built_reported_and_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (h, data) = (tmp.path().join("archive"), tmp.path().join("data"));
+    write(
+        &h,
+        "readings/works/w-1.md",
+        "---\ntitle: W1\nauthor: A\ntype: tweet\nsource_system: x\nsource_id: \"1\"\n---\n\n> A proof.\n\nhighlighted_at: 2026-09-01\n\n---\n",
+    );
+    write(
+        &h,
+        "analysis/events/2026-09-fields-declaration.md",
+        "---\nid: 2026-09-fields-declaration\nname: The declaration\nstart: 2026-09-01\nend: 2026-09-30\nmembers: [2026-09/E21]\nthemes: []\n---\n\nNo items yet.\n",
+    );
+    write(
+        &h,
+        "analysis/events/draft.md",
+        "---\nname: No id yet\n---\n",
+    );
+    let cfg = tmp.path().join("corpora.toml");
+    fs::write(
+        &cfg,
+        format!(
+            "[[corpus]]\nid = \"highlights\"\nname = \"H\"\nkind = \"highlight-scout-archive\"\npath = \"{}\"\n",
+            h.display()
+        ),
+    )
+    .unwrap();
+    let before = files(&h);
+
+    let text = stdout(&scout(&cfg, &data, &["index", "build"]));
+    assert!(
+        text.contains("events: 1 records (0 merged), 1 monthly events held, 1 files skipped"),
+        "{text}"
+    );
+    assert!(
+        text.contains("warning: analysis/events/draft.md: no id; skipped"),
+        "{text}"
+    );
+    assert!(!text.contains("topics:"), "{text}");
+    let j: serde_json::Value =
+        serde_json::from_slice(&scout(&cfg, &data, &["index", "build", "--json"]).stdout).unwrap();
+    let r = &j["reports"][0];
+    assert!(r.get("topics").is_none(), "{r}");
+    assert_eq!(r["events"]["records"], 1);
+    assert_eq!(r["events"]["skipped"], 1);
+
+    let o = scout(&cfg, &data, &["events", "--min-items", "0", "--json"]);
+    assert_eq!(o.status.code(), Some(0));
+    let l: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(l["distinct"], 1);
+    let e = &l["events"][0];
+    assert_eq!(e["id"], "2026-09-fields-declaration");
+    assert_eq!(e["record"], true);
+    assert_eq!(e["items"], 0);
+    assert_eq!(e["name"], "The declaration");
+    assert_eq!(e["description"], "No items yet.");
+    // The default floor is one item, so nothing is listed without it.
+    assert_eq!(
+        scout(&cfg, &data, &["events", "--json"]).status.code(),
+        Some(1)
+    );
+    assert_eq!(files(&h), before, "the archive folder is never written");
+}

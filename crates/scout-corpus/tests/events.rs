@@ -115,8 +115,8 @@ fn archive(root: &Path, with_records: bool) {
             "name: Gemini launch\nstart: 2026-09-04\nend: 2026-09-04\nmembers: [2026-09/E02]\norigin: model\n",
             "A launch.",
         );
-        // Not records: the seed's ledger and other files are left alone.
-        write(root, "analysis/events/seed-log.jsonl", "{\"created\":3}\n");
+        // Not records: files that are not `*.md` are left alone.
+        write(root, "analysis/events/notes.jsonl", "{\"created\":3}\n");
         write(root, "analysis/events/.hidden.md", "not a record\n");
     }
 }
@@ -749,4 +749,158 @@ fn an_empty_or_odd_records_folder_never_breaks_the_build() {
     assert_eq!(e.warnings.len(), events::MAX_WARNINGS);
     assert_eq!(e.warnings_total, events::MAX_WARNINGS + 20);
     assert_eq!(hits(&fx.corpus, "event:2026-09/E21"), vec![1, 2, 3]);
+}
+
+/// The ids `scout events --min-items 0 --merged` lists as records, with
+/// their item counts.
+fn listed_records(fx: &Fx) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = engine(fx)
+        .events(&EventsQuery {
+            min_items: 0,
+            merged: true,
+            ..Default::default()
+        })
+        .unwrap()
+        .body
+        .events
+        .into_iter()
+        .filter(|e| e.record)
+        .map(|e| (e.id, e.items))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn records_are_read_and_listed_when_the_corpus_has_no_topic_layer() {
+    let none: Vec<(String, usize)> = [FIELDS, GEMINI, FOLLOW]
+        .iter()
+        .map(|id| (id.to_string(), 0))
+        .collect();
+    // Never had tags: the records are indexed and reported on their own.
+    let fx = fixture(true);
+    fs::remove_file(fx.src.path().join(topics::LAYER_FILE)).unwrap();
+    assert!(topics::read_layer(fx.src.path()).unwrap().is_none());
+    let before = snapshot(fx.src.path());
+    let b = fx.corpus.build_index(false).unwrap();
+    assert!(b.topics.is_none());
+    let e = b.events.clone().unwrap();
+    assert_eq!((e.records, e.merged, e.members, e.skipped), (3, 1, 3, 0));
+    let json = serde_json::to_value(&b).unwrap();
+    assert_eq!(json["events"]["records"], 3);
+    assert!(json.get("topics").is_none());
+    assert_eq!(listed_records(&fx), none);
+    // Without `--min-items 0` nothing is listed: no record has an item.
+    let l = engine(&fx).events(&EventsQuery::default()).unwrap().body;
+    assert!(l.events.is_empty());
+    // The record fields are all there.
+    let l = engine(&fx)
+        .events(&EventsQuery {
+            min_items: 0,
+            ..Default::default()
+        })
+        .unwrap()
+        .body;
+    assert_eq!(l.distinct, 2, "the merged record needs --merged");
+    let f = l.events.iter().find(|e| e.id == FIELDS).unwrap();
+    assert_eq!(f.name.as_deref(), Some(FIELDS_NAME));
+    assert_eq!(f.members, vec!["2026-09/E21"]);
+    assert_eq!(f.description, "The declaration, and what followed.");
+    // No tags, so no document is in any event.
+    assert!(hits(&fx.corpus, &format!("event:{FIELDS}")).is_empty());
+    // An unchanged rebuild keeps the copy and its report.
+    let again = fx.corpus.build_index(false).unwrap();
+    assert_eq!(again.events, Some(e));
+    assert_eq!(listed_records(&fx), none);
+    // A changed record is re-read without a layer file.
+    record(fx.src.path(), "2026-12-new", "name: New\n", "");
+    let b = fx.corpus.build_index(false).unwrap();
+    assert_eq!(b.events.unwrap().records, 4);
+    assert_eq!(listed_records(&fx).len(), 4);
+    fs::remove_file(
+        fx.src
+            .path()
+            .join(events::EVENTS_DIR)
+            .join("2026-12-new.md"),
+    )
+    .unwrap();
+    fx.corpus.build_index(false).unwrap();
+    assert_eq!(listed_records(&fx), none);
+    assert_eq!(snapshot(fx.src.path()), before);
+
+    // Tags taken away after a build: the records stay, the items go.
+    let fx = fixture(true);
+    let b = fx.corpus.build_index(false).unwrap();
+    assert!(b.events.is_none(), "with a layer: reported in topics");
+    assert_eq!(b.topics.unwrap().events.unwrap().records, 3);
+    assert_eq!(
+        listed_records(&fx),
+        vec![
+            (FIELDS.to_string(), 3),
+            (GEMINI.to_string(), 2),
+            (FOLLOW.to_string(), 0)
+        ]
+    );
+    fs::remove_file(fx.src.path().join(topics::LAYER_FILE)).unwrap();
+    let b = fx.corpus.build_index(false).unwrap();
+    assert!(b.topics.is_none());
+    assert_eq!(b.events.unwrap().records, 3);
+    assert_eq!(listed_records(&fx), none);
+    // The tags come back: reported in `topics` again, items counted.
+    archive(fx.src.path(), true);
+    let b = fx.corpus.build_index(false).unwrap();
+    assert!(b.events.is_none());
+    assert_eq!(b.topics.unwrap().events.unwrap().records, 3);
+    assert_eq!(listed_records(&fx)[0], (FIELDS.to_string(), 3));
+    // Neither tags nor records: nothing is kept or reported.
+    fs::remove_file(fx.src.path().join(topics::LAYER_FILE)).unwrap();
+    fs::remove_dir_all(fx.src.path().join(events::EVENTS_DIR)).unwrap();
+    let b = fx.corpus.build_index(false).unwrap();
+    assert!(b.topics.is_none() && b.events.is_none());
+    assert!(listed_records(&fx).is_empty());
+}
+
+#[test]
+fn a_record_nested_100_000_deep_is_skipped_with_a_warning_and_the_build_completes() {
+    let fx = fixture(true);
+    let dir = events::EVENTS_DIR;
+    let n = 100_000;
+    for (id, front) in [
+        ("deep-block", format!("members:\n  {}a\n", "- ".repeat(n))),
+        ("deep-flow", format!("members: {}\n", "[".repeat(n))),
+        (
+            "deep-closed",
+            format!("extra: {}{}\n", "[".repeat(n), "]".repeat(n)),
+        ),
+        ("deep-map", format!("extra: {}\n", "{a: ".repeat(n))),
+    ] {
+        let text = format!("---\nid: {id}\n{front}---\n");
+        assert!(text.len() as u64 <= events::MAX_RECORD_BYTES);
+        write(fx.src.path(), &format!("{dir}/{id}.md"), &text);
+    }
+    // Four levels is already too deep; three is read.
+    record(fx.src.path(), "four-deep", "extra: [[[a]]]\n", "");
+    record(fx.src.path(), "three-deep", "extra: [[a]]\n", "");
+    let before = snapshot(fx.src.path());
+    let t = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    let e = t.events.unwrap();
+    assert_eq!(e.skipped, 5);
+    assert_eq!(e.records, 4);
+    let w = e.warnings.join("\n");
+    for id in ["deep-block", "deep-map", "four-deep"] {
+        let needle =
+            format!("analysis/events/{id}.md: bad YAML (nested deeper than 3 levels); skipped");
+        assert!(w.contains(&needle), "{needle}\n{w}");
+    }
+    // Bare `[[[[…`: the YAML scanner's own cap of 255 open brackets stops
+    // it first, while it looks ahead for a key.
+    for id in ["deep-flow", "deep-closed"] {
+        let needle = format!("analysis/events/{id}.md: bad YAML (recursion limit exceeded");
+        assert!(w.contains(&needle), "{needle}\n{w}");
+    }
+    assert!(!w.contains("three-deep"), "{w}");
+    // The sound records are indexed as ever.
+    assert_eq!(hits(&fx.corpus, "event:2026-09/E21"), vec![1, 2, 3]);
+    assert_eq!(listed_records(&fx).len(), 4);
+    assert_eq!(snapshot(fx.src.path()), before);
 }
