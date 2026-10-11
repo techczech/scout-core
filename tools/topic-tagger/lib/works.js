@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { cut } from './text.js';
 
 export const ITEM_CHAR_CAP = 12000;
 
@@ -69,7 +70,7 @@ export function itemText(work, cap = ITEM_CHAR_CAP) {
   const head = `Title: ${work.title}\nAuthor: ${work.author}\nType: ${work.type}\nDate: ${work.date}\nHighlights:\n`;
   const full = head + work.highlights.map((h) => h.text).filter(Boolean).join('\n---\n');
   if (full.length <= cap) return { text: full, capped: false };
-  return { text: full.slice(0, cap), capped: true };
+  return { text: cut(full, cap), capped: true };
 }
 
 export function inRange(date, from, to) {

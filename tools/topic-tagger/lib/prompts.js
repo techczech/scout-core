@@ -1,5 +1,7 @@
 // Prompts, schemas and request builders. Bump PROMPT_VERSION on any wording change.
-export const PROMPT_VERSION = 'topics-v1';
+// topics-v2 (2026-10-11): context-aware themes + entities (lib/tag-prompt.js). v1 runs keep recording topics-v1.
+export const PROMPT_VERSION = 'topics-v2';
+export const PROMPT_VERSION_V1 = 'topics-v1';
 
 const COMMON = `You tag items from a personal reading archive (tweets, articles, podcasts, books) so the owner can later research how topics and opinions developed over time.
 
