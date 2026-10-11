@@ -18,6 +18,13 @@
 //!   merged into, followed to the end of the chain. A `merged_into` that
 //!   names no record, or that closes a cycle, is reported and that record
 //!   is treated as not merged.
+//! - A merge is that one field. The record merged into holds no copy of
+//!   the other's members, aliases or dates. What the combined event shows
+//!   beyond its own record is derived here, from the records, each time:
+//!   its ids by the resolution above, its span and aliases and the list
+//!   of records merged into it by [`combined`] (which `scout events`
+//!   lists). Themes, description, name, origin, `edited` and `removed`
+//!   are the surviving record's own.
 //! - A malformed record (a control character anywhere in the file, no
 //!   frontmatter, bad YAML, no `id`, an `id` that is not the file stem, a
 //!   repeated id, a wrongly typed field, YAML nested deeper than
@@ -45,7 +52,10 @@ use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+mod combined;
 mod record;
+pub(crate) use combined::is_date;
+pub use combined::{combined, cover, merged_in, Combined, MergedFrom};
 use record::TOO_LARGE;
 pub use record::{
     is_record_control, parse_bytes, parse_record, record_stem, MAX_RECORD_BYTES, MAX_YAML_DEPTH,

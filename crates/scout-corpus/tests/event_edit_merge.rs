@@ -1,8 +1,11 @@
-//! Seam tests for `scout events merge`, `unmerge` and `check`: what a
-//! merge changes and logs, the rule for model merges, undo (after later
-//! edits, in nested order), every crash window with what `check` says of
-//! it and how `unmerge` recovers, a record edited meanwhile, and the
-//! log file's own rules. A refusal leaves every file as it was.
+//! Seam tests for `scout events merge`, `unmerge` and `check`: a merge
+//! writes `merged_into` on the record merged away and nothing else (the
+//! surviving record's file is never written), the rule for model merges,
+//! every crash window with what `check` says of it and how `unmerge`
+//! recovers, a record edited meanwhile, and the log file's own rules. A
+//! refusal leaves every file as it was. Undo in every order is in
+//! `event_edit_undo.rs`; what the listing derives is in
+//! `event_edit_listing.rs`.
 
 mod event_edit_support;
 use event_edit_support::*;
@@ -41,11 +44,11 @@ fn kinds(fx: &Fx) -> Vec<String> {
 }
 
 #[test]
-fn merge_folds_a_into_b_and_logs_both_records_whole() {
+fn merge_writes_merged_into_on_a_and_nothing_else() {
     let fx = fixture();
     let before = fx.tree();
-    let (a, b) = (fx.record(BETA), fx.record(ALPHA));
-    let bodies = (body_bytes(&fx.dir, BETA), body_bytes(&fx.dir, ALPHA));
+    let (a, b_bytes) = (fx.record(BETA), fx.bytes(ALPHA));
+    let body = body_bytes(&fx.dir, BETA);
     let m = fx
         .editor()
         .merge(&merge_req(&format!(" {BETA}"), ALPHA, By::Dominik))
@@ -54,70 +57,44 @@ fn merge_folds_a_into_b_and_logs_both_records_whole() {
         (m.log_id.as_str(), m.a.as_str(), m.b.as_str(), m.at.as_str()),
         ("m000001", BETA, ALPHA, NOW)
     );
-    assert_eq!(m.members_added, strs(&["2026-10/E04"]));
-    let (na, nb) = (fx.record(BETA), fx.record(ALPHA));
-    assert_eq!(nb, m.record);
-    // `a`: merged, otherwise as it was. `b`: the members, the names (none
-    // it has under the fold, none that is its own name), the wider end.
-    assert_eq!(
-        na,
-        EventRecord {
-            merged_into: Some(ALPHA.into()),
-            ..a.clone()
-        }
+    // `a`: as it was, with `merged_into`; its body bytes carried over.
+    let want = EventRecord {
+        merged_into: Some(ALPHA.into()),
+        ..a.clone()
+    };
+    assert_eq!((fx.record(BETA), &m.a_record), (want.clone(), &want));
+    assert_eq!(fx.bytes(BETA), render_record(&want).into_bytes());
+    assert_eq!(body_bytes(&fx.dir, BETA), body);
+    assert_eq!(want.edited, None);
+    // `b`: the file is the one that was there. Nothing of `a` is in it.
+    assert_eq!(fx.bytes(ALPHA), b_bytes);
+    assert_eq!(fx.record(ALPHA).members, strs(&["2026-09/E01"]));
+    // Every other file is as it was; one file is new, the log.
+    let mut after = fx.tree();
+    assert!(after.remove(&fx.dir.join(MERGE_LOG)).is_some());
+    after.insert(
+        fx.dir.join(format!("{BETA}.md")),
+        before[&fx.dir.join(format!("{BETA}.md"))].clone(),
     );
-    assert_eq!(
-        nb,
-        EventRecord {
-            members: strs(&["2026-09/E01", "2026-10/E04"]),
-            aliases: strs(&["The Alpha", "Shared", "Beta follow-up", "Beta"]),
-            end: Some("2026-10-09".into()),
-            ..b.clone()
-        }
-    );
-    assert_eq!((&nb.edited, &na.edited), (&None, &None));
-    assert_eq!(
-        (body_bytes(&fx.dir, BETA), body_bytes(&fx.dir, ALPHA)),
-        bodies
-    );
+    assert!(after == before);
+    // The reader resolves every id of `a` to `b`, through `a`.
     let set = fx.set();
-    for id in [BETA, ALPHA, "2026-10/E04", "2026-09/e01"] {
+    for id in [BETA, ALPHA, "2026-10/E04", "2026-09/E01"] {
         assert_eq!(set.resolve(id), Some(ALPHA), "{id}");
     }
     assert_eq!(set.resolve("2026-11/E02"), Some(GAMMA));
-    // The log line.
+    // The line: who, when, which two records, and nothing of either.
     let log = fx.log(MERGE_LOG);
-    assert_eq!(log.len(), 1);
     assert_eq!(
-        log[0],
-        json!({
+        log,
+        vec![json!({
             "id": "m000001", "at": NOW, "by": "dominik", "reason": "one story",
-            "a": BETA, "b": ALPHA,
-            "before": {"a": a, "b": b}, "after": {"a": na, "b": nb},
-            "moved": ["2026-10-beta", "2026-10/e04"],
-        })
+            "a": BETA, "b": ALPHA, "a_merged_into_before": null,
+        })]
     );
-    assert!(!log[0]["before"]["a"]
-        .as_object()
-        .unwrap()
-        .contains_key("removed"));
-    // Three files changed: the two records and the log.
-    let after = fx.tree();
-    let changed: Vec<&PathBuf> = after
-        .keys()
-        .filter(|k| before.get(*k) != after.get(*k))
-        .collect();
-    assert_eq!(changed.len(), 3, "{changed:?}");
-    assert_eq!(kinds(&fx), Vec::<String>::new());
-    // The other way about: an earlier `a` moves `b.start` back.
-    let fx = fixture();
-    by_hand(&fx, DELTA, BETA);
-    let b = fx.record(BETA);
-    assert_eq!(
-        (b.start.as_deref(), b.end.as_deref()),
-        (Some("2026-08-01"), Some("2026-10-09"))
-    );
-    assert_eq!(b.aliases, strs(&["Beta", "shared", "ALPHA STORY", "Delta"]));
+    let c = fx.editor().check().unwrap();
+    assert!(c.ok && c.information.is_empty());
+    assert_eq!((c.records, c.merges, c.undone, c.in_effect), (4, 1, 0, 1));
 }
 
 #[test]
@@ -169,7 +146,7 @@ fn merge_refuses_and_changes_nothing() {
         "2026-10-beta: already merged into 2026-09-alpha",
         || merge(ALPHA, BETA, By::Dominik),
     );
-    // Dates the merge cannot compare.
+    // A date that is not one.
     let mut vague = rec(
         "2026-01-vague",
         "Vague",
@@ -185,7 +162,8 @@ fn merge_refuses_and_changes_nothing() {
     refused(&fx, "is not a date YYYY-MM-DD; set it first", || {
         merge(DELTA, "2026-01-vague", By::Dominik)
     });
-    // A member two events would hold: the reader's own table says no.
+    // A monthly id two records list: the reader's warning about it would
+    // name another event after the merge, and the merge is refused.
     vague.start = Some("2026-01-01".into());
     vague.members = strs(&["2026-01/E01", "2026-11/E02"]);
     put(&fx.dir, &vague);
@@ -200,223 +178,51 @@ fn merge_refuses_and_changes_nothing() {
 }
 
 #[test]
-fn a_models_merge_into_a_record_he_edited_appends_members_and_extends_end_only() {
-    let fx = fixture();
-    let late = rec(
-        "2026-12-late",
-        "Late",
-        ("2026-10-20", "2026-12-05"),
-        &["2026-12/E09"],
-    );
-    put(&fx.dir, &late);
-    let was = fx.record(GAMMA);
-    let e = fx.editor();
-    e.merge(&merge_req("2026-12-late", GAMMA, By::Model))
-        .unwrap();
-    assert_eq!(
-        fx.record(GAMMA),
-        EventRecord {
-            members: strs(&["2026-11/E02", "2026-12/E09"]),
-            end: Some("2026-12-05".into()),
-            ..was.clone()
-        }
-    );
-    assert_eq!(fx.log(MERGE_LOG)[0]["by"], "model");
-    // An earlier `a` does not move his start either.
-    e.merge(&merge_req(DELTA, GAMMA, By::Model)).unwrap();
-    let g = fx.record(GAMMA);
-    assert_eq!(
-        (g.start, g.aliases, g.edited, g.name),
-        (
-            was.start.clone(),
-            was.aliases.clone(),
-            was.edited.clone(),
-            was.name.clone()
-        )
-    );
-    assert_eq!(
-        g.members,
-        strs(&["2026-11/E02", "2026-12/E09", "2026-08/E07"])
-    );
-    assert_eq!(
-        body_bytes(&fx.dir, GAMMA),
-        format!("\n{GAMMA_BODY}\n").into_bytes()
-    );
-    // His own merge into it does change its names and start, not `edited`.
-    e.merge(&merge_req(ALPHA, GAMMA, By::Dominik)).unwrap();
-    let g = fx.record(GAMMA);
-    assert_eq!(
-        g.aliases,
-        strs(&["His alias", "Alpha story", "The Alpha", "Shared"])
-    );
-    assert_eq!(
-        (g.start.as_deref(), g.edited.as_deref()),
-        (Some("2026-09-05"), Some("2026-10-10"))
-    );
-    // A model's merge into a record nobody edited is a full merge.
-    e.merge(&merge_req(GAMMA, BETA, By::Dominik)).unwrap();
-    let fx = fixture();
-    fx.editor()
-        .merge(&merge_req(DELTA, ALPHA, By::Model))
-        .unwrap();
-    let a = fx.record(ALPHA);
-    assert_eq!(
-        (a.start.as_deref(), a.aliases),
-        (Some("2026-08-01"), strs(&["The Alpha", "Shared", "Delta"]))
-    );
-}
-
-#[test]
-fn unmerge_gives_back_both_records_byte_for_byte() {
-    let fx = fixture();
-    let before = fx.tree();
-    let e = fx.editor();
-    let id = by_hand(&fx, BETA, ALPHA);
-    let u = e.unmerge(&format!(" {id} ")).unwrap();
-    assert_eq!(
-        (u.log_id.as_str(), u.undoes.as_str(), u.withdrawn),
-        ("m000002", "m000001", false)
-    );
-    assert_eq!((u.a.as_str(), u.b.as_str()), (BETA, ALPHA));
-    assert_eq!(
-        (&u.a_record, &u.b_record),
-        (&fx.record(BETA), &fx.record(ALPHA))
-    );
-    assert!(but_the_log(&fx) == before);
-    let log = fx.log(MERGE_LOG);
-    assert_eq!(log.len(), 2);
-    assert_eq!(
-        log[1],
-        json!({"id": "m000002", "at": NOW, "undoes": "m000001"})
-    );
-    assert_eq!(kinds(&fx), Vec::<String>::new());
-    refused(&fx, "m000001: already undone, by m000002", || {
-        e.unmerge("m000001")
-    });
-    refused(&fx, "m000002: no such merge", || e.unmerge("m000002"));
-    refused(&fx, "m000009: no such merge", || e.unmerge("m000009"));
-    // The pair can be merged again, under the next id, and undone again.
-    assert_eq!(by_hand(&fx, BETA, ALPHA), "m000003");
-    assert_eq!(e.unmerge("m000003").unwrap().log_id, "m000004");
-    assert!(but_the_log(&fx) == before);
-    let c = e.check().unwrap();
-    assert_eq!(
-        (c.ok, c.merges, c.undone, c.in_effect, c.records),
-        (true, 2, 2, 0, 4)
-    );
-}
-
-#[test]
-fn unmerge_keeps_what_he_changed_since_the_merge() {
+fn a_model_does_not_merge_away_a_record_he_edited_and_may_merge_into_one() {
     let fx = fixture();
     let e = fx.editor();
-    // delta into beta: beta gains a member, the alias "Delta", and its
-    // start moves back to 2026-08-01.
-    let id = by_hand(&fx, DELTA, BETA);
-    e.set(
-        BETA,
-        &FieldEdit {
-            name: Some("His name".into()),
-            end: Some("2026-12-31".into()),
-            add_aliases: strs(&["Mine"]),
-            remove_aliases: strs(&["Beta"]),
-            description: Some("His words.".into()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    e.unmerge(&id).unwrap();
-    let b = fx.record(BETA);
-    // Gone: what the merge gave (member, alias, start; the start is still
-    // the merge's, so it goes back). Kept: his name, his alias, his
-    // removal, his end, his words.
-    assert_eq!(b.members, strs(&["2026-10/E04"]));
-    assert_eq!(b.aliases, strs(&["shared", "ALPHA STORY", "Mine"]));
-    assert_eq!(
-        (b.start.as_deref(), b.end.as_deref()),
-        (Some("2026-10-02"), Some("2026-12-31"))
-    );
-    assert_eq!(
-        (b.name.as_str(), b.description.as_str(), b.edited.as_deref()),
-        ("His name", "His words.", Some(TODAY))
-    );
-    assert_eq!(fx.record(DELTA).merged_into, None);
-    assert_eq!(fx.set().resolve("2026-08/E07"), Some(DELTA));
-    // A start he set since is his: it stays.
-    let fx = fixture();
-    let e = fx.editor();
-    let id = by_hand(&fx, DELTA, BETA);
-    e.set(
-        BETA,
-        &FieldEdit {
-            start: Some("2026-07-15".into()),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    e.unmerge(&id).unwrap();
-    assert_eq!(fx.record(BETA).start.as_deref(), Some("2026-07-15"));
-}
-
-#[test]
-fn nested_merges_are_undone_latest_first() {
-    let fx = fixture();
-    let before = fx.tree();
-    let e = fx.editor();
-    let m1 = by_hand(&fx, BETA, ALPHA);
-    let m2 = by_hand(&fx, ALPHA, DELTA);
-    let m3 = by_hand(&fx, GAMMA, DELTA);
-    let set = fx.set();
-    for id in [
-        BETA,
-        ALPHA,
-        GAMMA,
-        "2026-10/E04",
-        "2026-09/E01",
-        "2026-11/E02",
-    ] {
-        assert_eq!(set.resolve(id), Some(DELTA), "{id}");
-    }
-    assert_eq!(fx.record(BETA).merged_into.as_deref(), Some(ALPHA));
-    assert_eq!(
-        fx.record(DELTA).members,
-        strs(&["2026-08/E07", "2026-09/E01", "2026-10/E04", "2026-11/E02"])
-    );
-    // The first merge's survivor is merged away: undo that merge first.
+    // Gamma has `edited` set.
     refused(
         &fx,
-        "m000001: 2026-09-alpha has since been merged into 2026-08-delta; undo that later merge first (`scout events unmerge m000002`)",
-        || e.unmerge(&m1),
+        "a model's merge does not merge away a record he edited",
+        || e.merge(&merge_req(GAMMA, ALPHA, By::Model)),
     );
-    // Two merges into one survivor are independent: either order.
-    e.unmerge(&m2).unwrap();
-    let set = fx.set();
-    assert_eq!(set.resolve("2026-10/E04"), Some(ALPHA));
-    assert_eq!(set.resolve("2026-11/E02"), Some(DELTA));
-    assert_eq!(
-        fx.record(DELTA).members,
-        strs(&["2026-08/E07", "2026-11/E02"])
-    );
-    e.unmerge(&m1).unwrap();
-    e.unmerge(&m3).unwrap();
-    assert!(but_the_log(&fx) == before);
-    assert_eq!(fx.log(MERGE_LOG).len(), 6);
-    assert_eq!(kinds(&fx), Vec::<String>::new());
+    // Into it: allowed, and his record's file is not written.
+    let gamma = fx.bytes(GAMMA);
+    let m = e.merge(&merge_req(BETA, GAMMA, By::Model)).unwrap();
+    assert_eq!(fx.bytes(GAMMA), gamma);
+    assert_eq!(fx.log(MERGE_LOG)[0]["by"], json!("model"));
+    assert_eq!(fx.set().resolve("2026-10/E04"), Some(GAMMA));
+    e.unmerge(&m.log_id).unwrap();
+    assert_eq!(fx.bytes(GAMMA), gamma);
+    // He may merge his own record away.
+    e.merge(&merge_req(GAMMA, ALPHA, By::Dominik)).unwrap();
+    assert_eq!(fx.record(GAMMA).merged_into.as_deref(), Some(ALPHA));
+    assert_eq!(fx.record(GAMMA).edited.as_deref(), Some("2026-10-10"));
 }
 
 #[test]
 fn a_merge_cut_short_is_reported_by_check_and_taken_back_by_unmerge() {
-    // After the log line: no record has changed.
+    // After the log line, before `a` is rewritten: no record has changed.
     let fx = fixture();
     let before = fx.tree();
     let err = crashing(&fx, MERGE_LOG)
         .merge(&merge_req(BETA, ALPHA, By::Dominik))
-        .unwrap_err();
-    assert!(err.to_string().contains("power cut"), "{err}");
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("power cut") && err.contains("the merge m000001 is in"),
+        "{err}"
+    );
+    assert!(
+        err.contains("`scout events unmerge m000001` takes it back"),
+        "{err}"
+    );
     assert!(but_the_log(&fx) == before);
     assert_eq!(fx.log(MERGE_LOG).len(), 1);
     let c = fx.editor().check().unwrap();
     assert!(!c.ok);
+    assert_eq!((c.in_effect, c.problems.len()), (0, 1));
     assert_eq!(
         (c.problems[0].kind.as_str(), c.problems[0].log_id.as_deref()),
         ("not-applied", Some("m000001"))
@@ -436,109 +242,100 @@ fn a_merge_cut_short_is_reported_by_check_and_taken_back_by_unmerge() {
     assert_eq!(by_hand(&fx, BETA, ALPHA), "m000003");
     assert_eq!(kinds(&fx), Vec::<String>::new());
 
-    // After `a`: the id table is already the merged one, read without a
-    // warning; `b` has not been widened yet.
+    // After `a` was rewritten: the merge is whole, whatever the caller
+    // was told.
     let fx = fixture();
     let before = fx.tree();
     let file: &'static str = Box::leak(format!("{BETA}.md").into_boxed_str());
-    let err = crashing(&fx, file)
+    assert!(crashing(&fx, file)
         .merge(&merge_req(BETA, ALPHA, By::Dominik))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        err.contains("power cut") && err.contains("the merge m000001 is in"),
-        "{err}"
-    );
-    assert!(
-        err.contains("`scout events unmerge m000001` takes it back"),
-        "{err}"
-    );
-    let set = fx.set();
-    assert_eq!(set.resolve("2026-10/E04"), Some(ALPHA));
-    assert_eq!(fx.bytes(ALPHA), before[&fx.dir.join(format!("{ALPHA}.md"))]);
+        .is_err());
+    assert_eq!(fx.set().resolve("2026-10/E04"), Some(ALPHA));
     let c = fx.editor().check().unwrap();
-    assert_eq!(c.problems.len(), 1);
-    assert_eq!(c.problems[0].kind, "half-applied");
-    assert!(c.problems[0]
-        .detail
-        .contains("lacks the members the merge gives it: 2026-10/E04"));
-    let e = fx.editor();
-    refused(
-        &fx,
-        "2026-10-beta: already merged into 2026-09-alpha",
-        || e.merge(&merge_req(BETA, ALPHA, By::Dominik)),
-    );
-    assert!(!e.unmerge("m000001").unwrap().withdrawn);
+    assert!(c.ok);
+    assert_eq!(c.in_effect, 1);
+    assert!(!fx.editor().unmerge("m000001").unwrap().withdrawn);
     assert!(but_the_log(&fx) == before);
-    assert_eq!(kinds(&fx), Vec::<String>::new());
-    assert_eq!(by_hand(&fx, BETA, ALPHA), "m000003");
 }
 
 #[test]
 fn an_undo_cut_short_is_reported_by_check_and_finished_by_running_it_again() {
-    for (file, kind, withdrawn) in [
-        (format!("{ALPHA}.md"), "half-applied", false),
-        (format!("{BETA}.md"), "not-applied", true),
-        (MERGE_LOG.to_string(), "", false),
-    ] {
-        let fx = fixture();
-        let before = fx.tree();
-        let id = by_hand(&fx, BETA, ALPHA);
-        let file: &'static str = Box::leak(file.into_boxed_str());
-        let res = crashing(&fx, file).unmerge(&id);
-        if file == MERGE_LOG {
-            // The undo line was written before the "crash": all done.
-            assert!(res.is_err());
-            assert_eq!(kinds(&fx), Vec::<String>::new());
-            assert!(but_the_log(&fx) == before);
-            continue;
-        }
-        let err = res.unwrap_err().to_string();
-        assert!(
-            err.contains(
-                "the undo of m000001 is not finished; run `scout events unmerge m000001` again"
-            ),
-            "{err}"
-        );
-        // A state the reader reads without a warning.
-        fx.set();
-        assert_eq!(kinds(&fx), vec![kind.to_string()], "{file}");
-        let u = fx.editor().unmerge(&id).unwrap();
-        assert_eq!(u.withdrawn, withdrawn, "{file}");
-        assert!(but_the_log(&fx) == before, "{file}");
-        assert_eq!(kinds(&fx), Vec::<String>::new());
-        assert_eq!(fx.log(MERGE_LOG).len(), 2);
-    }
+    // After `a` was rewritten, before the undo line.
+    let fx = fixture();
+    let before = fx.tree();
+    let id = by_hand(&fx, BETA, ALPHA);
+    let file: &'static str = Box::leak(format!("{BETA}.md").into_boxed_str());
+    let err = crashing(&fx, file).unmerge(&id).unwrap_err().to_string();
+    assert!(
+        err.contains("the undo of m000001 is not finished")
+            && err.contains("run `scout events unmerge m000001` again"),
+        "{err}"
+    );
+    // The records are already as before the merge; the reader warns of
+    // nothing.
+    assert!(but_the_log(&fx) == before);
+    fx.set();
+    assert_eq!(fx.log(MERGE_LOG).len(), 1);
+    assert_eq!(kinds(&fx), vec!["not-applied".to_string()]);
+    let u = fx.editor().unmerge(&id).unwrap();
+    assert!(u.withdrawn);
+    assert!(but_the_log(&fx) == before);
+    assert_eq!(kinds(&fx), Vec::<String>::new());
+    assert_eq!(fx.log(MERGE_LOG).len(), 2);
+
+    // After the undo line: all done.
+    let fx = fixture();
+    let before = fx.tree();
+    let id = by_hand(&fx, BETA, ALPHA);
+    assert!(crashing(&fx, MERGE_LOG).unmerge(&id).is_err());
+    assert_eq!(kinds(&fx), Vec::<String>::new());
+    assert!(but_the_log(&fx) == before);
+    assert_eq!(fx.log(MERGE_LOG).len(), 2);
 }
 
 #[test]
-fn a_record_edited_while_a_merge_runs_stops_it() {
+fn a_record_edited_while_a_merge_runs() {
     let his = |id: &str| format!("---\nid: \"{id}\"\nname: \"His edit, made meanwhile\"\n---\n");
-    // Before the first write: nothing changes, and no log line is left.
-    for target in [ALPHA, BETA] {
-        let fx = fixture();
-        let (path, text) = (fx.dir.join(format!("{target}.md")), his(target));
-        let (p, t) = (path.clone(), text.clone());
-        let e = fx.editor().with_hook(move |s| match s {
-            Step::Read => fs::write(&p, &t),
-            _ => Ok(()),
-        });
-        let mut before = fx.tree();
-        let err = e
-            .merge(&merge_req(BETA, ALPHA, By::Dominik))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("changed since it was read"), "{err}");
-        before.insert(path, text.into_bytes());
-        assert!(fx.tree() == before, "{target}");
-    }
-    // The second record, after the first was replaced: the merge stops in
-    // the half-applied state, says so, and his edit stands.
+    // `a`, before the first write: nothing changes, no log line is left.
+    let fx = fixture();
+    let (path, text) = (fx.dir.join(format!("{BETA}.md")), his(BETA));
+    let (p, t) = (path.clone(), text.clone());
+    let e = fx.editor().with_hook(move |s| match s {
+        Step::Read => fs::write(&p, &t),
+        _ => Ok(()),
+    });
+    let mut before = fx.tree();
+    let err = e
+        .merge(&merge_req(BETA, ALPHA, By::Dominik))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed since it was read"), "{err}");
+    before.insert(path, text.into_bytes());
+    assert!(fx.tree() == before);
+
+    // `b`, at any point: the merge does not write it, so his edit stands
+    // and the merge is made.
     let fx = fixture();
     let (path, text) = (fx.dir.join(format!("{ALPHA}.md")), his(ALPHA));
     let (p, t) = (path.clone(), text.clone());
     let e = fx.editor().with_hook(move |s| match s {
-        Step::Replacing(f) if f.starts_with(ALPHA) => fs::write(&p, &t),
+        Step::Read => fs::write(&p, &t),
+        _ => Ok(()),
+    });
+    e.merge(&merge_req(BETA, ALPHA, By::Dominik)).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(fx.record(BETA).merged_into.as_deref(), Some(ALPHA));
+    assert_eq!(kinds(&fx), Vec::<String>::new());
+    fx.editor().unmerge("m000001").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+
+    // `a`, after the log line and before its rename: the merge stops, his
+    // edit stands, the line is not applied and is withdrawn.
+    let fx = fixture();
+    let (path, text) = (fx.dir.join(format!("{BETA}.md")), his(BETA));
+    let (p, t) = (path.clone(), text.clone());
+    let e = fx.editor().with_hook(move |s| match s {
+        Step::Replacing(f) if f.starts_with(BETA) => fs::write(&p, &t),
         _ => Ok(()),
     });
     let err = e
@@ -546,22 +343,19 @@ fn a_record_edited_while_a_merge_runs_stops_it() {
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("changed since it was read") && err.contains("is not finished"),
+        err.contains("changed since it was read") && err.contains("the merge m000001 is in"),
         "{err}"
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), text);
-    assert_eq!(fx.record(BETA).merged_into.as_deref(), Some(ALPHA));
-    assert_eq!(kinds(&fx), vec!["half-applied".to_string()]);
+    assert_eq!(kinds(&fx), vec!["not-applied".to_string()]);
     assert!(fs::read_dir(&fx.dir).unwrap().all(|e| !e
         .unwrap()
         .file_name()
         .to_string_lossy()
         .starts_with(".scout-edit-")));
-    // His record is no longer as the writer writes it, so the undo leaves
-    // it alone and says why; nothing is lost.
-    refused(&fx, "the frontmatter is not as scout writes it", || {
-        fx.editor().unmerge("m000001")
-    });
+    assert!(fx.editor().unmerge("m000001").unwrap().withdrawn);
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(kinds(&fx), Vec::<String>::new());
 }
 
 #[test]
@@ -593,19 +387,16 @@ fn a_malformed_merge_log_stops_every_command_before_any_write() {
             "line 2: not a merge line",
         ),
         (
-            format!(
-                "{good}{}",
-                line2.replace("\"moved\"", "\"extra\":1,\"moved\"")
-            ),
+            format!("{good}{}", line2.replace("\"a\":", "\"extra\":1,\"a\":")),
             "line 2: not a merge line",
         ),
         (
             format!("{good}{good}"),
-            "line 2: id \"m000001\" is not `m` and six digits, or is not greater",
+            "line 2: id \"m000001\" is not `m` and six to nine digits, or is not greater",
         ),
         (
             good.replace("\"m000001\"", "\"m1\""),
-            "line 1: id \"m1\" is not `m` and six digits",
+            "line 1: id \"m1\" is not `m` and six to nine digits",
         ),
         (
             format!("{good}{}", undo("m000002", "m000007")),
@@ -625,6 +416,18 @@ fn a_malformed_merge_log_stops_every_command_before_any_write() {
                 undo("m000002", "m000001").replace("}\n", ",\"x\":1}\n")
             ),
             "line 2: not an undo line",
+        ),
+        (
+            good.replace(
+                "\"a_merged_into_before\":null",
+                "\"a_merged_into_before\":\"2026-08-delta\"",
+            ),
+            "line 1: a_merged_into_before is \"2026-08-delta\", where a merge line has null",
+        ),
+        // A line that holds records, as a tool that copied values wrote.
+        (
+            good.replace("\"a\":", "\"added_members\":[],\"a\":"),
+            "line 1: not a merge line",
         ),
         ("\u{0}\n".to_string(), "line 1: not JSON"),
     ] {
@@ -724,85 +527,55 @@ fn a_log_another_tool_appended_to_meanwhile_is_not_appended_to() {
 }
 
 #[test]
-fn check_reports_a_merge_no_log_line_explains_and_a_leftover_temporary_file() {
+fn check_reports_lines_that_are_not_in_effect_hand_merges_and_temporary_files() {
+    // `merged_into` set by hand: information, not a fault.
     let fx = fixture();
     let mut beta = fx.record(BETA);
     beta.merged_into = Some(ALPHA.into());
     put(&fx.dir, &beta);
-    fs::write(fx.dir.join(".scout-edit-123-abc-0.tmp"), "half").unwrap();
     let before = fx.tree();
     let c = fx.editor().check().unwrap();
-    assert!(!c.ok);
-    let got: Vec<(&str, Option<&str>, Option<&str>)> = c
-        .problems
+    assert!(c.ok && c.problems.is_empty());
+    let info: Vec<(&str, Option<&str>, Option<&str>)> = c
+        .information
         .iter()
         .map(|p| (p.kind.as_str(), p.a.as_deref(), p.b.as_deref()))
         .collect();
-    assert_eq!(
-        got,
-        vec![
-            ("merged-without-log", Some(BETA), Some(ALPHA)),
-            ("temporary-file", None, None)
-        ]
-    );
+    assert_eq!(info, vec![("merged-without-log", Some(BETA), Some(ALPHA))]);
+    // A temporary file an edit left: a problem.
+    fs::write(fx.dir.join(".scout-edit-123-abc-0.tmp"), "half").unwrap();
+    let c = fx.editor().check().unwrap();
+    assert!(!c.ok);
+    assert_eq!(c.information.len(), 1);
+    assert_eq!(kinds(&fx), vec!["temporary-file".to_string()]);
     // Check reads only.
+    fs::remove_file(fx.dir.join(".scout-edit-123-abc-0.tmp")).unwrap();
     assert!(fx.tree() == before);
-    // A logged merge whose records were then changed by hand.
+
+    // A logged merge whose `a` was then merged elsewhere by hand.
     let fx = fixture();
     let id = by_hand(&fx, BETA, ALPHA);
     let mut beta = fx.record(BETA);
-    beta.merged_into = None;
+    beta.merged_into = Some(DELTA.into());
     put(&fx.dir, &beta);
     let c = fx.editor().check().unwrap();
-    assert_eq!(c.problems.len(), 1);
+    assert!(!c.ok);
     assert_eq!(
         (c.problems[0].kind.as_str(), c.problems[0].log_id.as_deref()),
         ("not-as-logged", Some(id.as_str()))
     );
+    assert_eq!(c.information[0].b.as_deref(), Some(DELTA));
     refused(
         &fx,
-        "2026-10-beta is no longer merged into 2026-09-alpha",
+        "2026-10-beta is no longer merged into 2026-09-alpha (2026-10-beta is now merged into 2026-08-delta)",
         || fx.editor().unmerge(&id),
     );
-}
-
-#[test]
-fn undoing_one_of_several_merges_into_an_event_leaves_dates_that_cover_the_rest() {
-    let fx = fixture();
-    let mut late = rec(
-        "2026-12-late",
-        "Late",
-        ("2026-12-02", "2026-12-05"),
-        &["2026-12/E09"],
-    );
-    late.aliases = strs(&["Beta"]);
-    put(&fx.dir, &late);
-    let before = fx.tree();
-    let e = fx.editor();
-    // Late widens alpha's end to December; beta, merged after it, changes
-    // no date and adds only the names late did not bring.
-    let m1 = by_hand(&fx, "2026-12-late", ALPHA);
-    let m2 = by_hand(&fx, BETA, ALPHA);
-    let a = fx.record(ALPHA);
-    assert_eq!(a.end.as_deref(), Some("2026-12-05"));
-    assert_eq!(
-        a.aliases,
-        strs(&["The Alpha", "Shared", "Late", "Beta", "Beta follow-up"])
-    );
-    // Undo the first: the end goes back as far as beta allows, and the
-    // alias beta also brings stays.
-    e.unmerge(&m1).unwrap();
-    let a = fx.record(ALPHA);
-    assert_eq!(
-        (a.start.as_deref(), a.end.as_deref()),
-        (Some("2026-09-05"), Some("2026-10-09"))
-    );
-    assert_eq!(
-        a.aliases,
-        strs(&["The Alpha", "Shared", "Beta", "Beta follow-up"])
-    );
-    assert_eq!(a.members, strs(&["2026-09/E01", "2026-10/E04"]));
-    assert_eq!(kinds(&fx), Vec::<String>::new());
-    e.unmerge(&m2).unwrap();
-    assert!(but_the_log(&fx) == before);
+    // Unmerged by hand: the line is not applied, and is withdrawn.
+    beta.merged_into = None;
+    put(&fx.dir, &beta);
+    assert_eq!(kinds(&fx), vec!["not-applied".to_string()]);
+    assert!(fx.editor().unmerge(&id).unwrap().withdrawn);
+    let c = fx.editor().check().unwrap();
+    assert!(c.ok && c.information.is_empty());
+    assert_eq!((c.merges, c.undone, c.in_effect), (1, 1, 0));
 }

@@ -25,8 +25,8 @@
 //!   - `set`, `remove`, `restore`: the table as it is;
 //!   - `create`: the table plus the new id;
 //!   - `merge a b`: every id held by `a` held by `b`, nothing else moved;
-//!   - `unmerge`: the ids the merge moved (kept in its log line) held by
-//!     `a` again, nothing else moved.
+//!   - `unmerge`: `a`, every record merged into `a`, and the monthly ids
+//!     those records hold, held by `a`; nothing else moved.
 //! - All of that happens before the first write. A refusal leaves the
 //!   folder byte for byte as it was.
 //!
@@ -39,42 +39,70 @@
 //! since rewriting would lose it. `edited`, `origin`, `members`, `themes`
 //! and every other field an operation does not name keep their values.
 //!
-//! Replacing a record ([`store::replace`]): a new file of a name no
-//! record can have (`.scout-edit-<pid>-<time>-<n>.tmp`) is created in the
-//! records folder (create-exclusive, no-follow), written and synced; the
+//! Replacing a record ([`store::replace`]): the target's permission bits
+//! are read; a new file of a name no record can have
+//! (`.scout-edit-<pid>-<time>-<n>.tmp`) is created in the records folder
+//! (create-new and no-follow, so it is a file of its own and no link to
+//! any other), given those permission bits, written and synced; the
 //! target is then read again and must be a plain file holding exactly the
 //! bytes the operation read at its start (else the new file is removed
 //! and the target is left alone: he or another tool edited it meanwhile);
-//! then the new file is renamed over the target.
+//! then the new file is renamed over the target. The old file is never
+//! opened for writing: the rename gives the record's name a new file, and
+//! the old file's bytes stay as they were under any other name it has.
+//! A record that `create` makes, and a log made by its first line, has
+//! mode 0644, set on the descriptor whatever the umask.
 //!
-//! Order of writes, and what a crash leaves. A merge writes three things
-//! and an undo writes three; the order is chosen so that every state in
-//! between is one the reader reads without a warning and `unmerge` takes
-//! back:
+//! Merging. A merge of `a` into `b` changes one field of one record:
+//! `a.merged_into` becomes `b`. `unmerge` clears it. Record `b` is never
+//! written by either, and nothing else of `a` is. The combined event's
+//! ids, span, aliases and the list of records merged into it are worked
+//! out by the reader when asked ([`events::EventSet`],
+//! [`events::combined`]); see `merge.rs`.
 //!
-//! - `merge a b`: (1) the log line, with both records as they were and as
-//!   they will be; (2) record `a`, now `merged_into: b`; (3) record `b`,
-//!   with `a`'s members, names and dates. The line comes first so the
-//!   records as they were are on disk before either changes. After (1)
-//!   alone no record has changed. After (2) the id table is already the
-//!   final one (`a` still lists its members and resolves to `b`); only
-//!   `b`'s own lists and dates are not yet widened.
-//! - `unmerge`: (1) record `b`, without what the merge gave it; (2) record
-//!   `a`, `merged_into` cleared; (3) the undo line. The line comes last so
-//!   that an undo cut short can be run again.
-//! - A merge line is therefore in one of three states, told from the
-//!   records: not applied, half applied, in effect. [`EventEditor::check`]
-//!   reports every line that is not in effect, and `unmerge <id>` takes
-//!   back a line in any of the three (for a line not applied it only
-//!   appends the undo line). `merge` refuses `a` while a line for `a` is
-//!   not applied, and names the line.
+//! Order of writes, and what a crash leaves. A merge writes two things
+//! and an undo writes two:
+//!
+//! - `merge a b`: (1) the log line; (2) record `a`, now `merged_into: b`.
+//!   After (1) alone no record has changed.
+//! - `unmerge`: (1) record `a`, `merged_into` cleared; (2) the undo line.
+//!   That the log can take the line is checked before (1). After (1)
+//!   alone the merge is gone from the records and its line is still in
+//!   the log without an undo.
+//! - `decide`: the merge of an approval (as above), then the decision
+//!   line; that `merge-decisions.jsonl` can take the line is checked
+//!   before the merge.
+//! - A merge line no undo line undoes is therefore in one of two states,
+//!   told from record `a`: in effect (`a` is merged into `b`) or not
+//!   applied (`a` is merged into nothing: either crash above).
+//!   [`EventEditor::check`] reports every line not applied, and
+//!   `unmerge <id>` withdraws it (it only appends the undo line). `merge`
+//!   refuses `a` while a line for `a` is not applied, and names the line.
+//!   A line whose `a` is gone or merged into another record was changed
+//!   by other means; `check` reports it and `unmerge` refuses it.
 //! - The other operations write one file each.
 //! - A crash can leave one `.scout-edit-*.tmp` file; the reader does not
 //!   read it, `check` lists it, nothing removes it.
 //!
+//! Undo writes no value kept from before. `unmerge` clears `merged_into`
+//! on the record its line names; `restore` takes `removed` off. Nothing
+//! he changed in between is touched.
+//!
 //! The two logs (`log.rs`, their only reader and writer) are append-only:
 //! read whole and checked before any write, opened no-follow, refused
-//! when not a plain file or when a line is malformed.
+//! when not a plain file, when over 256 MiB, or when a line is malformed
+//! or over 4 MiB. A log is appended to only when the open file is a
+//! regular file with one link (an append to a hard-linked file would
+//! write to its other name too), is the file that was read at the length
+//! read, and stays within both limits with the new line; an operation
+//! that appends after changing records checks this before its first
+//! write. Merge-log ids run to `m999999999`.
+//!
+//! Numbers taken from files. A merge-log id is at most nine digits and is
+//! advanced with checked arithmetic. `a_items` / `b_items` of a proposals
+//! line (the tagger's file) are taken only as whole numbers from 0 to
+//! 10,000,000 and are added saturating. No other number from a file is
+//! used in arithmetic or as a length.
 //!
 //! Threat model: the seed's. A single-user desktop tool; no hostile
 //! process runs beside it.
@@ -82,17 +110,18 @@
 //! - Holds: the records folder itself is not a symlink; a path with `..`
 //!   is refused; a record or log that is a symlink or not a plain file is
 //!   not written (the reader refuses such a record, and the logs are
-//!   opened no-follow); a change made to a record between the read and
-//!   the check before its rename is seen and stops the operation; every
-//!   check runs before the first write.
+//!   opened no-follow); a log with a second hard link is not appended to;
+//!   a record with a second hard link is replaced under its own name
+//!   only, its old file not written; a change made to a record between
+//!   the read and the check before its rename is seen and stops the
+//!   operation; every check runs before the first write.
 //! - Not defended: a write to a record in the instant between the check
-//!   and the rename (it is lost: the rename replaces the file); in a
-//!   merge or undo, a change to the second record after the first was
-//!   renamed (the operation stops between the two, in the half-applied
-//!   state above, and says so); another process replacing the folder
-//!   itself. Writes are not anchored to a directory descriptor. A hard
-//!   link to a record keeps the old bytes: the record's name gets a new
-//!   file. The new file's mode is 0644.
+//!   and the rename (it is lost: the rename replaces the file); another
+//!   process replacing the folder itself; a link added to a log, or a write to it, in the instant
+//!   between the check on its open descriptor and the write. Writes are
+//!   not anchored to a directory descriptor. Of a replaced record only
+//!   the permission bits are carried over: not its owner, group, extended
+//!   attributes or times.
 
 mod log;
 mod merge;
@@ -102,14 +131,14 @@ mod store;
 use crate::event_seed::naming;
 use crate::event_seed::render::{body_text, render_record};
 use crate::event_seed::{preflight_names, refuse_parent_dir, resolve_out_dir};
-use crate::events::{self, is_record_control, EventRecord, EVENTS_DIR};
+use crate::events::{self, is_date, is_record_control, EventRecord, EVENTS_DIR};
 use crate::normalize::fold;
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use store::Snapshot;
 
-pub use log::{By, Decision, DecisionLine, MergeLine, Pair, UndoLine, DECISIONS_LOG, MERGE_LOG};
+pub use log::{By, Decision, DecisionLine, MergeLine, UndoLine, DECISIONS_LOG, MERGE_LOG};
 pub use merge::{CheckReport, Merged, Problem, Unmerged};
 pub use proposals::{
     ApplyReport, Decided, PlannedMerge, SkippedPair, WaitingPair, WaitingReport, PROPOSALS_DIR,
@@ -193,20 +222,6 @@ fn plain_text(what: &str, s: &str) -> Result<String> {
         );
     }
     Ok(s.trim().to_string())
-}
-
-/// Is `s` a calendar date written `YYYY-MM-DD`?
-fn is_date(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b.iter().enumerate().all(|(i, c)| {
-            if i == 4 || i == 7 {
-                *c == b'-'
-            } else {
-                c.is_ascii_digit()
-            }
-        })
-        && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
 fn date(what: &str, s: &str) -> Result<String> {

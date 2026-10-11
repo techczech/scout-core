@@ -289,7 +289,12 @@ fn a_record_that_is_not_as_the_writer_writes_it_is_left_alone() {
         refused(&fx, why, || e.set(id, &FieldEdit { description: Some("Y".into()), ..edit() }));
         refused(&fx, why, || e.remove(id));
         refused(&fx, why, || e.merge(&merge_req(id, ALPHA, By::Dominik)));
-        refused(&fx, why, || e.merge(&merge_req(ALPHA, id, By::Dominik)));
+        // Merging another record INTO it does not write it: allowed, and
+        // its file stays as he has it, through the merge and its undo.
+        let m = e.merge(&merge_req(ALPHA, id, By::Dominik)).unwrap();
+        assert_eq!(fx.set().resolve("2026-09/E01"), Some(id));
+        e.unmerge(&m.log_id).unwrap();
+        assert_eq!(fs::read_to_string(fx.dir.join(format!("{id}.md"))).unwrap(), text);
     }
     // A record in a file of another name (`x.md.md` holds the id `x`).
     let twice = rec("twice", "Twice", ("2026-01-01", "2026-01-02"), &[]);

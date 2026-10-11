@@ -92,10 +92,6 @@ impl Snapshot {
         }
     }
 
-    pub fn has(&self, id: &str) -> bool {
-        self.set.records.contains_key(&fold(id))
-    }
-
     /// `new` as the bytes that replace its record's file, checked against
     /// the reader. `new_body` says the operation sets the description;
     /// without it the bytes after the frontmatter are carried over as they
@@ -259,6 +255,49 @@ pub(super) fn ident_of(meta: &std::fs::Metadata) -> (u64, u64) {
     }
 }
 
+/// The number of names the file has (1 off unix).
+pub(super) fn links_of(meta: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.nlink()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        1
+    }
+}
+
+/// The permission bits of a file (0644 off unix).
+fn mode_of(meta: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0o644
+    }
+}
+
+/// Set the permission bits of the open file, whatever the umask (nothing
+/// off unix).
+pub(super) fn set_mode(file: &std::fs::File, mode: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, mode);
+        Ok(())
+    }
+}
+
 /// `open` with no-follow (a symlink at the path is an error, not its
 /// target) and non-blocking (a FIFO does not hang the open).
 pub(super) fn no_follow(open: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
@@ -370,31 +409,49 @@ fn sync_dir(dir: &Path) {
 
 /// Replace `<dir>/<w.file>` by `w.new`:
 ///
-/// 1. a new file of a name no record can have is created in `dir`
-///    (create-exclusive, no-follow), written and synced;
-/// 2. the target is read again and must be a plain file holding exactly
+/// 1. the target's permission bits are read (it must be a plain file; a
+///    link is not followed);
+/// 2. a new file of a name no record can have is created in `dir`
+///    (create-new and no-follow: the name did not exist, so the file is
+///    no link, symbolic or hard, to any other), given the target's
+///    permission bits on its descriptor, written and synced;
+/// 3. the target is read again and must be a plain file holding exactly
 ///    the bytes the snapshot read; if not, the new file is removed and
 ///    the target is not touched;
-/// 3. the new file is renamed over the target.
+/// 4. the new file is renamed over the target.
+///
+/// The target's old file is never opened for writing. The rename puts the
+/// new file under the target's name in the folder; the old file's bytes
+/// stay as they were, so a second name it has (a hard link, inside the
+/// folder or out) still gives the old bytes and nothing outside the folder
+/// is written.
 ///
 /// An error means the target was not replaced, and the new file is
-/// removed. Between step 2 and
-/// step 3 nothing guards the target: a write landing in that instant is
-/// lost (see the module notes of [`super`]).
+/// removed. Between step 3 and step 4 nothing guards the target: a write
+/// landing in that instant is lost (see the module notes of [`super`]).
 pub(super) fn replace(dir: &Path, w: &Rewrite, hook: Hook) -> Result<()> {
     let target = dir.join(&w.file);
+    let mode = match std::fs::symlink_metadata(&target) {
+        Ok(m) if m.is_file() => mode_of(&m),
+        _ => bail!(
+            "{}: no longer a plain file (a symlink, a folder or a special file, or gone); it was not touched",
+            target.display()
+        ),
+    };
     let temp = dir.join(temp_name());
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        open.custom_flags(libc::O_NOFOLLOW).mode(0o644);
+        // Nobody else's until the target's own bits are set below.
+        open.custom_flags(libc::O_NOFOLLOW).mode(0o600);
     }
     let mut file = open
         .open(&temp)
         .with_context(|| format!("create {}", temp.display()))?;
     let done = (|| -> Result<()> {
+        set_mode(&file, mode).with_context(|| format!("set the mode of {}", temp.display()))?;
         file.write_all(&w.new)
             .and_then(|_| file.sync_all())
             .with_context(|| format!("write {}", temp.display()))?;
@@ -412,11 +469,13 @@ pub(super) fn replace(dir: &Path, w: &Rewrite, hook: Hook) -> Result<()> {
 }
 
 /// Create the record `record` as `<dir>/<id>.md` through the seed's
-/// create-exclusive, no-follow open; the bytes are synced.
+/// create-exclusive, no-follow open; the mode is set to 0644 on the
+/// descriptor (whatever the umask) and the bytes are synced.
 pub(super) fn create(dir: &Path, record: &EventRecord, bytes: &[u8]) -> Result<()> {
     let name = format!("{}.md", record.id);
     let at = dir.join(&name);
     let made = event_seed::create_exclusive(dir, &name, |f| {
+        set_mode(f, 0o644)?;
         f.write_all(bytes)?;
         f.sync_all()
     })

@@ -4,9 +4,17 @@
 //! event no record holds is listed under its monthly id with the layer's
 //! name. Items are the tagged documents search can return, as in
 //! `scout topics`; a document counts once in each of its events.
+//!
+//! A record that others are merged into is listed as the combined event
+//! ([`events::combined`]): `start` / `end` cover the merged records,
+//! `aliases` take in their names and aliases, `merged_from` names them,
+//! and `own_start` / `own_end` give the record's own date where the
+//! combined one differs. `members`, `themes`, `origin`, `edited` and the
+//! description are the record's own. A record merged away (listed with
+//! `merged`) is listed with its own values only.
 
 use crate::api::{Engine, Outcome, Reply};
-use crate::events::{self, EventRecord};
+use crate::events::{self, EventRecord, MergedFrom};
 use crate::index;
 use crate::normalize::fold;
 use crate::topics::valid_month;
@@ -65,8 +73,16 @@ pub struct EventListing {
     /// Does `analysis/events/<id>.md` exist? The fields below `months` come
     /// from it and are empty without it.
     pub record: bool,
+    /// The event's span: the record's own dates, widened to cover the
+    /// records merged into it.
     pub start: Option<String>,
     pub end: Option<String>,
+    /// The record's own `start` / `end`, only when the one above differs
+    /// (null: the record has none); the key is absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub own_start: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub own_end: Option<Option<String>>,
     /// Tagged documents in the event, all months.
     pub items: usize,
     /// Of those, the documents in the query's `month` (only with `month`).
@@ -75,8 +91,16 @@ pub struct EventListing {
     /// Items per layer month, chronological; an item without a month is in
     /// `items` only.
     pub months: Vec<MonthCount>,
+    /// The record's own members (the monthly ids of the records merged
+    /// into it are in their records).
     pub members: Vec<String>,
+    /// The record's own aliases, then the names and aliases of the
+    /// records merged into it.
     pub aliases: Vec<String>,
+    /// The records merged into this one, directly or through a chain, in
+    /// id order; the key is absent when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_from: Vec<MergedFrom>,
     pub themes: Vec<String>,
     pub origin: Option<String>,
     pub edited: Option<String>,
@@ -137,6 +161,7 @@ impl Engine {
         for c in &corpora {
             let conn = index::open_existing(&c.config, c.index_path())?;
             let records = events::load(&conn)?;
+            let merged_in = events::merged_in(&records);
             let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
             for d in crate::filter::load_docs(&conn)?.values() {
                 let Some(t) = d.topic.as_ref().filter(|_| d.tokens > 0) else {
@@ -180,7 +205,8 @@ impl Engine {
                 if t.items < q.min_items || month_items == Some(0) {
                     continue;
                 }
-                out.push(listing(c.id(), record, t, month_items));
+                let merged = merged_in.get(&k).map_or(&[][..], Vec::as_slice);
+                out.push(listing(c.id(), record, merged, t, month_items));
             }
         }
         out.sort_by(|a, b| {
@@ -212,6 +238,7 @@ impl Engine {
 fn listing(
     corpus: &str,
     record: Option<&EventRecord>,
+    merged: &[&EventRecord],
     t: Tally,
     month_items: Option<usize>,
 ) -> EventListing {
@@ -224,13 +251,19 @@ fn listing(
             .map(|(n, _)| n.clone())
     };
     let r = record.cloned().unwrap_or_default();
+    // A record merged away is listed as itself.
+    let merged = if r.merged_into.is_some() { &[] } else { merged };
+    let all = events::combined(&r, merged);
+    let own = |own: &Option<String>, shown: &Option<String>| (own != shown).then(|| own.clone());
     EventListing {
         corpus: corpus.to_string(),
         id: record.map_or_else(|| t.spelling.clone(), |r| r.id.clone()),
         name: record.map(|r| r.name.clone()).or_else(layer_name),
         record: record.is_some(),
-        start: r.start,
-        end: r.end,
+        own_start: own(&r.start, &all.start),
+        own_end: own(&r.end, &all.end),
+        start: all.start,
+        end: all.end,
         items: t.items,
         month_items,
         months: t
@@ -242,7 +275,8 @@ fn listing(
             })
             .collect(),
         members: r.members,
-        aliases: r.aliases,
+        aliases: all.aliases,
+        merged_from: all.merged_from,
         themes: r.themes,
         origin: r.origin,
         edited: r.edited,

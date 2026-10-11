@@ -509,7 +509,9 @@ fn the_events_listing_gives_records_counts_and_months() {
             "items": 3,
             "months": [{"month": "2026-09", "count": 2}, {"month": "2026-10", "count": 1}],
             "members": ["2026-09/E21"],
-            "aliases": ["Fields declaration"],
+            // Its own alias, then the name of the record merged into it.
+            "aliases": ["Fields declaration", "Declaration follow-up"],
+            "merged_from": [{"id": FOLLOW, "name": "Declaration follow-up"}],
             "themes": ["T"],
             "origin": "dominik",
             "edited": "2026-10-11",

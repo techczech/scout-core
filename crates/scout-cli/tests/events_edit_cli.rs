@@ -196,7 +196,11 @@ fn every_edit_prints_one_json_line_and_a_refusal_exits_2_with_nothing_changed() 
         (&m["a"], &m["b"], &m["reason"]),
         (&json!(BETA), &json!(ALPHA), &json!("one story"))
     );
-    assert_eq!(m["record"]["aliases"], json!(["Alpha", "Beta"]));
+    assert_eq!(
+        (&m["a_record"]["id"], &m["a_record"]["merged_into"]),
+        (&json!(BETA), &json!(ALPHA))
+    );
+    assert!(m.get("record").is_none() && m.get("members_added").is_none());
     let log = fx.lines("merge-log.jsonl");
     assert_eq!(log.len(), 1);
     let mut keys: Vec<&str> = log[0]
@@ -208,14 +212,20 @@ fn every_edit_prints_one_json_line_and_a_refusal_exits_2_with_nothing_changed() 
     keys.sort();
     assert_eq!(
         keys,
-        ["a", "after", "at", "b", "before", "by", "id", "moved", "reason"]
+        ["a", "a_merged_into_before", "at", "b", "by", "id", "reason"]
     );
     fx.refused(&["merge", BETA, ALPHA], "already merged into");
     fx.refused(&["remove", BETA], "merged into 2026-09-alpha-story");
     let c = fx.ok(&["check"]);
     assert_eq!(
-        (&c["ok"], &c["merges"], &c["in_effect"], &c["problems"]),
-        (&json!(true), &json!(1), &json!(1), &json!([]))
+        (
+            &c["ok"],
+            &c["merges"],
+            &c["in_effect"],
+            &c["problems"],
+            &c["information"]
+        ),
+        (&json!(true), &json!(1), &json!(1), &json!([]), &json!([]))
     );
     let u = fx.ok(&["unmerge", "m000001"]);
     assert_eq!(

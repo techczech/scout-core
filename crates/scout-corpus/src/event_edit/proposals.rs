@@ -6,12 +6,13 @@
 //! Every merge made from a proposal is [`EventEditor::merge`], one pair at
 //! a time, with all its checks. Which pairs, and which record of a pair
 //! survives, is worked out first on a copy of the records in memory with
-//! the function `merge` itself uses ([`merged_pair`]), the reader's own
+//! the function `merge` itself uses ([`merged_record`]), the reader's own
 //! resolution ([`EventSet`]) deciding after each pair which event an id
-//! is in.
+//! is in. As in `merge`, only the record merged away changes; "starts
+//! earlier" is by each surviving record's own `start`.
 
 use super::log::{By, Decision, DecisionLine, Decisions, MergeLog};
-use super::merge::{merged_pair, not_applied_line, Merged};
+use super::merge::{merged_record, not_applied_line, Merged};
 use super::store::{read_plain, Snapshot};
 use super::{plain_text, EventEditor, MergeRequest, Step};
 use crate::event_seed::refuse_parent_dir;
@@ -25,6 +26,9 @@ use std::path::{Component, Path, PathBuf};
 /// The proposals folder, inside the records folder.
 pub const PROPOSALS_DIR: &str = "merge-proposals";
 const MAX_PROPOSALS_BYTES: u64 = 256 << 20;
+/// Largest `a_items` / `b_items` taken from a proposals line. The file is
+/// not this module's: a count is used only to pick the survivor of a tie.
+const MAX_ITEMS: u64 = 10_000_000;
 
 /// One judged pair of a proposals file.
 #[derive(Debug, Clone)]
@@ -64,6 +68,9 @@ struct ProposalsFile {
     /// Lines with an `error`, and lines without a `verdict`.
     error_lines: usize,
     no_verdict_lines: usize,
+    /// Judged lines whose `a_items` or `b_items` is not a whole number
+    /// from 0 to [`MAX_ITEMS`].
+    malformed_lines: usize,
     proposals: Vec<Proposal>,
 }
 
@@ -104,6 +111,9 @@ pub struct ApplyReport {
     pub lines: usize,
     pub error_lines: usize,
     pub no_verdict_lines: usize,
+    /// Judged lines skipped because `a_items` or `b_items` is not a whole
+    /// number from 0 to 10,000,000.
+    pub malformed_lines: usize,
     /// Pairs judged `same` and `confident`.
     pub same_confident: usize,
     /// The merges, in the order they are made.
@@ -144,6 +154,8 @@ pub struct WaitingReport {
     pub at: String,
     pub file: String,
     pub lines: usize,
+    /// Judged lines skipped for a malformed `a_items` or `b_items`.
+    pub malformed_lines: usize,
     pub waiting: Vec<WaitingPair>,
     /// Pairs left out: decided, already in one event, a record missing.
     pub decided: usize,
@@ -182,7 +194,8 @@ struct Sim<'a> {
     items: BTreeMap<String, u64>,
 }
 
-/// Which of two events survives a merge: the one that starts earlier (one
+/// Which of two events survives a merge: the one whose own record starts
+/// earlier (its `start`, not the span of what is merged into it; one
 /// without a start counts as latest); on a tie the one with more items;
 /// then the one whose id sorts first. Gives `(from, into)`.
 fn direction<'r>(
@@ -263,7 +276,7 @@ impl<'a> Sim<'a> {
         let (from, into) = direction(ha, hb, &self.items);
         let reason = plain_text("the reason", &p.reason)
             .map_err(|_| refused("the proposal's reason holds a control character".into()))?;
-        let (new_a, new_b) = merged_pair(from, into, By::Model).map_err(|r| {
+        let new_a = merged_record(from, into, By::Model).map_err(|r| {
             let why = if r.model_rule {
                 "model-rule"
             } else {
@@ -277,22 +290,21 @@ impl<'a> Sim<'a> {
                 from.id, open.id, open.id
             )));
         }
-        for r in [&new_a, &new_b] {
-            self.snap
-                .rewrite(r, false)
-                .map_err(|e| refused(e.to_string()))?;
-        }
+        self.snap
+            .rewrite(&new_a, false)
+            .map_err(|e| refused(e.to_string()))?;
+        let into_id = into.id.clone();
         let planned = PlannedMerge {
             a: new_a.id.clone(),
-            b: new_b.id.clone(),
+            b: into_id.clone(),
             reason: Some(reason).filter(|r| !r.is_empty()),
             line: p.line,
             log_id: None,
         };
         let moved = self.items.get(&fold(&new_a.id)).copied().unwrap_or(0);
-        *self.items.entry(fold(&new_b.id)).or_default() += moved;
+        let have = self.items.entry(fold(&into_id)).or_default();
+        *have = have.saturating_add(moved);
         self.records.insert(fold(&new_a.id), new_a);
-        self.records.insert(fold(&new_b.id), new_b);
         self.set = EventSet::from_records(
             self.snap.dir.clone(),
             self.records.values().cloned().collect(),
@@ -327,7 +339,9 @@ impl EventEditor {
     /// A line that is not a JSON object stops the read (the file may still
     /// be being written), as does a judged line whose `a`, `b` or
     /// `verdict` is not text. A line with an `error`, and one without a
-    /// `verdict`, is skipped and counted.
+    /// `verdict`, is skipped and counted. So is a judged line whose
+    /// `a_items` or `b_items` is there and is not a whole number from 0
+    /// to 10,000,000 (`malformed_lines`); one that is missing or null is 0.
     fn read_proposals(&self, given: &Path) -> Result<ProposalsFile> {
         refuse_parent_dir(given, "the proposals file")?;
         let folder = self.dir.join(PROPOSALS_DIR);
@@ -377,6 +391,7 @@ impl EventEditor {
             lines: 0,
             error_lines: 0,
             no_verdict_lines: 0,
+            malformed_lines: 0,
             proposals: Vec::new(),
         };
         for (i, raw) in text.lines().enumerate() {
@@ -414,24 +429,35 @@ impl EventEditor {
                     Some(_) => text_of(k),
                 }
             };
-            let count = |k: &str| present(k).and_then(|v| v.as_u64()).unwrap_or(0);
-            file.proposals.push(Proposal {
+            // Missing or null is 0; anything else must be a whole number
+            // in range.
+            let count = |k: &str| match present(k) {
+                None => Some(0),
+                Some(v) => v.as_u64().filter(|n| *n <= MAX_ITEMS),
+            };
+            let proposal = Proposal {
                 line,
                 a: text_of("a")?,
                 b: text_of("b")?,
                 verdict: text_of("verdict")?,
                 confidence: optional("confidence")?,
                 reason: optional("reason")?,
-                a_items: count("a_items"),
-                b_items: count("b_items"),
-            });
+                a_items: count("a_items").unwrap_or(0),
+                b_items: count("b_items").unwrap_or(0),
+            };
+            if count("a_items").is_none() || count("b_items").is_none() {
+                file.malformed_lines += 1;
+                continue;
+            }
+            file.proposals.push(proposal);
         }
         Ok(file)
     }
 
     /// Merge every pair the file judges `same` and `confident`, as a
     /// model's merge, in file order: the event that starts later into the
-    /// one that starts earlier (a tie: the one with more items survives,
+    /// one that starts earlier, by the `start` of each event's own
+    /// surviving record (a tie: the one with more items survives,
     /// by the line's `a_items` / `b_items`; then the id that sorts first).
     /// A pair is taken as the two events its ids are in by then, so
     /// A~B and B~C end in one event, the earliest. Skipped and counted:
@@ -480,6 +506,7 @@ impl EventEditor {
             lines: file.lines,
             error_lines: file.error_lines,
             no_verdict_lines: file.no_verdict_lines,
+            malformed_lines: file.malformed_lines,
             same_confident: file
                 .proposals
                 .iter()
@@ -575,6 +602,7 @@ impl EventEditor {
             at: self.now(),
             file: file.path.display().to_string(),
             lines: file.lines,
+            malformed_lines: file.malformed_lines,
             waiting: Vec::new(),
             decided: 0,
             already_one_event: 0,
@@ -594,11 +622,14 @@ impl EventEditor {
     /// Decide a waiting pair (in either order). `Approve` merges it as his
     /// merge, with the proposal's reason, in the direction
     /// `apply-proposals` would take; `Dismiss` merges nothing. Either way
-    /// one line goes to `merge-decisions.jsonl`, after the merge.
+    /// one line goes to `merge-decisions.jsonl`, after the merge; that
+    /// the file can take the line (see `log.rs`) is checked before the
+    /// merge.
     ///
     /// Refused, with nothing changed: the pair is not waiting (no such
     /// proposal, already decided, already in one event, a record
-    /// missing); an approval whose merge is refused.
+    /// missing); `merge-decisions.jsonl` cannot take the line; an
+    /// approval whose merge is refused.
     pub fn decide(&self, file: &Path, a: &str, b: &str, decision: Decision) -> Result<Decided> {
         let file = self.read_proposals(file)?;
         let mut decisions = Decisions::read(&self.dir)?;
@@ -631,6 +662,7 @@ impl EventEditor {
             b: p.b.clone(),
             decision,
         };
+        decisions.ready(&line)?;
         let merge = match decision {
             Decision::Approve => Some(self.merge(&MergeRequest {
                 a: w.from.clone(),

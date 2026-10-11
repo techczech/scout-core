@@ -6,7 +6,7 @@
 //!   there reads as it did before the `removed` field (the writer still
 //!   writes each file's bytes from what the reader reads), and a merge and
 //!   its undo on a COPY of its records folder, with an index build
-//!   between. The archive itself is only read. The copy goes to
+//!   between (the merge writes one record; the listing derives the rest). The archive itself is only read. The copy goes to
 //!   `SCOUT_EDIT_SCRATCH` when set, else to a temporary folder.
 
 mod event_edit_support;
@@ -341,7 +341,10 @@ fn on_a_copy_of_the_real_records_a_merge_and_its_undo() {
             reason: Some("one story".into()),
         })
         .unwrap();
-    assert_eq!(m.members_added, maths.members);
+    // Only the record merged away was written.
+    let fields_file = dir.join(format!("{FIELDS}.md"));
+    assert_eq!(m.a_record.merged_into.as_deref(), Some(FIELDS));
+    assert_eq!(fs::read(&fields_file).unwrap(), copy[&fields_file]);
     c.build_index(false).unwrap();
     // The old monthly id, the merged-away id and the surviving id all
     // select the one event, with the items of both.
@@ -365,8 +368,25 @@ fn on_a_copy_of_the_real_records_a_merge_and_its_undo() {
     assert!(listed(&eng, false).iter().all(|(id, _)| id != MATHS));
     let now = read_all(&dir);
     assert_eq!(now.resolve(&old_id), Some(FIELDS));
-    assert_eq!(now.records[FIELDS].end, maths.end);
-    assert_eq!(now.records[FIELDS].start, fields.start);
+    assert_eq!(now.records[FIELDS], fields);
+    // The listing derives the event's span and aliases from both records.
+    let q = EventsQuery {
+        min_items: 0,
+        ..Default::default()
+    };
+    let shown = eng.events(&q).unwrap().body.events;
+    let shown = shown.iter().find(|x| x.id == FIELDS).unwrap();
+    let all = events::combined(&fields, &[&maths]);
+    assert_eq!((&shown.start, &shown.end), (&all.start, &all.end));
+    assert_eq!(shown.aliases, all.aliases);
+    assert!(shown.aliases.contains(&maths.name));
+    assert_eq!(shown.merged_from.len(), 1);
+    assert_eq!(shown.merged_from[0].id, MATHS);
+    assert_eq!(shown.members, fields.members);
+    eprintln!(
+        "{FIELDS}: own {:?} to {:?}, shown {:?} to {:?}",
+        fields.start, fields.end, shown.start, shown.end
+    );
     assert!(e.check().unwrap().ok);
     eprintln!("copy of the real records: {old_id} -> {FIELDS}, {in_maths} + {in_fields} items");
 

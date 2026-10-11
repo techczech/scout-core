@@ -167,15 +167,16 @@ fn confident_pairs_are_merged_later_into_earlier_and_chains_end_in_the_earliest(
     }
     assert_eq!(set.resolve(TWIN_A), Some(TWIN_B));
     assert_eq!(set.resolve(GAMMA), Some(GAMMA));
-    let alpha = fx.record(ALPHA);
+    // The surviving record's file is never written; the event's span is
+    // derived from the records merged into it.
+    assert_eq!(fx.bytes(ALPHA), before[&fx.dir.join(format!("{ALPHA}.md"))]);
+    let alpha = events::combined(&set.records[ALPHA], &events::merged_in(&set.records)[ALPHA]);
     assert_eq!(
-        alpha.members,
-        strs(&["2026-09/E01", "2026-10/E04", "2026-12/E09"])
+        (alpha.start.as_deref(), alpha.end.as_deref()),
+        (Some("2026-09-05"), Some("2026-12-05"))
     );
-    assert_eq!(
-        (alpha.start.as_deref(), alpha.end.as_deref(), &alpha.edited),
-        (Some("2026-09-05"), Some("2026-12-05"), &None)
-    );
+    let from: Vec<&str> = alpha.merged_from.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(from, [BETA, LATE]);
     assert!(e.check().unwrap().ok);
     // Only records and the log changed; the proposals file never does.
     assert_eq!(fs::read(&file).unwrap(), before[&file]);
@@ -231,10 +232,21 @@ fn a_chain_ends_in_the_earliest_event_whatever_the_order_of_its_lines() {
         ] {
             assert_eq!(set.resolve(id), Some(DELTA), "{order:?} {id}");
         }
-        let d = fx.record(DELTA);
+        // Delta's own record is as it was; the span is derived.
         assert_eq!(
-            (d.start.as_deref(), d.end.as_deref()),
-            (Some("2026-08-01"), Some("2026-12-05"))
+            fx.bytes(DELTA),
+            render_record(&rec(
+                DELTA,
+                "Delta",
+                ("2026-08-01", "2026-08-02"),
+                &["2026-08/E07"]
+            ))
+            .into_bytes()
+        );
+        let d = events::combined(&set.records[DELTA], &events::merged_in(&set.records)[DELTA]);
+        assert_eq!(
+            (d.start.as_deref(), d.end.as_deref(), d.merged_from.len()),
+            (Some("2026-08-01"), Some("2026-12-05"), 3)
         );
         assert!(fx.editor().check().unwrap().ok);
     }
