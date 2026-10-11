@@ -7,6 +7,7 @@
 //   re-tag a range with the current prompt:  cli.js retag --from-month 2022-01 --to-month 2026-10 --run-prefix 2026-10-11-v3 --max-usd 25
 //   refresh named months (briefing, tags, QA redone; old run folder and briefing files kept as .superseded-<stamp>): cli.js refresh --months 2026-06,2026-07,2026-08 --run-prefix 2026-10-11-v3 --max-usd 5
 //   tag only items with no tag row yet, against each month's existing briefing and events (no context file or event id changes; no QA): cli.js tag-new --run-prefix 2026-10-11-v3 [--months 2026-09,2026-10] [--max-usd 2] [--dry-run]
+//   propose which lasting events are one story (writes analysis/events/merge-proposals/<run-id>.jsonl + ledger only): cli.js events-propose-merges --run-id 2026-10-11-merge-1 [--max-usd 8] [--dry-run] [--min-items 2]
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
@@ -20,9 +21,10 @@ import { extendRun } from './lib/extend-run.js';
 import { retagRun } from './lib/retag-run.js';
 import { refreshRun } from './lib/refresh-run.js';
 import { tagNewRun } from './lib/tag-new-run.js';
+import { proposeMerges } from './lib/events-merge-run.js';
 
-const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend', 'retag', 'refresh', 'tag-new'];
-const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend', 'retag', 'refresh', 'tag-new']);
+const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend', 'retag', 'refresh', 'tag-new', 'events-propose-merges'];
+const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend', 'retag', 'refresh', 'tag-new', 'events-propose-merges']);
 const log = (m) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
 const home = (p) => join(homedir(), p);
 
@@ -72,6 +74,7 @@ const { values: v, positionals } = parseArgs({
     resume: { type: 'boolean', default: false },
     'consolidate-only': { type: 'boolean', default: false },
     'dry-run': { type: 'boolean', default: false },
+    'min-items': { type: 'string', default: '2' },
   },
 });
 
@@ -86,6 +89,17 @@ try {
 
 async function runV2(stage) {
   if (!STAGES.includes(stage)) { console.error(`unknown stage ${stage}; one of ${STAGES.join(', ')}`); process.exit(2); }
+  if (stage === 'events-propose-merges') {
+    if (!v['run-id']) { console.error('events-propose-merges needs --run-id'); process.exit(2); }
+    const r = await proposeMerges({
+      archiveRoot: v.archive, runId: v['run-id'], model: v['briefing-model'], effort: v.effort || 'medium', minItems: Number(v['min-items']),
+      maxUsd: Number(v['max-usd'] || 8), concurrency: Number(v.concurrency || 3), dryRun: v['dry-run'],
+      client: v['dry-run'] ? null : new Anthropic({ maxRetries: 4 }), log,
+    });
+    if (r.examples) r.examples = r.examples.slice(0, 15).map((p) => ({ a: p.a.name, a_span: [p.a.start, p.a.end], a_items: p.a.items, b: p.b.name, b_span: [p.b.start, p.b.end], b_items: p.b.items, signals: p.signals, shared_entities: p.shared_entities, shared_tokens: p.shared_tokens }));
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
   if (stage === 'tag-new' ? !v['run-prefix'] : stage === 'refresh' ? !(v.months && v['run-prefix']) : stage === 'retag' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : stage === 'extend' ? !(v['from-month'] && v['to-month'] && v['run-prefix'] && v['ledger-name']) : stage === 'full' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : !v.month) { console.error('v2 stages need --month YYYY-MM (full: --from-month --to-month --run-prefix; refresh: --months a,b --run-prefix; tag-new: --run-prefix)'); process.exit(2); }
   const env = {
     archiveRoot: v.archive, month: v.month,
