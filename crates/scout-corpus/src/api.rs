@@ -15,6 +15,7 @@
 use crate::clean::{self, CleanOptions, CleanReport};
 use crate::colloc::{self, CollocRequest, CollocResults, CompareResults};
 use crate::concord::{self, Distribution, KwicRequest, KwicResults, Near, Profile, ProfileOptions};
+pub use crate::event_list::{EventListing, EventsQuery, EventsResults, MonthCount};
 use crate::filter::{DocFilter, SliceSpec};
 use crate::index::{self, BuildReport, IndexStatus, NoIndexedCorpus};
 use crate::keyness::{self, KeynessRequest, KeynessResults};
@@ -329,6 +330,10 @@ pub struct FacetsQuery {
     pub in_: Vec<String>,
     /// Values kept per facet for themes, entities and events (0 = all).
     pub top: usize,
+    /// Leave out of the event facet every event with fewer items than this
+    /// in the whole of the searched corpora (not in the result set); 1
+    /// keeps every event.
+    pub min_event_items: usize,
 }
 
 impl Default for FacetsQuery {
@@ -337,6 +342,7 @@ impl Default for FacetsQuery {
             query: String::new(),
             in_: vec![],
             top: 20,
+            min_event_items: 1,
         }
     }
 }
@@ -379,6 +385,9 @@ pub struct FacetsResults {
     /// Of those, documents with topic tags.
     pub tagged_documents: usize,
     pub top: usize,
+    /// The query's `min_event_items`, when it left events out (above 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_event_items: Option<usize>,
     pub facets: Facets,
 }
 
@@ -706,7 +715,7 @@ impl Engine {
 
     /// The corpora a query runs over: the named ones, or else every indexed
     /// corpus, noting those left out.
-    fn scope(&self, ids: &[String], notes: &mut Vec<String>) -> Result<Vec<Corpus>> {
+    pub(crate) fn scope(&self, ids: &[String], notes: &mut Vec<String>) -> Result<Vec<Corpus>> {
         if !ids.is_empty() {
             return self.select(ids);
         }
@@ -878,6 +887,7 @@ impl Engine {
         };
         let corpora = self.scope(&ids, &mut notes)?;
         let mut counter = FacetCounter::default();
+        counter.event_floor(q.min_event_items);
         let mut used = Vec::new();
         let mut plan = search::Plan::parse(&q.query)?;
         for c in &corpora {
@@ -889,6 +899,15 @@ impl Engine {
             plan = p;
             for d in &docs {
                 counter.add(d);
+            }
+            counter.add_event_records(&crate::events::load(&conn)?);
+            if q.min_event_items > 1 {
+                // An event's size is counted as `scout events` counts it.
+                for d in crate::filter::load_docs(&conn)?.values() {
+                    if d.tokens > 0 {
+                        counter.add_event_size(d);
+                    }
+                }
             }
             used.push(c.id().to_string());
         }
@@ -909,6 +928,7 @@ impl Engine {
                 total_documents: counter.documents,
                 tagged_documents: counter.tagged,
                 top: q.top,
+                min_event_items: (q.min_event_items > 1).then_some(q.min_event_items),
                 facets: counter.facets(q.top),
             },
             notes,
@@ -935,6 +955,7 @@ impl Engine {
                     counter.add(d);
                 }
             }
+            counter.add_event_records(&crate::events::load(&conn)?);
         }
         let facet = counter.facet(field, q.top);
         Ok(Reply {

@@ -93,6 +93,10 @@ enum Cmd {
         /// Values per facet for themes, entities and events (0 = all).
         #[arg(long, default_value_t = FacetsQuery::default().top)]
         top: usize,
+        /// Leave out events with fewer items than this in the whole of the
+        /// searched corpora (2 hides one-item events).
+        #[arg(long, default_value_t = FacetsQuery::default().min_event_items)]
+        min_event_items: usize,
         #[arg(long)]
         json: bool,
     },
@@ -108,6 +112,28 @@ enum Cmd {
         in_: Vec<String>,
         /// Values kept (0 = all).
         #[arg(long, default_value_t = TopicsQuery::default().top)]
+        top: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List events with their record fields, item counts and counts per
+    /// month (lasting events where the corpus has records).
+    Events {
+        /// Only events with an item in this layer month (YYYY-MM or YYYY).
+        #[arg(long)]
+        month: Option<String>,
+        /// Comma-separated corpus ids (default: every indexable corpus).
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        /// Leave out events with fewer items (2 hides one-item events; 0
+        /// also lists records without items).
+        #[arg(long, default_value_t = EventsQuery::default().min_items)]
+        min_items: usize,
+        /// Also list records merged into another.
+        #[arg(long)]
+        merged: bool,
+        /// Events kept (0 = all).
+        #[arg(long, default_value_t = EventsQuery::default().top)]
         top: usize,
         #[arg(long)]
         json: bool,
@@ -562,12 +588,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             query,
             in_,
             top,
+            min_event_items,
             json,
         } => {
             let q = FacetsQuery {
                 query: query.join(" "),
                 in_,
                 top,
+                min_event_items,
             };
             out(engine.facets(&q), json, topic_views::print_facets)
         }
@@ -585,6 +613,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 top,
             };
             out(engine.topics(&q), json, topic_views::print_topics)
+        }
+        Cmd::Events {
+            month,
+            in_,
+            min_items,
+            merged,
+            top,
+            json,
+        } => {
+            let q = EventsQuery {
+                month,
+                in_,
+                min_items,
+                merged,
+                top,
+            };
+            out(engine.events(&q), json, topic_views::print_events)
         }
         Cmd::Kwic {
             term,

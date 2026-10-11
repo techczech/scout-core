@@ -458,6 +458,19 @@ pub fn load_docs(conn: &Connection) -> Result<BTreeMap<String, DocInfo>> {
 /// The documents of an index that pass `f`.
 pub fn filtered_docs(conn: &Connection, f: &DocFilter) -> Result<BTreeMap<String, DocInfo>> {
     let mut all = load_docs(conn)?;
+    // `event:` takes a lasting id, a merged-away id or a monthly id; each
+    // names the lasting event this index resolves it to.
+    let resolved;
+    let f = match &f.event {
+        Some(e) => {
+            resolved = DocFilter {
+                event: Some(crate::events::resolve_in(conn, e)?),
+                ..f.clone()
+            };
+            &resolved
+        }
+        None => f,
+    };
     all.retain(|_, d| f.matches(d));
     Ok(all)
 }

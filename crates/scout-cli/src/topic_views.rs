@@ -1,7 +1,7 @@
 //! Human output for the topic-layer commands (`facets`, `topics`) and the
 //! topic line of `index build`. Formatting only.
 
-use scout_corpus::api::{FacetItem, FacetsResults, TopicsResults};
+use scout_corpus::api::{EventsResults, FacetItem, FacetsResults, TopicsResults};
 use scout_corpus::topics::{Facet, TopicReport};
 
 fn rows(items: &[FacetItem]) {
@@ -67,6 +67,43 @@ pub fn print_topics(r: &TopicsResults) {
     rows(&r.items);
 }
 
+pub fn print_events(r: &EventsResults) {
+    let month = r
+        .month
+        .as_deref()
+        .map(|m| format!(" with items in {m}"))
+        .unwrap_or_default();
+    println!("{} events{month} ({})", r.distinct, r.corpora.join(", "));
+    let w = r
+        .events
+        .iter()
+        .map(|e| e.items.to_string().len())
+        .max()
+        .unwrap_or(1);
+    for e in &r.events {
+        let span = match (&e.start, &e.end) {
+            (Some(a), Some(b)) if a != b => format!("  {a} to {b}"),
+            (Some(a), _) => format!("  {a}"),
+            _ => String::new(),
+        };
+        let merged = e
+            .merged_into
+            .as_deref()
+            .map(|m| format!("  (merged into {m})"))
+            .unwrap_or_default();
+        let in_month = e
+            .month_items
+            .map(|n| format!("  [{n} in month]"))
+            .unwrap_or_default();
+        println!(
+            "  {:>w$}  {}  {}{span}{in_month}{merged}",
+            e.items,
+            e.id,
+            e.name.as_deref().unwrap_or("")
+        );
+    }
+}
+
 /// The `index build` line for a corpus with a topic layer.
 pub fn print_topic_report(t: &TopicReport) {
     let mut extra = Vec::new();
@@ -97,6 +134,22 @@ pub fn print_topic_report(t: &TopicReport) {
         t.unmatched,
         t.tagged_documents
     );
+    if let Some(e) = &t.events {
+        println!(
+            "{:<10} events: {} records ({} merged), {} monthly events held, {} files skipped",
+            "", e.records, e.merged, e.members, e.skipped
+        );
+        for w in &e.warnings {
+            println!("{:<10} warning: {w}", "");
+        }
+        if e.warnings_total > e.warnings.len() {
+            println!(
+                "{:<10} … and {} more warnings",
+                "",
+                e.warnings_total - e.warnings.len()
+            );
+        }
+    }
     if !t.unmatched_sample.is_empty() {
         println!(
             "{:<10} unmatched e.g. {}",

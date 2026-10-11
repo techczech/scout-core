@@ -6,10 +6,12 @@
 //   extend the layer to older months: cli.js extend --from-month 2022-01 --to-month 2024-12 --run-prefix 2026-10-11-final --ledger-name 2026-10-11-extend-2022-2024 --max-usd 40
 //   re-tag a range with the current prompt:  cli.js retag --from-month 2022-01 --to-month 2026-10 --run-prefix 2026-10-11-v3 --max-usd 25
 //   refresh named months (briefing, tags, QA redone; old run folder and briefing files kept as .superseded-<stamp>): cli.js refresh --months 2026-06,2026-07,2026-08 --run-prefix 2026-10-11-v3 --max-usd 5
+//   seed lasting events from the monthly ones (no model call; writes nothing without --apply): cli.js events-seed --archive <path> [--out <dir>] [--apply]
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { consolidateRun, executeRun } from './lib/run.js';
 import { DEFAULT_MAX_ITEMS, DEFAULT_MAX_TOKENS } from './lib/batching.js';
@@ -18,6 +20,7 @@ import { fullRun } from './lib/full-run.js';
 import { extendRun } from './lib/extend-run.js';
 import { retagRun } from './lib/retag-run.js';
 import { refreshRun } from './lib/refresh-run.js';
+import { seedEvents } from './lib/events-seed.js';
 
 const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend', 'retag', 'refresh'];
 const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend', 'retag', 'refresh']);
@@ -28,6 +31,9 @@ const { values: v, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     archive: { type: 'string', default: home('gitrepos/01_reading-research/highlights-archive') },
+    // events-seed
+    out: { type: 'string' },
+    apply: { type: 'boolean', default: false },
     // v2
     month: { type: 'string' },
     months: { type: 'string' },
@@ -75,11 +81,21 @@ const { values: v, positionals } = parseArgs({
 
 const stage = positionals[0];
 try {
-  if (stage) await runV2(stage);
+  if (stage === 'events-seed') runEventsSeed();
+  else if (stage) await runV2(stage);
   else await runV1();
 } catch (e) {
   console.error(`error: ${e.message}`);
   process.exit(1);
+}
+
+function runEventsSeed() {
+  const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+  const r = seedEvents({ archiveRoot: v.archive, outDir: v.out, apply: v.apply, version });
+  const { notes, ...counts } = r;
+  const sizes = Object.fromEntries(Object.entries(notes).map(([k, list]) => [k, list.length]));
+  console.log(JSON.stringify({ ...counts, notes: sizes, collisions: notes.collisions, fallback_slugs: notes.fallback_slugs, no_briefing_entry: notes.no_briefing_entry }, null, 2));
+  if (!r.apply) log(`dry run: nothing written; ${r.to_create} records would be created in ${r.out} (add --apply)`);
 }
 
 async function runV2(stage) {

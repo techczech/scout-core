@@ -11,7 +11,7 @@ Values in the examples are illustrative. Every `--json` document is one pretty-p
 
 ## Library facade (apps)
 
-Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `SimilarQuery`, `IndexBuildQuery`, `CleanReportQuery`, `FacetsQuery`, `TopicsQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
+Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `SimilarQuery`, `IndexBuildQuery`, `CleanReportQuery`, `FacetsQuery`, `TopicsQuery`, `EventsQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
 
 - `api::to_json(&reply.body)` is byte-for-byte the command's `--json` stdout (minus the final newline); `notes` are the stderr lines; `Outcome::has_results(&body)` is exit 0 vs 1. Errors are the same typed errors the CLI maps to exit 2/3 (`IndexMissing`, `RegistryMissing`, `NoIndexedCorpus`) or 1 (`PassageNotFound`). `crates/scout-cli/tests/facade_parity.rs` holds this for every command.
 - Requests are serde structs with every field defaulted to the CLI default, so partial JSON works: `{"term": "metaphor", "scope": {"in": ["writing"], "after": "2020"}}`. Rust `in_` fields serialise as `"in"`. `Scope` = `in`, `lang`, `genre`, `after`, `before`, `year`, `source`. Enumerated options stay strings as on the command line (`sort: "R1"`, `score: "mi"`, `by: "year"`, `n: "3-5"`, `dist: "doc"`).
@@ -49,7 +49,7 @@ Only the set keys appear; `{}` means unfiltered.
 | `title` | string | substring of the title |
 | `theme` | string | topic layer: the document carries this theme (exact name) |
 | `entity` | string | topic layer: the document carries this entity (exact normalised name) |
-| `event` | string | topic layer: the document's event id (`2026-09/E21`) |
+| `event` | string | topic layer: an event the document is in, by lasting id, merged-away id or monthly id (`2026-09/E21`); kept as typed (see "Lasting events") |
 | `ai` | bool | topic layer: the document's `ai_related` |
 | `month` | string | topic layer month: `YYYY-MM`, or `YYYY` for any month of that year |
 
@@ -129,7 +129,7 @@ The query is read by the grammar above ("Query grammar"); this is what its const
 | `co:yellow` | the highlight's colour |
 | `theme:"AI and mathematics"` | topic layer: documents carrying the theme (exact name; quote names with spaces) |
 | `entity:"GPT-6 Astra"` | topic layer: documents carrying the entity (exact normalised name; `entity:Astra` does not match it) |
-| `event:2026-09/E21` | topic layer: documents linked to the event (ids are per month, so the month part is required) |
+| `event:2026-09-fields-declaration`, `event:2026-09/E21` | topic layer: documents in the event. A lasting id selects that event; a monthly id (month part required) or a merged-away id selects the lasting event that holds it, so ALL that event's documents match, in every month (see "Lasting events"; a corpus without event records matches the monthly id alone, as before). Ids only: names and aliases are not matched |
 | `ai:true`, `ai:false` | topic layer: `ai_related` (`yes`/`no`/`1`/`0` too; anything else is a usage error) |
 | `month:2026-09`, `month:2026` | topic layer month (see "Topic layer" below); `y:`/`after:`/`before:` stay on the document's own date |
 
@@ -176,13 +176,14 @@ A result whose document carries topic tags has a `topics` object (the same objec
 ```json
 "topics": {
   "key": "x:1965432109876543210", "themes": ["AI and mathematics"], "entities": ["GPT-6 Astra", "Terence Tao"],
-  "event": "2026-09/E21", "event_name": "Fields Medallists' declaration", "ai_related": true, "month": "2026-09",
+  "event": "2026-09/E21", "event_name": "Fields Medallists' declaration", "events": ["2026-09-fields-declaration"],
+  "ai_related": true, "month": "2026-09",
   "confidence": "medium", "run_id": "2026-10-11-final-2026-09", "prompt_version": "topics-v2",
   "corrected": ["themes"]
 }
 ```
 
-`corrected` (only when non-empty) names the fields a correction overrode, in the order `themes`, `entities`, `event`, `event_name`, `ai_related`.
+`corrected` (only when non-empty) names the fields a correction overrode, in the order `themes`, `entities`, `event`, `event_name`, `ai_related`, `events` (`events` = the line carried `event_add` or `event_remove`). `events` is every event the document is in (see "Lasting events"); it is absent for a document of a corpus without event records whose tag row has no `events` list and no add/remove correction, and then the document's one event is `event`. `event` and `event_name` stay the tag row's own monthly event; both are null when a correction took the document out of that event.
 
 Order: `results` by `rank` desc, then `score` desc, corpus, path; `hits` by score desc, then line. `score` is BM25 (plus the title's score when the title matches); `rank` = `score` / the best `score` in the same corpus, so each corpus's best document has rank 1 and `--in a,b,c` interleaves the corpora instead of letting one corpus's BM25 scale win. With one corpus, rank order = score order.
 
@@ -215,16 +216,27 @@ Vectors live in `<corpus>.vectors.sqlite` beside the index. `index build --seman
 A corpus folder may hold a topic layer: `analysis/topics/current.jsonl` (one model-tagged item per line, keyed `<source_system>:<source_id>`; format in `docs/specs/2026-10-10-topic-tagging-layer.md`) and the optional, append-only `analysis/topics/corrections.jsonl`. Both are read, never written.
 
 - **Build.** `scout index build` copies the layer into the derived index, joined to documents by key (the work's frontmatter `source_system` + `source_id`), else by the layer's `path` = the document key. It re-joins when either file's bytes or the corpus's documents change; a new layer never forces a full rebuild. No layer file = nothing happens (no `topics` in the report).
-- **Corrections.** One JSON object per line with `key` and any of `themes` (string list), `entities` (string list), `event` (string or null), `event_name`, `ai_related` (bool or null). Each field present replaces the layer's value for that key; later lines win; other keys (`by`, `date`, `note`) are provenance and are not read. A correction for a key the layer lacks is counted (`corrections_unmatched`), not applied; a line with a wrongly typed field is skipped whole (`corrections_bad_lines`). An event changed without an `event_name` takes the name the layer gives that event id.
+- **Corrections.** One JSON object per line with `key` and any of `themes` (string list), `entities` (string list), `event` (string or null), `event_name`, `ai_related` (bool or null). Each field present replaces the layer's value for that key; later lines win; other keys (`by`, `date`, `note`) are provenance and are not read. A correction for a key the layer lacks is counted (`corrections_unmatched`), not applied; a line with a wrongly typed field is skipped whole (`corrections_bad_lines`). An event changed without an `event_name` takes the name the layer gives that event id. Two further fields put an item in more events or take it out of one: `event_add` and `event_remove`, each a list of event ids (lasting, merged-away or monthly; a single string is a wrongly typed field). Exact shape: `{"key": "x:1965432109876543210", "event_add": ["2026-09-gemini-launch"], "event_remove": ["2026-09/E21"], "by": "Dominik", "date": "2026-10-11"}`. They apply in line order to the item's events (see "Lasting events"), the later line winning; within one line removals follow additions. A removal also takes the item out of an event the model gave it.
 - **Month.** The item's `date` (its latest highlight) cut to `YYYY-MM`, else the layer's own `month` when that is `YYYY-MM`. `month:` filters on it and the `month` facet counts it.
 - **Unparseable layer lines** (the file may be mid-write) are skipped and counted (`bad_lines`); a key repeated in the layer keeps its last line.
 - **Matching** for themes, entities and event ids is equality under the fold of "Query grammar" (`entity:O'Reilly` matches `O’Reilly`). So every facet value, written with `field_query`, gives back exactly its `count` as `total_documents` (tested over 400 generated labels with every whitespace code point, curly and straight quotes, apostrophes, backslashes, slashes and colons).
 - **Reading limits.** Both files are streamed line by line; a line over 1 MiB (`topics::MAX_LINE_BYTES`) or not valid UTF-8 is skipped and counted (`bad_lines`, `corrections_bad_lines`), never applied.
 - **Keys.** A highlights work's key comes from its frontmatter `source_system` + `source_id`; a markdown-folder document's from the same frontmatter keys when it has them (which also sets its `source:`); a tweet's is `x:<tweet id>`.
 
-## `scout facets <query> [--in …] [--top 20] [--json]` — schema_version 1
+## Lasting events
 
-Topic-layer counts over the documents `scout search` matches for the same query: the full-text and filter match, all of it (no `--limit`; semantic-only documents of hybrid search are not included). Facade: `Engine::facets(&FacetsQuery { query, in, top })`. Exit 1 when no document matches; 2 for an empty query or a bad field value.
+A corpus folder may hold event records beside the topic layer: `analysis/events/<id>.md`, one Markdown file per event (spec: `archive-scout/docs/specs/2026-10-11-lasting-events-spec.md`). They are read, never written. Without that folder nothing below applies and events are the tag rows' monthly ids, as before.
+
+- **Record.** YAML frontmatter between `---` lines, then the description. Fields: `id` (must equal the file name without `.md`), `name` (absent: the id), `aliases` (list), `start`, `end`, `members` (list of the monthly event ids folded into the event, `2026-09/E21`), `themes` (list), `origin`, `edited`, `merged_into` (the id of the record this one was merged into). An empty value, `~` or `null` is no value. Other keys are ignored. Only files named `*.md` that do not start with `.` are records (`seed-log.jsonl` and the like are left alone).
+- **Resolution.** A monthly id resolves to the record that lists it in `members`; a record with `merged_into` resolves to that record, followed to the end of the chain, and so do its members. A monthly id no record lists stays an event of its own under its monthly id.
+- **An item's events.** The tag row's `event`, plus the ids in the tag row's optional `events` list (strings; monthly or lasting ids), plus `event_add` and minus `event_remove` from `corrections.jsonl`, each id resolved. An item counts once in each of its events. A search result shows them as `topics.events`.
+- **Behaviour change (engine `scout-corpus/10`).** In a corpus with event records, `event:2026-09/E21` no longer selects only the documents tagged with that monthly event: it selects every document of the lasting event that holds `2026-09/E21`, across all its months. Add `month:2026-09` to narrow to one month. Facet values and `scout topics events` values are lasting ids where a record holds the event. `plan` and `filters` keep the id as typed.
+- **Bad records.** A file is skipped, with a warning naming it, when it is not a plain file (a symlink or folder), is over 1 MiB (`events::MAX_RECORD_BYTES`), is not UTF-8, has no frontmatter, has frontmatter that is not a YAML mapping of plain keys (aliases `*x` and repeated keys are refused), has no `id`, has an `id` that is not the file name, repeats an id already read (ids compare under the fold), or has a wrongly typed field (`members` not a list, `name` a list). The other records are read. A `merged_into` that names no record or closes a cycle is warned about and that record is treated as not merged. A member already held by another event stays with the first record in id order, with a warning.
+- **Build.** The records are copied into the derived index with the layer and re-read when any record file's name or bytes change. `index build` reports them (see `index build`).
+
+## `scout facets <query> [--in …] [--top 20] [--min-event-items 1] [--json]` — schema_version 1
+
+Topic-layer counts over the documents `scout search` matches for the same query: the full-text and filter match, all of it (no `--limit`; semantic-only documents of hybrid search are not included). Facade: `Engine::facets(&FacetsQuery { query, in, top, min_event_items })`. Exit 1 when no document matches; 2 for an empty query or a bad field value.
 
 ```json
 {
@@ -246,7 +258,8 @@ Topic-layer counts over the documents `scout search` matches for the same query:
 ```
 
 - Each document counts once per value. `tagged_documents` = documents with topic tags; the rest count only in `total_documents`.
-- `theme`, `entity`, `event`: count desc, then value; at most `--top` items (0 = all); `distinct` = values before the cut. `month`: every month, chronological. An event item's `name` is its most frequent `event_name`.
+- `theme`, `entity`, `event`: count desc, then value; at most `--top` items (0 = all); `distinct` = values before the cut. `month`: every month, chronological. An event item's `value` is the lasting id where a record holds the event, else the monthly id; its `name` is the record's `name`, else the most frequent `event_name` of the counted documents tagged with that monthly id. A document counts once in each of its events.
+- `--min-event-items N` (default 1) leaves out of the `event` facet every event with fewer than N items. An event's size is its tagged documents with an indexed passage over the whole of the searched corpora (the `items` of `scout events`), not its count in this result: `--min-event-items 2` hides one-item events, and an event of five items is kept even when one of them matches. `distinct` counts the events kept. Above 1 the reply carries `"min_event_items": N` after `top`; at 1 the key is absent.
 - A value's displayed spelling is its most frequent one among the counted documents (ties: alphabetically first).
 
 ## `scout topics themes|entities|events|months [--month YYYY-MM] [--in …] [--top 0] [--json]` — schema_version 1
@@ -265,7 +278,45 @@ Every value of one field with its document count, over the tagged documents that
 }
 ```
 
-`field` is `theme`, `entity`, `event` or `month`; `items` are ordered as in `facets` (months chronological); `--top` 0 keeps all.
+`field` is `theme`, `entity`, `event` or `month`; `items` are ordered as in `facets` (months chronological); `--top` 0 keeps all. Event values and names are as in `facets` (lasting ids where a record holds the event).
+
+## `scout events [--month YYYY-MM] [--in …] [--min-items 1] [--merged] [--top 0] [--json]` — schema_version 1
+
+Every event of the searched corpora with its record fields and counts. Facade: `Engine::events(&EventsQuery { month, in, min_items, merged, top })`. Exit 1 when no event is listed; 2 for a bad month.
+
+```json
+{
+  "schema_version": 1,
+  "month": null,
+  "corpora": ["highlights"],
+  "min_items": 1,
+  "merged": false,
+  "distinct": 1694,
+  "events": [{
+    "corpus": "highlights",
+    "id": "2026-09-fields-declaration",
+    "name": "Fields Medallists' declaration",
+    "record": true,
+    "start": "2026-09-01",
+    "end": null,
+    "items": 44,
+    "months": [{"month": "2026-09", "count": 41}, {"month": "2026-10", "count": 3}],
+    "members": ["2026-09/E21", "2026-10/E04"],
+    "aliases": ["Fields declaration"],
+    "themes": ["AI and mathematics"],
+    "origin": "model",
+    "edited": null,
+    "merged_into": null,
+    "description": "…"
+  }]
+}
+```
+
+- `items` = tagged documents with an indexed passage that are in the event (all months), each document once per event; `months` = those items by layer month, chronological (an item without a month is in `items` only). `event:<id>` gives `items` as `total_documents`, and `event:<id> month:<m>` a month's count.
+- `record` is true when `analysis/events/<id>.md` holds the event; `start` … `description` come from it (`description` = the file body). A monthly event no record holds is listed with its monthly id, `record: false`, the layer's name, null dates and empty lists.
+- `--month` keeps the events with at least one item in that month (`YYYY-MM`, or `YYYY` for any month of the year) and adds `month_items` (that month's count) to each; `items` and `months` stay whole.
+- `--min-items N` leaves out events with fewer items (`2` hides one-item events; `0` also lists records without items). `--merged` also lists records merged into another (`merged_into` set; their items belong to the event they resolve to, so `items` is 0); without it they are not listed. `merged_into` is the value in effect: null for a record whose file names a missing record or closes a cycle.
+- Order: `items` desc, then `id`, then `corpus`. `distinct` = events before `--top`. Events are per corpus; two corpora never share one.
 
 ## `scout cite <passage-id> [--format markdown|plain] [--json]` — schema_version 1
 
@@ -624,6 +675,14 @@ A corpus whose folder has a topic layer adds a `topics` object (see "Topic layer
 ```
 
 `items` = distinct keys in the layer; `matched` = items joined to a document (`matched_by_key` + `matched_by_path`); `unmatched_sample` = up to 5 unmatched keys, sorted; `reloaded` is false when neither the layer files nor the documents changed and the stored copy was kept. The human output adds a line `topics: N items, M matched (K by key, P by path), U unmatched → T tagged documents`.
+
+A corpus with a records folder (`analysis/events/`, see "Lasting events") adds `events` inside `topics`:
+
+```json
+"events": {"dir": "/abs/…/analysis/events", "records": 1694, "merged": 0, "members": 1694, "skipped": 1, "warnings_total": 1, "warnings": ["analysis/events/draft.md: no id; skipped"]}
+```
+
+`records` = records read; `merged` = those with a `merged_into` in effect; `members` = monthly ids that resolve to a record; `skipped` = files left out as malformed; `warnings` = the first 50 (`events::MAX_WARNINGS`) of `warnings_total` lines, one per skipped file, unusable `merged_into` or contested member, skipped files first in file-name order. The human output adds `events: R records (M merged), N monthly events held, S files skipped` and one `warning:` line each.
 
 ## `scout index status --json` — schema_version 1
 

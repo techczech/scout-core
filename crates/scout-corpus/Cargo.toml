@@ -23,6 +23,7 @@ globset.workspace = true
 walkdir.workspace = true
 percent-encoding.workspace = true
 chrono.workspace = true
+yaml-rust2.workspace = true
 fastembed = { version = "7.1.0", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"], optional = true }
 
 [target.'cfg(unix)'.dependencies]

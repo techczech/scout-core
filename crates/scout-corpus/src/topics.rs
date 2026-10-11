@@ -15,7 +15,17 @@
 //!   layer's value for that key (null clears `event`). Later lines win.
 //!   Other keys on the line (`by`, `date`, `note`) are provenance and are
 //!   not read. A correction for a key absent from the layer is counted, not
-//!   applied.
+//!   applied. `event_add` / `event_remove` (lists of event ids) put the
+//!   item in further events or take it out of one; see "Events" below.
+//! - Events: an item can be in several. Its events are the tag row's
+//!   `event`, the ids of its optional `events` list, plus `event_add` and
+//!   minus `event_remove` from the corrections, in line order (the later
+//!   line wins; within a line removals follow additions). Every id is
+//!   resolved through the corpus's event records ([`crate::events`]): a
+//!   monthly id becomes the lasting event that holds it. `TopicInfo::events`
+//!   carries the result when the corpus has a records folder, or the item
+//!   has an `events` list or an add/remove correction; otherwise it is
+//!   absent and the item's one event is `event`, as before lasting events.
 //! - Join: a layer item belongs to every indexed document whose frontmatter
 //!   `source_system` + `source_id` give its key; failing that, to the
 //!   document whose key (relative path) equals its `path`.
@@ -27,12 +37,14 @@
 //! The archive files are never written. The index copy is rebuilt whenever
 //! the layer files' bytes or the corpus's documents change.
 
-use crate::filter::DocInfo;
+use crate::events::{EventSet, EventsReport};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+pub use crate::topic_facets::{AiCounts, Facet, FacetCounter, FacetItem, Facets, TopicField};
 use std::path::{Path, PathBuf};
 
 /// Schema version of `scout facets --json` and `scout topics --json`.
@@ -55,7 +67,14 @@ pub fn field_query(field: &str, value: &str) -> String {
 }
 
 /// The fields a correction may override.
-pub const CORRECTABLE: &[&str] = &["themes", "entities", "event", "event_name", "ai_related"];
+pub const CORRECTABLE: &[&str] = &[
+    "themes",
+    "entities",
+    "event",
+    "event_name",
+    "ai_related",
+    "events",
+];
 
 /// One document's topic tags, corrections applied.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,9 +83,15 @@ pub struct TopicInfo {
     pub key: String,
     pub themes: Vec<String>,
     pub entities: Vec<String>,
-    /// `YYYY-MM/Exx`, or null.
+    /// The tag row's event, `YYYY-MM/Exx`, or null (also null when a
+    /// correction took the item out of that event).
     pub event: Option<String>,
     pub event_name: Option<String>,
+    /// Every event the item is in, as lasting ids where a record holds the
+    /// event (see the module notes). Absent: the item's one event is
+    /// `event`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<String>>,
     pub ai_related: Option<bool>,
     /// `YYYY-MM` (see the module notes).
     pub month: Option<String>,
@@ -98,8 +123,19 @@ impl TopicInfo {
         self.entities.iter().any(|t| fold(t) == f)
     }
 
+    /// The ids of every event the item is in: `events`, else `event`.
+    pub fn event_ids(&self) -> &[String] {
+        match &self.events {
+            Some(l) => l,
+            None => self.event.as_slice(),
+        }
+    }
+
+    /// Is the item in the event with this id? `id` is compared as given:
+    /// resolve a monthly or merged id first ([`crate::events::resolve_in`]).
     pub fn has_event(&self, id: &str) -> bool {
-        self.event.as_deref().is_some_and(|e| fold(e) == fold(id))
+        let f = fold(id);
+        self.event_ids().iter().any(|e| fold(e) == f)
     }
 
     /// `month` is `YYYY-MM` (that month) or `YYYY` (any month of the year).
@@ -156,9 +192,21 @@ struct LayerLine {
     entities: Option<Vec<String>>,
     event: Option<String>,
     event_name: Option<String>,
+    /// Further events; anything but a list of strings is left unread.
+    events: Option<serde_json::Value>,
     confidence: Option<String>,
     run_id: Option<String>,
     prompt_version: Option<String>,
+}
+
+/// What a tag row and the corrections say about an item's events beyond
+/// its `event`.
+#[derive(Debug, Default)]
+struct Membership {
+    /// The tag row's `events` list.
+    listed: Option<Vec<String>>,
+    /// `event_add` (true) and `event_remove` (false), in line order.
+    ops: Vec<(String, bool)>,
 }
 
 /// One layer item: its locator path and its tags.
@@ -182,6 +230,8 @@ pub struct Layer {
     pub corrections_unmatched: usize,
     /// Correction lines that did not parse or carried a wrongly typed field.
     pub corrections_bad_lines: usize,
+    /// The corpus's event records, when it has a records folder.
+    pub events: Option<EventSet>,
 }
 
 /// A line of a layer file: valid UTF-8 within [`MAX_LINE_BYTES`], or bad.
@@ -270,6 +320,7 @@ fn layer_hash(root: &Path) -> Result<Option<String>> {
     }
     h.update([0u8]);
     stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
+    crate::events::hash_into(root, &mut h)?;
     Ok(Some(hex(h)))
 }
 
@@ -287,7 +338,9 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
         corrections: 0,
         corrections_unmatched: 0,
         corrections_bad_lines: 0,
+        events: None,
     };
+    let mut members: BTreeMap<String, Membership> = BTreeMap::new();
     let mut h = Sha1::new();
     let found = stream_lines(
         &root.join(LAYER_FILE),
@@ -295,7 +348,7 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
         &mut h,
         |l| match l {
             Line::Text(t) => {
-                if !add_layer_line(&mut out.items, t) {
+                if !add_layer_line(&mut out.items, &mut members, t) {
                     out.bad_lines += 1;
                 }
             }
@@ -312,7 +365,7 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
         MAX_LINE_BYTES,
         &mut h,
         |l| match l {
-            Line::Text(t) => match apply_correction(&mut out.items, t) {
+            Line::Text(t) => match apply_correction(&mut out.items, &mut members, t) {
                 Correction::Applied => applied += 1,
                 Correction::UnknownKey => unknown += 1,
                 Correction::Bad => bad += 1,
@@ -324,12 +377,18 @@ fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
     out.corrections_unmatched = unknown;
     out.corrections_bad_lines = bad;
     fill_event_names(&mut out.items);
+    out.events = crate::events::read_hashed(root, &mut h)?;
+    resolve_events(&mut out.items, &members, out.events.as_ref());
     Ok(Some((out, hex(h))))
 }
 
 /// Parse one layer line into `items` (a repeated key replaces the earlier
 /// line); false when it does not parse or has no key.
-fn add_layer_line(items: &mut BTreeMap<String, LayerItem>, line: &str) -> bool {
+fn add_layer_line(
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &mut BTreeMap<String, Membership>,
+    line: &str,
+) -> bool {
     let Ok(l) = serde_json::from_str::<LayerLine>(line) else {
         return false;
     };
@@ -337,12 +396,22 @@ fn add_layer_line(items: &mut BTreeMap<String, LayerItem>, line: &str) -> bool {
     if key.is_empty() {
         return false;
     }
+    // A repeated key replaces the earlier line, its events included.
+    members.remove(&key);
+    if let Some(serde_json::Value::Array(list)) = &l.events {
+        members.entry(key.clone()).or_default().listed = Some(
+            list.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+        );
+    }
     let info = TopicInfo {
         key: key.clone(),
         themes: l.themes.unwrap_or_default(),
         entities: l.entities.unwrap_or_default(),
         event: l.event.filter(|e| !e.trim().is_empty()),
         event_name: l.event_name,
+        events: None,
         ai_related: l.ai_related,
         month: month_of(l.date.as_deref(), l.month.as_deref()),
         confidence: l.confidence,
@@ -366,7 +435,11 @@ enum Correction {
     Bad,
 }
 
-fn apply_correction(items: &mut BTreeMap<String, LayerItem>, line: &str) -> Correction {
+fn apply_correction(
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &mut BTreeMap<String, Membership>,
+    line: &str,
+) -> Correction {
     let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(line) else {
         return Correction::Bad;
     };
@@ -393,12 +466,15 @@ fn apply_correction(items: &mut BTreeMap<String, LayerItem>, line: &str) -> Corr
     let mut event = None;
     let mut event_name = None;
     let mut ai = None;
+    let (mut add, mut remove) = (None, None);
     for (field, v) in &m {
         let ok = match field.as_str() {
             "themes" => strings(v).map(|s| themes = Some(s)).is_some(),
             "entities" => strings(v).map(|s| entities = Some(s)).is_some(),
             "event" => opt_str(v).map(|s| event = Some(s)).is_some(),
             "event_name" => opt_str(v).map(|s| event_name = Some(s)).is_some(),
+            "event_add" => strings(v).map(|s| add = Some(s)).is_some(),
+            "event_remove" => strings(v).map(|s| remove = Some(s)).is_some(),
             "ai_related" => match v {
                 serde_json::Value::Bool(b) => {
                     ai = Some(Some(*b));
@@ -450,6 +526,12 @@ fn apply_correction(items: &mut BTreeMap<String, LayerItem>, line: &str) -> Corr
         t.ai_related = v;
         mark("ai_related", t);
     }
+    if add.is_some() || remove.is_some() {
+        let ops = &mut members.entry(key.to_string()).or_default().ops;
+        ops.extend(add.unwrap_or_default().into_iter().map(|e| (e, true)));
+        ops.extend(remove.unwrap_or_default().into_iter().map(|e| (e, false)));
+        mark("events", t);
+    }
     t.corrected
         .sort_by_key(|f| CORRECTABLE.iter().position(|c| c == f));
     Correction::Applied
@@ -484,6 +566,64 @@ fn fill_event_names(items: &mut BTreeMap<String, LayerItem>) {
     }
 }
 
+/// Work out every item's events (see the module notes). An item whose tag
+/// row and corrections say nothing beyond `event` keeps `events` absent
+/// unless the corpus has event records.
+fn resolve_events(
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &BTreeMap<String, Membership>,
+    set: Option<&EventSet>,
+) {
+    let resolve = |id: &str| -> String {
+        set.and_then(|s| s.resolve(id))
+            .unwrap_or(id.trim())
+            .to_string()
+    };
+    for (key, it) in items.iter_mut() {
+        let m = members.get(key);
+        if set.is_none() && m.is_none() {
+            continue;
+        }
+        let t = &mut it.info;
+        let first = t.event.as_deref().map(resolve);
+        let listed = m.and_then(|m| m.listed.as_deref()).unwrap_or_default();
+        let mut ids = crate::events::dedup(
+            first
+                .iter()
+                .cloned()
+                .chain(listed.iter().map(|e| resolve(e))),
+        );
+        for (id, add) in m.map(|m| m.ops.as_slice()).unwrap_or_default() {
+            let id = resolve(id);
+            let f = fold(&id);
+            if f.is_empty() {
+                continue;
+            }
+            let at = ids.iter().position(|e| fold(e) == f);
+            match (add, at) {
+                (true, None) => ids.push(id),
+                (false, Some(i)) => {
+                    ids.remove(i);
+                }
+                _ => {}
+            }
+        }
+        // Taken out of its tag row's event: `event` no longer names it.
+        if let Some(f) = first.as_deref().map(fold) {
+            if !ids.iter().any(|e| fold(e) == f) {
+                t.event = None;
+                t.event_name = None;
+                if !t.corrected.iter().any(|c| c == "event") {
+                    t.corrected.push("event".into());
+                    t.corrected
+                        .sort_by_key(|f| CORRECTABLE.iter().position(|c| c == f));
+                }
+            }
+        }
+        t.events = Some(ids);
+    }
+}
+
 /// What a build did with the topic layer (`index build` reports it).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TopicReport {
@@ -506,6 +646,10 @@ pub struct TopicReport {
     /// False when the layer and the documents were unchanged since the last
     /// build, so the stored copy was kept.
     pub reloaded: bool,
+    /// The event records, when the corpus has a records folder
+    /// (`analysis/events/`); its warnings name every file left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<EventsReport>,
 }
 
 pub(crate) const TABLE_SQL: &str = "
@@ -514,6 +658,14 @@ pub(crate) const TABLE_SQL: &str = "
         key TEXT NOT NULL,
         matched_by TEXT NOT NULL,
         info TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS event_records (
+        id TEXT PRIMARY KEY,
+        record TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS event_aliases (
+        alias TEXT PRIMARY KEY,
+        id TEXT NOT NULL
     );";
 
 const HASH_KEY: &str = "topic_layer_hash";
@@ -523,6 +675,7 @@ const REPORT_KEY: &str = "topic_report";
 /// `None` empties the table.
 pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicReport>> {
     conn.execute("DELETE FROM topic_docs", [])?;
+    crate::events::store(conn, layer.and_then(|l| l.events.as_ref()))?;
     let Some(layer) = layer else {
         return Ok(None);
     };
@@ -594,6 +747,7 @@ pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicRep
         corrections_unmatched: layer.corrections_unmatched,
         corrections_bad_lines: layer.corrections_bad_lines,
         reloaded: true,
+        events: layer.events.as_ref().map(EventSet::report),
     }))
 }
 
@@ -662,196 +816,6 @@ pub fn load(conn: &Connection) -> Result<BTreeMap<String, TopicInfo>> {
         }
     }
     Ok(out)
-}
-
-// ---------- facets ----------
-
-/// One facet value and the documents carrying it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct FacetItem {
-    pub value: String,
-    pub count: usize,
-    /// Events: the event's name from the layer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct Facet {
-    /// Distinct values before `top`.
-    pub distinct: usize,
-    pub items: Vec<FacetItem>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
-pub struct AiCounts {
-    #[serde(rename = "true")]
-    pub yes: usize,
-    #[serde(rename = "false")]
-    pub no: usize,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct Facets {
-    pub theme: Facet,
-    pub entity: Facet,
-    pub event: Facet,
-    pub month: Facet,
-    pub ai: AiCounts,
-}
-
-/// Which facet a listing asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TopicField {
-    Theme,
-    Entity,
-    Event,
-    Month,
-}
-
-impl std::str::FromStr for TopicField {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self> {
-        Ok(match s.trim().to_lowercase().as_str() {
-            "theme" | "themes" => TopicField::Theme,
-            "entity" | "entities" => TopicField::Entity,
-            "event" | "events" => TopicField::Event,
-            "month" | "months" => TopicField::Month,
-            other => bail!("unknown topic field {other:?}: use themes, entities, events or months"),
-        })
-    }
-}
-
-/// Spellings per case-folded value, and the documents per value.
-#[derive(Debug, Default)]
-struct ValueCounts {
-    /// folded value -> (spelling -> documents, documents)
-    values: BTreeMap<String, (BTreeMap<String, usize>, usize)>,
-}
-
-impl ValueCounts {
-    fn add_doc<'a>(&mut self, vals: impl IntoIterator<Item = &'a String>) {
-        let mut seen = BTreeSet::new();
-        for v in vals {
-            let f = fold(v);
-            if f.is_empty() || !seen.insert(f.clone()) {
-                continue;
-            }
-            let e = self.values.entry(f).or_default();
-            *e.0.entry(v.trim().to_string()).or_default() += 1;
-            e.1 += 1;
-        }
-    }
-
-    /// Items by count desc, then value; the displayed spelling is the most
-    /// frequent one (ties: alphabetically first). `top` 0 keeps all.
-    fn facet(&self, top: usize, chronological: bool) -> Facet {
-        let mut items: Vec<FacetItem> = self
-            .values
-            .values()
-            .map(|(spellings, count)| {
-                let max = spellings.values().max().copied().unwrap_or(0);
-                let value = spellings
-                    .iter()
-                    .find(|(_, c)| **c == max)
-                    .map(|(s, _)| s.clone())
-                    .unwrap_or_default();
-                FacetItem {
-                    value,
-                    count: *count,
-                    name: None,
-                }
-            })
-            .collect();
-        if chronological {
-            items.sort_by(|a, b| a.value.cmp(&b.value));
-        } else {
-            items.sort_by(|a, b| b.count.cmp(&a.count).then(a.value.cmp(&b.value)));
-        }
-        let distinct = items.len();
-        if top > 0 {
-            items.truncate(top);
-        }
-        Facet { distinct, items }
-    }
-}
-
-/// Counts documents per theme, entity, event and month. Feed it the
-/// documents of a result set (several corpora may feed one counter); each
-/// document counts once per value. Values match case-insensitively, as the
-/// query fields do, so a facet's count is the document total of the
-/// matching `theme:` / `entity:` / `event:` / `month:` query.
-#[derive(Debug, Default)]
-pub struct FacetCounter {
-    pub documents: usize,
-    pub tagged: usize,
-    theme: ValueCounts,
-    entity: ValueCounts,
-    event: ValueCounts,
-    month: ValueCounts,
-    event_names: BTreeMap<String, BTreeMap<String, usize>>,
-    ai: AiCounts,
-}
-
-impl FacetCounter {
-    pub fn add(&mut self, d: &DocInfo) {
-        self.documents += 1;
-        let Some(t) = &d.topic else {
-            return;
-        };
-        self.tagged += 1;
-        self.theme.add_doc(&t.themes);
-        self.entity.add_doc(&t.entities);
-        self.event.add_doc(t.event.iter());
-        self.month.add_doc(t.month.iter());
-        if let (Some(e), Some(n)) = (&t.event, &t.event_name) {
-            *self
-                .event_names
-                .entry(fold(e))
-                .or_default()
-                .entry(n.clone())
-                .or_default() += 1;
-        }
-        match t.ai_related {
-            Some(true) => self.ai.yes += 1,
-            Some(false) => self.ai.no += 1,
-            None => {}
-        }
-    }
-
-    fn event_facet(&self, top: usize) -> Facet {
-        let mut f = self.event.facet(top, false);
-        for it in f.items.iter_mut() {
-            it.name = self.event_names.get(&fold(&it.value)).and_then(|ns| {
-                let max = ns.values().max()?;
-                ns.iter().find(|(_, c)| *c == max).map(|(n, _)| n.clone())
-            });
-        }
-        f
-    }
-
-    /// All four facets; `top` cuts themes, entities and events (0 = all);
-    /// months are all listed, chronologically.
-    pub fn facets(&self, top: usize) -> Facets {
-        Facets {
-            theme: self.theme.facet(top, false),
-            entity: self.entity.facet(top, false),
-            event: self.event_facet(top),
-            month: self.month.facet(0, true),
-            ai: self.ai.clone(),
-        }
-    }
-
-    /// One facet (`scout topics`); months chronological, others by count.
-    pub fn facet(&self, field: TopicField, top: usize) -> Facet {
-        match field {
-            TopicField::Theme => self.theme.facet(top, false),
-            TopicField::Entity => self.entity.facet(top, false),
-            TopicField::Event => self.event_facet(top),
-            TopicField::Month => self.month.facet(top, true),
-        }
-    }
 }
 
 #[cfg(test)]
