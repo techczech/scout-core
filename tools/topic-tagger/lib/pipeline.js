@@ -13,7 +13,10 @@ import { buildArchiveIndex, loadXSnapshot, enrichItems } from './enrich.js';
 import { BRIEFING_PROMPT_VERSION, BRIEFING_SCHEMA, briefingSystem, condensedView, validateBriefing, renderBriefingMarkdown, briefingForPrompt } from './briefing.js';
 import { THEMES_PROMPT_VERSION, THEMES_SCHEMA, THEMES_SYSTEM, themesUserMessage, validateThemes, themesForPrompt } from './themes.js';
 import { PROMPT_VERSION, PROMPT_CAP, TAG_INSTRUCTIONS, fitPrompt, renderItem, systemText, promptEstimate, userMessageV2 } from './tag-prompt.js';
-import { aliasMap } from './tag-results.js';
+import { aliasMap, AUTHOR_DROP_PREFIX } from './tag-results.js';
+import { clip } from './text.js';
+import { normaliseTyped } from './entities.js';
+import { mentionedWorks } from './mentions.js';
 import { callJson, tagAll, cacheStats } from './tag-run.js';
 import { qaSample, agreement, shuffle } from './qa.js';
 import { renderReviewV2 } from './review-v2.js';
@@ -270,7 +273,7 @@ export async function stageTag(env) {
   const remaining = guardSpend(env, 'tagging', estimate, { replacing });
   writeText(p.promptText, systemText(fit.system));
   writeJson(p.promptJson, fit.system);
-  const vctx = { themes: fit.themes, events: fit.briefing.events, aliases: aliasMap(fit.briefing) };
+  const vctx = { themes: fit.themes, events: fit.briefing.events, aliases: aliasMap(fit.briefing), sidKey: new Map(items.map((i) => [i.sid, i.key])) };
   const started = Date.now();
   const r = await tagAll(env.client, { model: env.model, effort: env.effort, system: fit.system, vctx }, batches, { concurrency: env.concurrency, maxUsd: remaining, log: env.log });
   r.records.sort((a, b) => a.key.localeCompare(b.key));
@@ -279,6 +282,7 @@ export async function stageTag(env) {
   const ai = r.records.filter((x) => x.ai_related).length;
   Object.assign(run, {
     model: env.model, effort: env.effort, thinking: 'adaptive', api: 'messages (prompt caching, 5-minute TTL)',
+    author_entities_dropped: r.problems.filter((x) => x.startsWith(AUTHOR_DROP_PREFIX)).length,
     tagged_items: r.records.length, failed_keys: r.failed, ai_count: ai, ai_share: +(ai / Math.max(r.records.length, 1)).toFixed(4),
     prompt_cap: PROMPT_CAP, prompt_tokens_system: fit.systemTokens, prompt_max_user_tokens_estimated: Math.max(...batches.map((b) => b.estTokens)),
     prompt_max_user_tokens_counted: maxUserReal, prompt_largest_total_counted: fit.systemTokens + maxUserReal,
@@ -314,7 +318,7 @@ export async function stageQa(env) {
   const batches = packForTagging(chosen, contexts, env.userReserve, new Map(items.map((i) => [i.key, i.sid])));
   const replacing = (run.stages.qa && run.stages.qa.cost_usd) || 0;
   const remaining = guardSpend(env, 'qa', estimateTagging(env.qaModel, run.prompt_tokens_system * 1.1, batches), { replacing });
-  const r = await tagAll(env.client, { model: env.qaModel, effort: env.qaEffort, system, vctx: { themes, events: briefing.events, aliases: aliasMap(briefing) } }, batches, { concurrency: env.concurrency, maxUsd: remaining, log: env.log });
+  const r = await tagAll(env.client, { model: env.qaModel, effort: env.qaEffort, system, vctx: { themes, events: briefing.events, aliases: aliasMap(briefing), sidKey: new Map(items.map((i) => [i.sid, i.key])) } }, batches, { concurrency: env.concurrency, maxUsd: remaining, log: env.log });
   const pairs = r.records.map((b) => ({ key: b.key, group: sample.group[b.key], a: byKey.get(b.key), b }));
   writeText(p.qaJsonl, pairs.map((x) => JSON.stringify({ key: x.key, group: x.group, tagger: x.a, qa: x.b })).join('\n') + '\n');
   const qa = {
@@ -353,7 +357,7 @@ export function stageReview(env) {
     return { name: t.name, definition: t.definition, count: hits.length, examples: pick(shuffle(hits, 7)) };
   }).sort((a, b) => b.count - a.count);
   const entCounts = new Map();
-  for (const r of records) for (const e of r.entities) entCounts.set(e, (entCounts.get(e) || 0) + 1);
+  for (const r of records) for (const e of r.entities) entCounts.set(e.name, (entCounts.get(e.name) || 0) + 1);
   const entities = [...entCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 50).map(([name, count]) => ({ name, count }));
   const eventRows = briefing.events.map((e) => {
     const hits = records.filter((r) => r.event === e.id);
@@ -364,13 +368,22 @@ export function stageReview(env) {
   const v1Tags = join(p.v1Run, 'tags.jsonl');
   if (existsSync(v1Tags)) v1 = new Map(readJsonl(v1Tags).map((r) => [r.key, r.topics]));
   const compare = shuffle(records.filter((r) => v1.has(r.key)), env.seed + 2).slice(0, 15)
-    .map((r) => ({ key: r.key, v1: v1.get(r.key), themes: r.themes, entities: r.entities, event: r.event ? evName.get(r.event) : null }));
+    .map((r) => ({ key: r.key, v1: v1.get(r.key), themes: r.themes, entities: r.entities.map((e) => e.name), event: r.event ? evName.get(r.event) : null }));
   const byKey = new Map(records.map((r) => [r.key, r]));
   const wanted = new Set([...themeRows.flatMap((t) => t.examples), ...eventRows.flatMap((e) => e.examples), ...compare.map((c) => c.key)]);
   const examples = {};
+  const itemByKey = new Map(items.map((i) => [i.key, i]));
+  // links to other items: same-month related (by title/author/date) and works the entities point to (whole archive)
+  const label = (w) => ({ title: clip(w.title || '(untitled)', 90), author: w.author || '', date: w.date || '', url: w.url || '' });
   for (const k of wanted) {
     const rec = byKey.get(k);
-    examples[k] = { ...exampleFor(env.archiveRoot, rec), sid: sidOf.get(k), path: rec.path, relevance: rec.relevance, themes: rec.themes, entities: rec.entities };
+    const related = (rec.related || []).filter((x) => itemByKey.has(x.key)).map((x) => ({ relation: x.relation, sid: sidOf.get(x.key), ...label(itemByKey.get(x.key)) }));
+    let mentioned = [];
+    if (env.workIndex) {
+      const typed = [...rec.entities, ...normaliseTyped(env.entityMap || {}, rec.entities)];
+      mentioned = mentionedWorks(env.workIndex, typed, rec.key).filter((m) => env.workIndex.info.has(m.key)).map((m) => ({ via: m.via, ...label(env.workIndex.info.get(m.key)) }));
+    }
+    examples[k] = { ...exampleFor(env.archiveRoot, rec), sid: sidOf.get(k), path: rec.path, themes: rec.themes, entities: rec.entities.map((e) => e.name), related, mentioned };
   }
   const costs = [
     { stage: 'Month briefing', model: briefing.meta.model, usd: briefing.meta.cost_usd },

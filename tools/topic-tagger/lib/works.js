@@ -47,6 +47,12 @@ export function deriveKey(meta, rawText) {
   return { key: `sha256:${h}`, fallback: true };
 }
 
+// Display name of the author when the import kept one (tweets: source_data {"author_name": ...}).
+function authorNameOf(sd) {
+  if (!sd || sd[0] !== '{') return '';
+  try { return String(JSON.parse(sd).author_name || ''); } catch { return ''; }
+}
+
 export function parseWork(rawText, relPath) {
   const { meta, body } = parseFrontmatter(rawText);
   const highlights = parseHighlights(body);
@@ -60,6 +66,7 @@ export function parseWork(rawText, relPath) {
     author: meta.author || '',
     type: meta.type || '',
     url: meta.url || '',
+    authorName: authorNameOf(meta.source_data),
     date: dates.length ? dates[dates.length - 1] : null,
     highlights,
   };

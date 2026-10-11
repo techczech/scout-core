@@ -11,23 +11,48 @@ const batch = { id: 'b1', items: [it('m0001', 'x:1'), it('m0002', 'x:2'), it('m0
 const ctx = {
   themes: [{ name: 'AI and mathematics' }, { name: 'Vibe coding and AI-assisted programming' }, { name: 'Epistemology' }, { name: 'AI safety' }],
   events: [{ id: 'E01' }, { id: 'E02' }],
+  sidKey: new Map([['m0001', 'x:1'], ['m0002', 'x:2'], ['m0003', 'x:3'], ['m0004', 'x:4']]),
   aliases: aliasMap({ names: [{ name: 'GPT-6 Astra', aliases: ['Astra', 'GPT-6 Astra'] }, { name: 'Claude Opus 5.5', aliases: ['Opus 5.5'] }] }),
 };
 
 test('themes: only list names (case-insensitive), deduped, max 3', () => {
   const r = validateTagBatch({ results: [
-    { id: 'm0001', ai_related: true, themes: ['ai and MATHEMATICS', 'AI and mathematics', 'Made up', 'Epistemology', 'AI safety', 'Vibe coding and AI-assisted programming'], entities: [], event: '', relevance: '', confidence: 'high' },
+    { id: 'm0001', ai_related: true, themes: ['ai and MATHEMATICS', 'AI and mathematics', 'Made up', 'Epistemology', 'AI safety', 'Vibe coding and AI-assisted programming'], entities: [], event: '', related: [], confidence: 'high' },
   ] }, batch, ctx);
   assert.deepEqual(r.records[0].themes, ['AI and mathematics', 'Epistemology', 'AI safety']);
   assert.ok(r.problems.some((p) => p.includes('Made up')));
 });
 
-test('entities: alias-normalised to full names, case-deduped, capped at 6, over-long dropped', () => {
+const E = (name, type = 'person') => ({ name, type });
+test('entities: typed, alias-normalised to full names, case-deduped, capped at 8, over-long dropped, unknown type -> other', () => {
   const r = validateTagBatch({ results: [
-    { id: 'm0001', ai_related: true, themes: ['Epistemology'], entities: ['Astra', 'gpt-6 astra', 'opus 5.5', ' OpenAI ', 'openai', 'A', 'B', 'C', 'D', 'x'.repeat(80)], event: 'e01', relevance: '', confidence: 'medium' },
+    { id: 'm0001', ai_related: true, themes: ['Epistemology'], entities: [E('Astra', 'model'), E('gpt-6 astra', 'model'), E('opus 5.5', 'model'), E(' OpenAI ', 'org'), E('openai', 'org'), { name: 'Zed', type: 'bogus' },
+      E('A'), E('B'), E('C'), E('D'), E('E'), E('x'.repeat(80))], event: 'e01', related: [], confidence: 'medium' },
   ] }, batch, ctx);
-  assert.deepEqual(r.records[0].entities, ['GPT-6 Astra', 'Claude Opus 5.5', 'OpenAI', 'A', 'B', 'C']);
+  assert.deepEqual(r.records[0].entities.map((e) => e.name), ['GPT-6 Astra', 'Claude Opus 5.5', 'OpenAI', 'Zed', 'A', 'B', 'C', 'D']);
+  assert.equal(r.records[0].entities[3].type, 'other');
   assert.equal(r.records[0].event, 'E01');
+});
+
+test('own author, handle and site are dropped unless the text discusses them; reported as problems', () => {
+  const own = { sid: 'm0001', key: 'x:1', path: 'p', date: '2026-09-02', type: 'tweet', author: 'alice', authorName: 'Alice Smith', url: 'https://x.com/alice/status/1', highlights: [{ text: 'Terence Tao says this is not enough' }] };
+  const art = { sid: 'm0002', key: 'x:2', path: 'p', date: '2026-09-02', type: 'article', author: 'Terence Tao', url: 'https://terrytao.wordpress.com/2026/x', highlights: [{ text: 'By Terence Tao. I argue that proofs need checking.' }] };
+  const about = { sid: 'm0003', key: 'x:3', path: 'p', date: '2026-09-02', type: 'tweet', author: 'bob', url: 'https://x.com/bob/status/3', highlights: [{ text: 'Terence Tao just posted a proof' }] };
+  const row = (id) => ({ id, ai_related: false, themes: [], entities: [E('Terence Tao'), E('Alice Smith'), E('alice'), E('Wordpress', 'org'), E('Terry Tao')], event: '', related: [], confidence: 'high' });
+  const r = validateTagBatch({ results: [row('m0001'), row('m0002'), row('m0003')] }, { id: 'b', items: [own, art, about] }, ctx);
+  const names = (k) => r.records.find((x) => x.key === k).entities.map((e) => e.name);
+  assert.deepEqual(names('x:1'), ['Terence Tao', 'Wordpress', 'Terry Tao'], 'her own name and handle dropped; Tao is named in her text');
+  assert.deepEqual(names('x:2'), ['Alice Smith', 'alice', 'Wordpress'], 'a byline is not a mention; the blog host terrytao.wordpress.com is metadata too');
+  assert.deepEqual(names('x:3'), ['Terence Tao', 'Alice Smith', 'alice', 'Wordpress', 'Terry Tao'], 'someone else tweeting about Tao keeps him');
+  assert.ok(r.problems.some((p) => p.startsWith('entity is own author/site m0001: Alice Smith')));
+});
+
+test('related: ids resolve to stable keys; self-links, unknown ids, repeats, bad relations dropped; max 3', () => {
+  const r = validateTagBatch({ results: [{ id: 'm0001', ai_related: false, themes: [], entities: [], event: '', confidence: 'high', related: [
+    { id: 'm0001', relation: 'same_story' }, { id: 'm0002', relation: 'reply_or_quote' }, { id: 'm0002', relation: 'reacts_to' }, { id: 'm9999', relation: 'same_story' },
+    { id: 'm0003', relation: 'vibes' }, { id: 'm0004', relation: 'continues_thread' }, { id: 'm0003', relation: 'same_story' }] }] }, batch, ctx);
+  assert.deepEqual(r.records[0].related, [{ key: 'x:2', relation: 'reply_or_quote' }, { key: 'x:4', relation: 'continues_thread' }, { key: 'x:3', relation: 'same_story' }]);
+  assert.ok(r.problems.some((p) => p.includes('unknown related id m9999')) && r.problems.some((p) => p.includes('bad relation')));
 });
 
 test('alias map uses only aliases whose words are in the full name; combined names skipped', () => {
@@ -44,19 +69,18 @@ test('alias map uses only aliases whose words are in the full name; combined nam
   assert.equal(m.get('jev'), 'Jev');
 });
 
-test('event must be a briefing id; relevance trimmed to 15 words; confidence enforced; record shape', () => {
+test('event must be a briefing id; confidence enforced; record shape has no relevance', () => {
   const r = validateTagBatch({ results: [
-    { id: 'm0001', ai_related: true, themes: ['AI safety'], entities: [], event: 'E99', relevance: 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen', confidence: 'sure' },
-    { id: 'm0002', ai_related: true, themes: [], entities: [], event: '', relevance: '', confidence: 'high' },
-    { id: 'm0002', ai_related: false, themes: [], entities: [], event: '', relevance: '', confidence: 'high' },
-    { id: 'zz', ai_related: false, themes: [], entities: [], event: '', relevance: '', confidence: 'high' },
+    { id: 'm0001', ai_related: true, themes: ['AI safety'], entities: [], event: 'E99', related: [], confidence: 'sure' },
+    { id: 'm0002', ai_related: true, themes: [], entities: [], event: '', related: [], confidence: 'high' },
+    { id: 'm0002', ai_related: false, themes: [], entities: [], event: '', related: [], confidence: 'high' },
+    { id: 'zz', ai_related: false, themes: [], entities: [], event: '', related: [], confidence: 'high' },
   ] }, batch, ctx);
   const [a, b] = r.records;
   assert.equal(a.event, null);
-  assert.equal(a.relevance.split(' ').length, 15);
   assert.equal(a.confidence, 'low');
   assert.equal(b.confidence, 'low', 'AI item without themes is forced to low so QA sees it');
-  assert.deepEqual(Object.keys(a), ['key', 'path', 'date', 'type', 'ai_related', 'themes', 'entities', 'event', 'relevance', 'confidence']);
+  assert.deepEqual(Object.keys(a), ['key', 'path', 'date', 'type', 'ai_related', 'themes', 'entities', 'event', 'related', 'confidence']);
   assert.deepEqual(r.missing, ['x:3']);
   for (const want of ['unknown event E99', 'bad confidence', 'AI item without themes', 'duplicate id', 'unknown id zz']) assert.ok(r.problems.some((p) => p.includes(want)), want);
   assert.equal(validateTagBatch(null, batch, ctx).missing.length, 3);

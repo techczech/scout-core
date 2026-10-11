@@ -38,7 +38,7 @@ export function qaSample(records, { seed = 20261011, random = QA_RANDOM, cap = Q
   };
 }
 
-const lc = (xs) => new Set((xs || []).map((x) => String(x).toLowerCase()));
+const lc = (xs) => new Set((xs || []).map((x) => String(x && typeof x === 'object' ? (x.name ?? x.key) : x).toLowerCase()));
 function setStats(a, b) {
   const A = lc(a), B = lc(b);
   const inter = [...A].filter((x) => B.has(x)).length;
@@ -49,13 +49,16 @@ function setStats(a, b) {
 // pairs: [{a: record (tagger), b: record (QA model)}]. Rates in 0..1.
 export function agreement(pairs) {
   const n = pairs.length;
-  const z = { n, themes_any_overlap: 0, themes_exact: 0, themes_jaccard: 0, entities_any_overlap: 0, entities_exact: 0, entities_jaccard: 0, event_match: 0, event_both_set_match: 0, event_both_set: 0, ai_related_match: 0 };
+  const z = { n, themes_any_overlap: 0, themes_exact: 0, themes_jaccard: 0, entities_any_overlap: 0, entities_exact: 0, entities_jaccard: 0, related_overlap: 0, related_both_set: 0, related_both_set_overlap: 0, event_match: 0, event_both_set_match: 0, event_both_set: 0, ai_related_match: 0 };
   if (!n) return z;
   for (const { a, b } of pairs) {
     const t = setStats(a.themes, b.themes);
     const e = setStats(a.entities, b.entities);
     z.themes_any_overlap += t.overlap; z.themes_exact += t.exact; z.themes_jaccard += t.jaccard;
     z.entities_any_overlap += e.overlap; z.entities_exact += e.exact; z.entities_jaccard += e.jaccard;
+    const rl = setStats(a.related, b.related);
+    z.related_overlap += rl.overlap;
+    if ((a.related || []).length && (b.related || []).length) { z.related_both_set++; z.related_both_set_overlap += rl.overlap; }
     z.event_match += (a.event || null) === (b.event || null);
     if (a.event && b.event) { z.event_both_set++; z.event_both_set_match += a.event === b.event; }
     z.ai_related_match += a.ai_related === b.ai_related;
@@ -65,6 +68,9 @@ export function agreement(pairs) {
     n,
     themes_any_overlap: r(z.themes_any_overlap), themes_exact: r(z.themes_exact), themes_mean_jaccard: r(z.themes_jaccard),
     entities_any_overlap: r(z.entities_any_overlap), entities_exact: r(z.entities_exact), entities_mean_jaccard: r(z.entities_jaccard),
+    related_any_overlap: r(z.related_overlap),
+    related_both_set: z.related_both_set,
+    related_match_when_both_set: z.related_both_set ? +(z.related_both_set_overlap / z.related_both_set).toFixed(3) : null,
     event_match: r(z.event_match),
     event_both_set: z.event_both_set,
     event_match_when_both_set: z.event_both_set ? +(z.event_both_set_match / z.event_both_set).toFixed(3) : null,

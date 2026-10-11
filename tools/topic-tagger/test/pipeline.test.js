@@ -87,12 +87,12 @@ test('v2 stages end to end with a fake client: files, ids, cache stats, cost cap
   assert.equal(t.tagged, 6);
   const recs = readFileSync(p.tags, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const astra = recs.find((r) => r.key === 'x:201');
-  assert.deepEqual(astra.entities, ['GPT-6 Astra', 'OpenAI']); // alias + case dedupe
+  assert.deepEqual(astra.entities, [{ name: 'GPT-6 Astra', type: 'model' }, { name: 'OpenAI', type: 'org' }]); // alias + case dedupe
   assert.deepEqual(astra.themes, ['AI and mathematics']); // "Not a theme" dropped
   assert.equal(astra.event, 'E02');
   assert.equal(recs.find((r) => r.key === 'x:205').ai_related, false);
   const run = JSON.parse(readFileSync(p.runJson, 'utf8'));
-  assert.equal(run.prompt_version, 'topics-v2');
+  assert.equal(run.prompt_version, 'topics-v3');
   assert.equal(run.readings_unchanged, true);
   assert.ok(run.prompt_tokens_system > 0 && run.prompt_tokens_system < 100000);
   assert.ok(existsSync(p.promptText) && readFileSync(p.promptText, 'utf8').includes('<month_index>'));

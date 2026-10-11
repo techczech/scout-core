@@ -1,6 +1,7 @@
 // v2 review page: one self-contained file. Context (profile, briefing), themes, entities, events,
 // QA agreement, cost, and a v1 vs v2 comparison. Light/dark, phone width, no external requests.
 import { esc, mdToHtml } from './markdown.js';
+import { clip } from './text.js';
 
 const CSS = `:root{color-scheme:light dark;--bg:#fff;--fg:#1c1c1e;--mut:#6b6b70;--line:#ddd;--card:#f6f6f7;--a:#0b57d0}
 @media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#e8e8ea;--mut:#9a9aa0;--line:#333;--card:#212124;--a:#8ab4f8}}
@@ -21,17 +22,26 @@ const stat = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
 export const cleanSnippet = (s) => String(s ?? '').replace(/!\[[^\]]*\]\([^)]*\)?/g, '').replace(/https?:\/\/t\.co\/\S+/g, '').replace(/\s+/g, ' ').trim();
 const pct = (x) => (x === null || x === undefined ? '–' : `${Math.round(x * 100)}%`);
 
+const linkLabel = (x) => `${x.url ? `<a href="${esc(x.url)}">${esc(x.title)}</a>` : esc(x.title)}${x.author ? ` · ${esc(x.author)}` : ''}${x.date ? ` · ${esc(x.date)}` : ''}`;
+// Connections replace any "why it matters" line: related items of the month, and archive works the entities name.
+function linksHtml(e) {
+  const rel = (e.related || []).map((x) => `<div class="meta">${esc(x.relation.replace(/_/g, ' '))}: ${esc(x.sid || '')} ${linkLabel(x)}</div>`).join('');
+  const men = (e.mentioned || []).map((x) => `<div class="meta">mentions (${esc(x.via)}): ${linkLabel(x)}</div>`).join('');
+  return rel + men;
+}
+
 function exampleHtml(e) {
   if (!e) return '';
   const link = e.url ? `<a href="${esc(e.url)}">${esc(e.url)}</a>` : esc(e.path || '');
   const tags = [...(e.themes || []).map((t) => `<span class="tag">${esc(t)}</span>`), ...(e.entities || []).map((t) => `<span class="tag">${esc(t)}</span>`)].join('');
-  return `<div class="ex"><div class="meta">${esc(e.sid || '')} · ${esc(e.author)} · ${esc(e.date)} · ${link}</div><div>${esc(cleanSnippet(e.snippet))}</div>${e.relevance ? `<div class="meta">why: ${esc(e.relevance)}</div>` : ''}${tags ? `<div class="meta">${tags}</div>` : ''}</div>`;
+  return `<div class="ex"><div class="meta">${esc(e.sid || '')} · ${esc(e.author)} · ${esc(e.date)} · ${link}</div><div>${esc(cleanSnippet(e.snippet))}</div>${linksHtml(e)}${tags ? `<div class="meta">${tags}</div>` : ''}</div>`;
 }
 
 function qaTable(qa) {
   if (!qa) return '<p class="meta">QA has not been run.</p>';
   const rows = [['Themes: any overlap', 'themes_any_overlap'], ['Themes: exact set', 'themes_exact'], ['Themes: mean Jaccard', 'themes_mean_jaccard'],
-    ['Entities: any overlap', 'entities_any_overlap'], ['Entities: exact set', 'entities_exact'], ['Entities: mean Jaccard', 'entities_mean_jaccard'],
+    ['Entities (by name): any overlap', 'entities_any_overlap'], ['Entities: exact set', 'entities_exact'], ['Entities: mean Jaccard', 'entities_mean_jaccard'],
+    ['Related: any overlap (incl. both none)', 'related_any_overlap'], ['Related: overlap when both set', 'related_match_when_both_set'],
     ['Event: same (incl. both none)', 'event_match'], ['Event: same when both set', 'event_match_when_both_set'], ['AI-related: same', 'ai_related_match']];
   const groups = [['All', qa.all], ['Random sample', qa.random], ['Low confidence', qa.low_confidence]].filter(([, g]) => g && g.n);
   return `<div class="tbl"><table><tr><th>Measure</th>${groups.map(([n, g]) => `<th>${esc(n)} (n=${g.n})</th>`).join('')}</tr>
@@ -55,7 +65,7 @@ export function renderReviewV2(d) {
   const total = d.costs.reduce((s, c) => s + Number(c.usd || 0), 0);
   const cmp = d.compare.map((c) => {
     const e = d.examples[c.key] || {};
-    return `<tr><td><div class="meta">${esc(e.sid || '')} · ${esc(e.author)} · ${esc(e.date)}</div>${esc(cleanSnippet(e.snippet).slice(0, 140))}</td><td>${esc((c.v1 || []).join('; ') || '–')}</td><td>${esc(c.themes.join('; ') || '–')}</td><td>${esc(c.entities.join('; ') || '–')}</td><td>${esc(c.event || '–')}</td></tr>`;
+    return `<tr><td><div class="meta">${esc(e.sid || '')} · ${esc(e.author)} · ${esc(e.date)}</div>${esc(clip(cleanSnippet(e.snippet), 140))}</td><td>${esc((c.v1 || []).join('; ') || '–')}</td><td>${esc(c.themes.join('; ') || '–')}</td><td>${esc(c.entities.join('; ') || '–')}</td><td>${esc(c.event || '–')}</td></tr>`;
   }).join('\n');
   const cs = run.cache_stats || {};
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

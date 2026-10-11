@@ -1,15 +1,16 @@
-// Validation of v2 model output (themes from a fixed list, free entities, event id, relevance,
-// confidence) and conversion to tags.jsonl records. Ids in the batch are month-index sids.
-import { MAX_ENTITIES, MAX_THEMES_PER_ITEM } from './tag-prompt.js';
+// Validation of v3 model output (themes from a fixed list, typed entities minus the item's own author/site,
+// event id, related items by month-index id, confidence) and conversion to tags.jsonl records. Ids in the batch are month-index sids.
+import { MAX_ENTITIES, MAX_THEMES_PER_ITEM, MAX_RELATED, ENTITY_TYPES, RELATIONS } from './tag-prompt.js';
+import { dropOwnEntities } from './entity-guard.js';
 
-export const MAX_RELEVANCE_WORDS = 15;
+export const AUTHOR_DROP_PREFIX = 'entity is own author/site ';
 export const MAX_ENTITY_CHARS = 60;
 const CONF = new Set(['low', 'medium', 'high']);
 
 const squash = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 /**
- * ctx: {themes:[{name}], events:[{id}], aliases: Map(lowercased alias -> canonical name)}.
+ * ctx: {themes:[{name}], events:[{id}], aliases: Map(lowercased alias -> canonical name), sidKey: Map(month-index id -> key)}.
  * Build aliases with aliasMap(briefing). Returns {records, missing, problems}.
  */
 export function validateTagBatch(parsed, batch, ctx) {
@@ -34,28 +35,43 @@ export function validateTagBatch(parsed, batch, ctx) {
       if (!themes.includes(name)) themes.push(name);
     }
     if (themes.length > MAX_THEMES_PER_ITEM) themes.length = MAX_THEMES_PER_ITEM;
-    // entities: free, alias-normalised to the briefing's full names, deduped case-insensitively
-    const entities = [];
+    // entities: {name, type}; alias-normalised to the briefing's full names, deduped case-insensitively,
+    // own author/handle/site removed (entity-guard), capped
+    let entities = [];
     const seen = new Set();
     for (const raw of Array.isArray(r.entities) ? r.entities : []) {
-      let e = squash(raw);
+      let e = squash(raw && typeof raw === 'object' ? raw.name : raw);
       if (!e || e.length > MAX_ENTITY_CHARS) { if (e) problems.push(`entity too long for ${r.id}`); continue; }
       e = aliases.get(e.toLowerCase()) || e;
       if (seen.has(e.toLowerCase())) continue;
       seen.add(e.toLowerCase());
-      entities.push(e);
+      const type = raw && ENTITY_TYPES.includes(raw.type) ? raw.type : 'other';
+      entities.push({ name: e, type });
     }
+    const g = dropOwnEntities(entities, it);
+    for (const n of g.dropped) problems.push(`${AUTHOR_DROP_PREFIX}${r.id}: ${n}`);
+    entities = g.kept;
     if (entities.length > MAX_ENTITIES) entities.length = MAX_ENTITIES;
+    // related: other items of the month by index id, stored as stable keys; self-links, unknown ids and repeats dropped
+    const related = [];
+    for (const raw of Array.isArray(r.related) ? r.related : []) {
+      const id = squash(raw && raw.id);
+      const key = ctx.sidKey && ctx.sidKey.get(id);
+      if (!key) { problems.push(`unknown related id ${id} for ${r.id}`); continue; }
+      if (key === it.key || related.some((x) => x.key === key)) continue;
+      if (!RELATIONS.includes(raw.relation)) { problems.push(`bad relation for ${r.id}`); continue; }
+      related.push({ key, relation: raw.relation });
+    }
+    if (related.length > MAX_RELATED) related.length = MAX_RELATED;
     // event: a known id or null
     let event = squash(r.event).toUpperCase() || null;
     if (event && !eventIds.has(event)) { problems.push(`unknown event ${event} for ${r.id}`); event = null; }
     let confidence = CONF.has(r.confidence) ? r.confidence : 'low';
     if (!CONF.has(r.confidence)) problems.push(`bad confidence for ${r.id}`);
     if (r.ai_related && themes.length === 0) { problems.push(`AI item without themes ${r.id}`); confidence = 'low'; }
-    const relevance = squash(r.relevance).split(' ').filter(Boolean).slice(0, MAX_RELEVANCE_WORDS).join(' ');
     records.set(it.key, {
       key: it.key, path: it.path, date: it.date, type: it.type,
-      ai_related: r.ai_related, themes, entities, event, relevance, confidence,
+      ai_related: r.ai_related, themes, entities, event, related, confidence,
     });
   }
   const missing = batch.items.filter((i) => !records.has(i.key)).map((i) => i.key);

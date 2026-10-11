@@ -114,9 +114,9 @@ export function fakeClient({ calls = [], clean = false } = {}) {
       return {
         id, ai_related: ai,
         themes: ai ? (clean ? ['AI and mathematics'] : ['AI and mathematics', 'Not a theme']) : [],
-        entities: /Astra/.test(body) ? ['Astra', 'astra', 'OpenAI'] : [],
+        entities: /Astra/.test(body) ? [{ name: 'Astra', type: 'model' }, { name: 'astra', type: 'model' }, { name: 'OpenAI', type: 'org' }] : [],
         event: /proof|mathematic/i.test(body) ? 'E02' : (/Astra/.test(body) ? 'E01' : ''),
-        relevance: ai ? 'Fits his interest in how mathematicians reacted to AI proof claims this month' : '',
+        related: [],
         confidence: body.includes('No way') ? 'low' : 'high',
       };
     });

@@ -9,7 +9,9 @@ import { callJson } from './tag-run.js';
 import { briefingForPrompt } from './briefing.js';
 import { THEMES_FINAL_SYSTEM, THEMES_FINAL_PROMPT_VERSION, THEMES_SCHEMA, themesFinalUserMessage, validateThemes } from './themes.js';
 import { aliasMap } from './tag-results.js';
-import { ENTITY_PROMPT_VERSION, ENTITY_SCHEMA, ENTITY_SYSTEM, entityCounts, ruleMap, modelGroups, normaliseEntities, revalidate } from './entities.js';
+import { ENTITY_PROMPT_VERSION, ENTITY_SCHEMA, ENTITY_SYSTEM, entityCounts, ruleMap, modelGroups, normaliseEntities, normaliseTyped, revalidate } from './entities.js';
+import { PROMPT_VERSION } from './tag-prompt.js';
+import { buildWorkIndex, mentionedWorks } from './mentions.js';
 import { agreement } from './qa.js';
 import { renderOverview } from './overview.js';
 import { costFromUsage } from './cost.js';
@@ -33,7 +35,8 @@ export function structuralProblem(run) {
   const failed = (run.failed_keys || []).length;
   // "unknown id" = the model answered for an id outside the batch; the answer is dropped and no item is lost, so it is not structural.
   const tg = run.stages.tagging || {};
-  const probs = (tg.problem_count || 0) - (tg.problems || []).filter((p) => /^unknown id /.test(p)).length;
+  // dropped own-author entities are the post-filter working as designed, not a model failure
+  const probs = (tg.problem_count || 0) - (tg.problems || []).filter((p) => /^unknown id |^entity is own author\/site /.test(p)).length;
   if (failed / n > 0.02) return `${failed} of ${n} items failed`;
   if (probs / n > 0.15) return `${probs} validation problems for ${n} items`;
   return null;
@@ -189,15 +192,24 @@ export async function mergeAndRender(base, { months, briefingKeyOf, costs, ledge
   // 5. current.jsonl + overview.html
   const evNames = {};
   for (const k of keys) for (const e of readJson(join(ctx, 'briefings', `${k}-briefing.json`)).events) evNames[`${k}/${e.id}`] = e.name;
+  // mentioned_works: person/work entities (as tagged and as normalised) joined to the archive's own works
+  const workIndex = base.workIndex || buildWorkIndex(A);
+  const stats = { items_with_related: 0, related_links: 0, items_with_mentioned: 0, mentioned_links: 0, by_relation: {}, examples: [] };
   const current = all.map((r) => {
     const runId = `${base.runPrefix}-${r.month}`;
     const ev = r.event ? `${briefingKeyOf(r.month)}/${r.event}` : null;
-    return { key: r.key, path: r.path, date: r.date, type: r.type, month: r.month, ai_related: r.ai_related, themes: r.themes,
-      entities: normaliseEntities(aliases, r.entities), event: ev, event_name: ev ? evNames[ev] || null : null,
-      relevance: r.relevance, confidence: r.confidence, run_id: runId, prompt_version: 'topics-v2' };
+    const typed = normaliseTyped(aliases, r.entities);
+    const related = r.related || [];
+    const mentioned = mentionedWorks(workIndex, [...typed, ...(r.entities || []).filter((e) => e && typeof e === 'object')], r.key);
+    if (related.length) { stats.items_with_related++; stats.related_links += related.length; for (const x of related) stats.by_relation[x.relation] = (stats.by_relation[x.relation] || 0) + 1; }
+    if (mentioned.length) { stats.items_with_mentioned++; stats.mentioned_links += mentioned.length; if (stats.examples.length < 400) stats.examples.push({ key: r.key, month: r.month, via: mentioned.map((m) => `${m.via} -> ${m.key}`) }); }
+    return { key: r.key, path: r.path, date: r.date, month: r.month, type: r.type, ai_related: r.ai_related, themes: r.themes,
+      entities: typed.map((e) => e.name), entities_typed: typed, event: ev, event_name: ev ? evNames[ev] || null : null,
+      related, mentioned_works: mentioned.map((m) => m.key), confidence: r.confidence, run_id: runId, prompt_version: PROMPT_VERSION };
   }).sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
   writeFileSync(join(topics, 'current.jsonl'), current.map((x) => JSON.stringify(x)).join('\n') + '\n');
 
+  if (base.afterMerge) await base.afterMerge({ aliases, workIndex, current });
   const themes = readJson(themesPath).themes.map((t) => t.name);
   const counts = {}, totals = {};
   for (const r of current) for (const t of r.themes) { (counts[t] ||= {})[r.month] = (counts[t][r.month] || 0) + 1; totals[t] = (totals[t] || 0) + 1; }
@@ -215,13 +227,14 @@ export async function mergeAndRender(base, { months, briefingKeyOf, costs, ledge
   const html = renderOverview({
     generated: new Date().toISOString(), months: monthRows, themes: [...themes].sort((a, b) => (totals[b] || 0) - (totals[a] || 0)), counts, totals,
     entities: [...ents.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 60).map(([name, count]) => ({ name, count })),
-    extraCosts: [{ stage: 'Final themes (Opus)', usd: c.themes }, { stage: 'Entity merge (model pass)', usd: c.ents }],
+    extraCosts: [{ stage: 'Final themes (Opus)', usd: c.themes }, { stage: 'Entity merge (model pass)', usd: c.ents }].filter((x) => x.usd > 0),
     total: c.total, qaOverall: qaOverall.all, themeInfo, themesHref: '../context/themes.json', aliasesHref: '../context/entity-aliases.json',
   });
   writeFileSync(join(topics, 'overview.html'), html);
   ledger.finished = new Date().toISOString();
   ledger.costs = c;
   ledger.qa_overall = qaOverall;
+  ledger.links = stats;
   writeJson(ledgerPath, ledger);
-  return { months: months.length, items: current.length, total: +c.total.toFixed(4), qaOverall, failures: report ? report.failures : [] };
+  return { months: months.length, items: current.length, total: +c.total.toFixed(4), qaOverall, links: { ...stats, examples: stats.examples.slice(0, 10) }, failures: report ? report.failures : [] };
 }

@@ -1,8 +1,9 @@
 // Entity merge pass across months: one normalisation map raw -> canonical, each entry with provenance.
 // Rules run first (spelling variants, safe briefing aliases, unique longer name); one model call then groups
 // remaining variants. Raw entities stay in each month's tags.jsonl; the map is applied when writing current.jsonl.
-export const ENTITY_PROMPT_VERSION = 'entities-v1';
+export const ENTITY_PROMPT_VERSION = 'entities-v2';
 
+const nameOf = (e) => (e && typeof e === 'object' ? e.name : e);
 const squash = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 // Spelling key: case, spaces, hyphens/underscores, quotes and trailing punctuation ignored.
 export const spellingKey = (s) => squash(s).toLowerCase().replace(/[‘’'"“”]/g, '').replace(/[-_\s]+/g, ' ').replace(/[.,;:!]+$/, '').trim();
@@ -10,7 +11,7 @@ const words = (s) => spellingKey(s).split(/[\s/]+/).filter(Boolean);
 
 export function entityCounts(records) {
   const m = new Map();
-  for (const r of records) for (const e of r.entities || []) m.set(e, (m.get(e) || 0) + 1);
+  for (const r of records) for (const x of r.entities || []) { const e = nameOf(x); m.set(e, (m.get(e) || 0) + 1); }
   return m;
 }
 
@@ -63,7 +64,7 @@ export function ruleMap(counts, aliasMaps = []) {
   return { map, canonical: names.filter((n) => !map[n]) };
 }
 
-export const ENTITY_SYSTEM = `You clean up the names of entities (models, products, companies, people, papers, benchmarks, events) tagged in a reading archive about AI and other subjects, 2025-2026. Group names that refer to exactly the same thing written differently: abbreviations, missing company prefixes, nicknames, translations, typos.
+export const ENTITY_SYSTEM = `You clean up the names of entities (models, products, companies, people, papers, benchmarks, events) tagged in a reading archive about AI and many other subjects, 2022-2026. Group names that refer to exactly the same thing written differently: abbreviations, missing company prefixes, nicknames, translations, typos.
 Never merge different things: different model versions (GPT-6 and GPT-6.1 Sol; Claude Opus 5 and Claude Opus 5.5), a model family and one of its sizes or variants (Gemini 2.0 and Gemini 2.0 Flash), products of different companies that share a generic name (Google Deep Research and OpenAI Deep Research), different products of one company, a company and its product, a person or group of people and their organisation or the document or event they produced (Fields Medallists and their declaration). When unsure, leave it out.
 For each group give the canonical name (the fullest common form, copied from the list) and the variants (copied exactly from the list). Leave out names that have no variants.`;
 
@@ -125,6 +126,16 @@ export function resolveEntity(map, name) {
 
 export function normaliseEntities(map, ents) {
   const out = [];
-  for (const e of ents || []) { const n = resolveEntity(map, e); if (!out.includes(n)) out.push(n); }
+  for (const e of ents || []) { const n = resolveEntity(map, nameOf(e)); if (!out.includes(n)) out.push(n); }
+  return out;
+}
+
+// Same, keeping types ({name, type} in, {name, type} out); the first type given to a merged name wins.
+export function normaliseTyped(map, ents) {
+  const out = [];
+  for (const e of ents || []) {
+    const name = resolveEntity(map, nameOf(e));
+    if (!out.some((x) => x.name === name)) out.push({ name, type: (e && e.type) || 'other' });
+  }
   return out;
 }

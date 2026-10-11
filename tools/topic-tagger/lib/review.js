@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseWork } from './works.js';
+import { clip } from './text.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -15,7 +16,7 @@ export function exampleFor(archiveRoot, rec) {
     title: w ? w.title : '',
     date: rec.date,
     url: w ? w.url : '',
-    snippet: text.slice(0, 200) + (text.length > 200 ? '…' : ''),
+    snippet: clip(text, 201),
   };
 }
 

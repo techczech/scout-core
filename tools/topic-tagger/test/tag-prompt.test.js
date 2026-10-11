@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assembleSystem, fitPrompt, renderItem, buildTagParams, systemText, PROMPT_VERSION, TAG_SCHEMA, BLOCK_ORDER } from '../lib/tag-prompt.js';
+import { TAG_INSTRUCTIONS, assembleSystem, fitPrompt, renderItem, buildTagParams, systemText, PROMPT_VERSION, TAG_SCHEMA, BLOCK_ORDER } from '../lib/tag-prompt.js';
 import { assignShortIds } from '../lib/month-index.js';
 
 const fixed = (n = 1) => ({
@@ -15,7 +15,14 @@ const monthItems = (n) => assignShortIds(Array.from({ length: n }, (_, i) => ({
   key: `x:${i}`, date: '2026-09-10', type: 'tweet', author: `a${i}`, title: '', highlights: [{ text: `item ${i} ${'word '.repeat(30)}` }],
 })));
 
-test('prompt version is bumped to v2', () => assert.equal(PROMPT_VERSION, 'topics-v2'));
+test('prompt version is v3: no relevance judgement, entities are mentions, never the reader as author', () => {
+  assert.equal(PROMPT_VERSION, 'topics-v3');
+  assert.ok(!/relevan|why this|matters to this reader/i.test(TAG_INSTRUCTIONS + JSON.stringify(TAG_SCHEMA)));
+  assert.match(TAG_INSTRUCTIONS, /MENTIONED IN/);
+  assert.match(TAG_INSTRUCTIONS, /Never list the item's own author/);
+  assert.match(TAG_INSTRUCTIONS, /Dominik Lukeš, is never the author/);
+  assert.deepEqual(TAG_SCHEMA.properties.results.items.properties.entities.items.properties.type.enum, ['person', 'org', 'model', 'product', 'work', 'event', 'place', 'other']);
+});
 
 test('system blocks: fixed order, XML-wrapped, one cache breakpoint on the last block', () => {
   const s = assembleSystem({ month_index: 'idx', themes: 'th', instructions: 'ins', reader_profile: 'prof' });
@@ -68,7 +75,7 @@ test('request params: structured output schema, adaptive thinking, cached system
   const p = buildTagParams({ model: 'claude-haiku-5-5', effort: 'medium', system: assembleSystem({ instructions: 'i' }), batch: { items: [{ ...a, text: '<item id="m0001">x</item>' }] } });
   assert.equal(p.output_config.effort, 'medium');
   assert.equal(p.output_config.format.schema, TAG_SCHEMA);
-  assert.deepEqual(TAG_SCHEMA.properties.results.items.required, ['id', 'ai_related', 'themes', 'entities', 'event', 'relevance', 'confidence']);
+  assert.deepEqual(TAG_SCHEMA.properties.results.items.required, ['id', 'ai_related', 'themes', 'entities', 'event', 'related', 'confidence']);
   assert.equal(p.messages[0].content, '<item id="m0001">x</item>');
   assert.ok(p.system[0].cache_control);
 });
