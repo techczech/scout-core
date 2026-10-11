@@ -334,3 +334,107 @@ fn an_index_inside_another_registered_corpus_root_is_refused() {
     assert!(err.contains("inside"), "{err}");
     assert!(!b.path().join("idx").join("a.sqlite").exists());
 }
+
+// ---------- round 2 ----------
+
+#[cfg(unix)]
+#[test]
+fn an_index_file_hard_linked_to_a_corpus_file_is_refused_untouched() {
+    let (src, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(src.path(), "readings/works/w1.md", &work("1", "A proof."));
+    let inner = src.path().join("inner.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&inner).unwrap();
+        conn.execute_batch("CREATE TABLE keep (x INTEGER); INSERT INTO keep VALUES (1);")
+            .unwrap();
+    }
+    let before = fs::read(&inner).unwrap();
+    let c = Corpus::from_config(
+        cfg(src.path(), CorpusKind::HighlightScoutArchive),
+        data.path(),
+    );
+    fs::create_dir_all(c.index_path().parent().unwrap()).unwrap();
+    // Same filesystem is needed for a hard link; skip quietly when the
+    // two temp dirs are on different ones.
+    if fs::hard_link(&inner, c.index_path()).is_err() {
+        return;
+    }
+    for force in [false, true] {
+        let err = c.build_index(force).unwrap_err().to_string();
+        assert!(err.contains("hard link"), "{err}");
+        assert_eq!(fs::read(&inner).unwrap(), before, "force={force}");
+    }
+    // A hard-linked side file is refused too.
+    fs::remove_file(c.index_path()).unwrap();
+    let wal = format!("{}-wal", c.index_path().display());
+    fs::hard_link(src.path().join("readings/works/w1.md"), &wal).unwrap();
+    let work_before = fs::read(src.path().join("readings/works/w1.md")).unwrap();
+    assert!(c.build_index(false).is_err());
+    assert_eq!(
+        fs::read(src.path().join("readings/works/w1.md")).unwrap(),
+        work_before
+    );
+}
+
+fn tagged_work(id: &str, title: &str, author: &str, tags: &str) -> Vec<u8> {
+    format!(
+        "---\ntitle: {title}\nauthor: {author}\ntype: article\nsource_system: readwise\nsource_id: \"{id}\"\n---\n\n> A proof in work {id}.\n\nhighlighted_at: 2026-09-01 | tags: {tags} | color: yellow\n\n---\n"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn every_field_comparison_folds_both_sides() {
+    let (src, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(
+        src.path(),
+        "readings/works/w1.md",
+        &tagged_work("1", "The “Astra” paper", "Tim O'Reilly", "O'Reilly, plain"),
+    );
+    write(
+        src.path(),
+        "readings/works/w2.md",
+        &tagged_work("2", "Teachers’ notes", "Seán O’Reilly", "O’Reilly"),
+    );
+    let c = Corpus::from_config(
+        cfg(src.path(), CorpusKind::HighlightScoutArchive),
+        data.path(),
+    );
+    c.build_index(false).unwrap();
+    let n = |q: &str| search_keys(&c, q).len();
+    // tag: straight and curly on either side.
+    assert_eq!(n("tag:O’Reilly"), 2);
+    assert_eq!(n("tag:O'Reilly"), 2);
+    assert_eq!(n("tag:o'reilly"), 2);
+    assert_eq!(n("tag:plain"), 1);
+    // author and title (substring), with quotes and apostrophes.
+    assert_eq!(n("au:O’Reilly"), 2);
+    assert_eq!(n("au:\"o'reilly\""), 2);
+    assert_eq!(n("ti:\"\\\"astra\\\"\""), 1);
+    assert_eq!(n("ti:“teachers' notes”"), 1);
+    // Decomposed and composed forms of the same name.
+    assert_eq!(n("au:Sea\u{301}n"), 1);
+    // source, type and colour.
+    assert_eq!(n("source:READWISE"), 2);
+    assert_eq!(n("ty:Articles"), 2);
+    assert_eq!(n("co:Yellow"), 2);
+}
+
+#[test]
+fn constructs_are_read_only_at_token_start() {
+    use scout_corpus::search::Plan;
+    // A curly-quoted phrase is a phrase: no tag filter comes out of it.
+    let p = Plan::parse("“tag:like text”").unwrap();
+    assert!(p.tag.is_none());
+    assert_eq!(p.any_of.len(), 1);
+    assert_eq!(p.any_of[0].len(), 1, "one phrase term");
+    // A URL holding `theme:` is one term, not a theme filter.
+    let p = Plan::parse("https://example.org/theme:Foo").unwrap();
+    assert!(p.filter.theme.is_none());
+    assert!(p.filter.is_empty());
+    let p = Plan::parse("notes/theme:Foo proof").unwrap();
+    assert!(p.filter.is_empty());
+    assert!(p.has_positive());
+    let p = Plan::parse("x(theme:Foo) theme:Bar").unwrap();
+    assert_eq!(p.filter.theme.as_deref(), Some("Bar"));
+}

@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+pub mod scan;
 mod stopwords;
+pub use scan::{is_ws, quote_value, Token, DOUBLE_QUOTES, OPEN_QUOTES, WS};
 pub use stopwords::{is_stopword, without_stopwords, STOPWORDS};
 
 /// A `/regex/flags` token, as written.
@@ -109,11 +111,6 @@ pub struct Query {
     pub any_of: Vec<Vec<FreeTerm>>,
     /// Negated terms (`-x`), in order.
     pub not: Vec<FreeTerm>,
-    /// The free text the terms came from: the query with its fields and
-    /// regexes taken out (shortcut values such as `tw:karpathy`'s appended),
-    /// whitespace collapsed. [`parse_free`] of it gives `any_of` and `not`.
-    #[serde(skip)]
-    pub free_text: String,
 }
 
 impl Query {
@@ -153,131 +150,8 @@ const FILTER_TOKENS: &[&str] = &[
 
 const OR_THRESHOLD: usize = 3;
 
-/// A field token anchored at the start of the text: `key:value`, where a
-/// value is a quoted string (`"…"`, in which `\"` and `\\` are escapes) or
-/// a run of non-space characters.
-fn field_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        let mut keys: Vec<&str> = FILTER_TOKENS.to_vec();
-        keys.extend(TYPE_SHORTCUTS.iter().map(|(k, _)| *k));
-        Regex::new(&format!(
-            r#"(?i)^({}):("(?:\\.|[^"\\])+"|\S*)"#,
-            keys.join("|")
-        ))
-        .expect("field regex")
-    })
-}
-
-/// A `/regex/flags` token anchored at the start of the text.
-fn regex_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^/((?:\\.|[^/\\])+)/([a-z]*)").expect("regex regex"))
-}
-
-/// JS `\s` (the TS grammar's whitespace).
-fn is_space(c: char) -> bool {
-    ('\u{2000}'..='\u{200a}').contains(&c)
-        || "\t\n\u{0b}\u{0c}\r \u{a0}\u{1680}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}"
-            .contains(c)
-}
-
-/// JS `\w` without the `u` flag.
-fn is_word(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
-}
-
-/// A field value as typed: a quoted value loses its quotes and its
-/// escapes (`\"` → `"`, `\\` → `\`); any other value loses one leading and
-/// one trailing `"`.
-fn field_value(v: &str) -> String {
-    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
-        let inner = &v[1..v.len() - 1];
-        let mut out = String::with_capacity(inner.len());
-        let mut it = inner.chars().peekable();
-        while let Some(c) = it.next() {
-            if c == '\\' {
-                if let Some(&n) = it.peek() {
-                    if n == '"' || n == '\\' {
-                        out.push(n);
-                        it.next();
-                        continue;
-                    }
-                }
-            }
-            out.push(c);
-        }
-        return out;
-    }
-    strip_quotes(v)
-}
-
-/// Write a field value so that [`parse_query`] reads it back unchanged:
-/// bare when it is non-empty and has no space, `"` or `\`, else quoted
-/// with `"` and `\` escaped.
-pub fn quote_value(v: &str) -> String {
-    if !v.is_empty() && !v.chars().any(|c| is_space(c) || c == '"' || c == '\\') {
-        return v.to_string();
-    }
-    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-/// One left-to-right pass: quoted phrases are kept whole (nothing inside
-/// them is a field or a regex); a `/regex/flags` token must start and end a
-/// whitespace-separated token; a field starts at an ASCII word boundary.
-/// Spans never overlap. Returns the remaining free text (each field or
-/// regex replaced by a space), the regexes and the `(key, value)` fields,
-/// all in order.
-fn scan(raw: &str) -> (String, Vec<RegexFilter>, Vec<(String, String)>) {
-    let mut rest = String::with_capacity(raw.len());
-    let mut regexes = Vec::new();
-    let mut fields = Vec::new();
-    let mut prev: Option<char> = None;
-    let mut i = 0;
-    while i < raw.len() {
-        let tail = &raw[i..];
-        let c = tail.chars().next().expect("char");
-        if c == '"' {
-            if let Some(j) = tail[1..].find('"') {
-                let end = i + 1 + j + 1;
-                rest.push_str(&raw[i..end]);
-                prev = Some('"');
-                i = end;
-                continue;
-            }
-        } else if c == '/' && prev.is_none_or(is_space) {
-            if let Some(m) = regex_re().captures(tail) {
-                let len = m[0].len();
-                if tail[len..].chars().next().is_none_or(is_space) {
-                    regexes.push(RegexFilter {
-                        source: m[1].to_string(),
-                        flags: m[2].to_string(),
-                    });
-                    rest.push(' ');
-                    prev = Some(' ');
-                    i += len;
-                    continue;
-                }
-            }
-        } else if is_word(c) && !prev.is_some_and(is_word) {
-            if let Some(m) = field_re().captures(tail) {
-                fields.push((m[1].to_ascii_lowercase(), field_value(&m[2])));
-                rest.push(' ');
-                prev = Some(' ');
-                i += m[0].len();
-                continue;
-            }
-        }
-        rest.push(c);
-        prev = Some(c);
-        i += c.len_utf8();
-    }
-    (rest, regexes, fields)
-}
-
-fn free_token_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#""[^"]*"|\S+"#).expect("free token regex"))
+fn is_field_name(name: &str) -> bool {
+    FILTER_TOKENS.contains(&name) || TYPE_SHORTCUTS.iter().any(|(k, _)| *k == name)
 }
 
 fn word_star_re() -> &'static Regex {
@@ -335,12 +209,6 @@ fn set_field(p: &mut ParsedQuery, field: &str, value: String) {
     *slot = Some(value);
 }
 
-/// Remove one leading and one trailing `"` (TS `replace(/^"|"$/g, "")`).
-fn strip_quotes(v: &str) -> String {
-    let v = v.strip_prefix('"').unwrap_or(v);
-    v.strip_suffix('"').unwrap_or(v).to_string()
-}
-
 fn esc_fts(term: &str) -> String {
     term.replace('"', "")
 }
@@ -360,11 +228,13 @@ enum Seq {
     And,
 }
 
-fn build_free_text(text: &str, partial: bool) -> FreeText {
-    let tokens: Vec<&str> = free_token_re()
-        .find_iter(text)
-        .map(|m| m.as_str())
-        .collect();
+/// A free-text token: a phrase, or a plain term as typed.
+enum Free {
+    Phrase { negated: bool, text: String },
+    Term(String),
+}
+
+fn build_free_text(tokens: &[Free], partial: bool) -> FreeText {
     let mut positives: Vec<String> = Vec::new();
     let mut positive_terms: Vec<String> = Vec::new();
     let mut negatives: Vec<String> = Vec::new();
@@ -373,62 +243,65 @@ fn build_free_text(text: &str, partial: bool) -> FreeText {
     let mut any_of: Vec<Vec<FreeTerm>> = vec![vec![]];
     let mut not: Vec<FreeTerm> = Vec::new();
 
-    let is_op_word =
-        |t: &str| t == "|" || t.eq_ignore_ascii_case("and") || t.eq_ignore_ascii_case("or");
-    let has_content = tokens
-        .iter()
-        .filter(|t| !t.starts_with('"') && !is_op_word(t))
-        .any(|t| !is_stopword(t.strip_prefix('-').unwrap_or(t)));
+    let is_or = |t: &str| t == "|" || t.eq_ignore_ascii_case("or");
+    let is_and = |t: &str| t.eq_ignore_ascii_case("and");
+    // Bare stopwords are dropped unless every bare word is one.
+    let has_content = tokens.iter().any(|t| match t {
+        Free::Term(t) if !is_or(t) && !is_and(t) => !is_stopword(t.strip_prefix('-').unwrap_or(t)),
+        _ => false,
+    });
 
-    for raw in &tokens {
-        let upper = raw.to_uppercase();
-        if *raw == "|" || upper == "OR" {
-            explicit_op = true;
-            seq.push(Seq::Or);
-            any_of.push(vec![]);
-            continue;
-        }
-        if upper == "AND" {
-            explicit_op = true;
-            seq.push(Seq::And);
-            continue;
-        }
-        let mut tok: &str = raw;
-        let mut negate = false;
-        if tok.starts_with('-') && tok.len() > 1 {
-            negate = true;
-            tok = &tok[1..];
-        }
-        let quoted = tok.starts_with('"') && tok.ends_with('"');
-        let is_bare = !quoted && !tok.ends_with('*');
-        if has_content && is_bare && is_stopword(tok) {
-            continue;
-        }
-        let (fts_term, clean_term, form) =
-            if tok.starts_with('"') && tok.ends_with('"') && tok.len() >= 2 {
-                let clean = esc_fts(&tok[1..tok.len() - 1]).trim().to_string();
+    for token in tokens {
+        let (fts_term, clean_term, form, negate) = match token {
+            Free::Phrase { negated, text } => {
+                let clean = scan::trim_ws(&esc_fts(text)).to_string();
                 if clean.is_empty() {
                     continue;
                 }
-                (format!("\"{clean}\""), clean, TermForm::Phrase)
-            } else if word_star_re().is_match(tok) {
-                (
-                    tok.to_string(),
-                    tok[..tok.len() - 1].to_string(),
-                    TermForm::Prefix,
-                )
-            } else {
-                let clean = esc_fts(tok).trim().to_string();
-                if clean.is_empty() {
+                (format!("\"{clean}\""), clean, TermForm::Phrase, *negated)
+            }
+            Free::Term(raw) => {
+                if is_or(raw) {
+                    explicit_op = true;
+                    seq.push(Seq::Or);
+                    any_of.push(vec![]);
                     continue;
                 }
-                let fts = if partial && word_re().is_match(&clean) {
-                    format!("{clean}*")
+                if is_and(raw) {
+                    explicit_op = true;
+                    seq.push(Seq::And);
+                    continue;
+                }
+                let mut tok: &str = raw;
+                let mut negate = false;
+                if tok.starts_with('-') && tok.len() > 1 {
+                    negate = true;
+                    tok = &tok[1..];
+                }
+                if has_content && !tok.ends_with('*') && is_stopword(tok) {
+                    continue;
+                }
+                if word_star_re().is_match(tok) {
+                    (
+                        tok.to_string(),
+                        tok[..tok.len() - 1].to_string(),
+                        TermForm::Prefix,
+                        negate,
+                    )
                 } else {
-                    format!("\"{clean}\"")
-                };
-                (fts, clean, TermForm::Word)
-            };
+                    let clean = scan::trim_ws(&esc_fts(tok)).to_string();
+                    if clean.is_empty() {
+                        continue;
+                    }
+                    let fts = if partial && word_re().is_match(&clean) {
+                        format!("{clean}*")
+                    } else {
+                        format!("\"{clean}\"")
+                    };
+                    (fts, clean, TermForm::Word, negate)
+                }
+            }
+        };
         if negate {
             not.push(FreeTerm {
                 text: clean_term.clone(),
@@ -506,38 +379,38 @@ fn build_free_text(text: &str, partial: bool) -> FreeText {
 /// changes the `fts` string.
 pub fn parse_with(raw: &str, partial: bool) -> Query {
     let mut parsed = ParsedQuery::default();
-    let (rest, regexes, fields) = scan(raw);
-    parsed.regexes = regexes;
+    let mut free: Vec<Free> = Vec::new();
     let mut shortcut_text: Vec<String> = Vec::new();
-    for (key, value) in fields {
-        match key.as_str() {
-            "i" => parsed.has_image = true,
-            "zo" => parsed.zotero = true,
-            "source" => {
-                if value.to_lowercase().contains("zotero") {
-                    parsed.zotero = true;
+    for token in scan::tokenize(raw, is_field_name) {
+        match token {
+            Token::Phrase { negated, text } => free.push(Free::Phrase { negated, text }),
+            Token::Term(t) => free.push(Free::Term(t)),
+            Token::Regex { source, flags } => parsed.regexes.push(RegexFilter { source, flags }),
+            Token::Field { name, value } => match name.as_str() {
+                "i" => parsed.has_image = true,
+                "zo" => parsed.zotero = true,
+                "source" => {
+                    if value.to_lowercase().contains("zotero") {
+                        parsed.zotero = true;
+                    }
+                    parsed.source = Some(value);
                 }
-                parsed.source = Some(value);
-            }
-            _ => match shortcut(&key) {
-                Some(t) => {
-                    parsed.type_ = Some(t.to_string());
-                    if !value.is_empty() {
+                _ => match shortcut(&name) {
+                    Some(t) => {
+                        parsed.type_ = Some(t.to_string());
                         shortcut_text.push(value);
                     }
-                }
-                None => set_field(&mut parsed, &canonical(&key), value),
+                    None => set_field(&mut parsed, &canonical(&name), value),
+                },
             },
         }
     }
-    let mut joined = vec![rest];
-    joined.extend(shortcut_text);
-    let free_text = joined
-        .join(" ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let free = build_free_text(&free_text, partial);
+    // A type shortcut's value is free text, after everything else
+    // (`tw:karpathy` = tweets + the word karpathy).
+    for v in &shortcut_text {
+        free.extend(scan::split_ws(v).map(|p| Free::Term(p.to_string())));
+    }
+    let free = build_free_text(&free, partial);
     parsed.fts = free.fts;
     parsed.has_positive = free.has_positive;
     parsed.positive_terms = free.positive_terms;
@@ -546,17 +419,7 @@ pub fn parse_with(raw: &str, partial: bool) -> Query {
         parsed,
         any_of: free.any_of,
         not: free.not,
-        free_text,
     }
-}
-
-/// The positive AND-groups and the negated terms of free text alone (no
-/// fields or regexes are read from it). An engine that rewrites the free
-/// text (quote unification, say) without touching field values parses the
-/// rewritten [`Query::free_text`] with this.
-pub fn parse_free(text: &str) -> (Vec<Vec<FreeTerm>>, Vec<FreeTerm>) {
-    let free = build_free_text(text, false);
-    (free.any_of, free.not)
 }
 
 /// TS `parseSearch(raw, partial)`.
@@ -581,7 +444,7 @@ fn all_digits(s: &str, n: usize) -> bool {
 /// `-2016`, `2016-05`, `2016-06-23`) as a half-open range. Like JS `Date`,
 /// a day past the month's end (1–31) rolls into the next month.
 pub fn date_range(value: &str) -> Option<DateRange> {
-    let clean = value.trim();
+    let clean = scan::trim_ws(value);
     let parts: Vec<&str> = clean.split('-').collect();
     let range = |start: Option<String>, end: Option<String>| Some(DateRange { start, end });
     match parts.as_slice() {

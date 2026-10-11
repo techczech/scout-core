@@ -119,13 +119,11 @@ pub struct Plan {
 
 impl Plan {
     pub fn parse(query: &str) -> Result<Plan> {
-        // Field values stay as typed (topic labels may hold curly quotes);
-        // only the free text has its quotes unified, so curly-quoted
-        // phrases still work.
+        // Field values stay as typed; they are compared under
+        // `normalize::fold`. Curly-quoted phrases are the grammar's own.
         let q = scout_query::parse_query(query);
-        let (free_any, free_not) =
-            scout_query::parse_free(&normalize::unify_quotes_str(&q.free_text));
-        let mut any_of: Vec<Vec<Term>> = free_any
+        let mut any_of: Vec<Vec<Term>> = q
+            .any_of
             .iter()
             .map(|g| {
                 let mut terms: Vec<Term> = Vec::new();
@@ -144,7 +142,7 @@ impl Plan {
             }
         }
         any_of.retain(|g| !g.is_empty());
-        let not = free_not.iter().flat_map(Term::from_free).collect();
+        let not = q.not.iter().flat_map(Term::from_free).collect();
         let p = &q.parsed;
         let mut filter = DocFilter::default();
         let corpora = crate::filter::apply_query_fields(p, &mut filter)?;
@@ -289,13 +287,15 @@ impl Plan {
         original: &str,
     ) -> bool {
         if let Some(t) = &self.tag {
-            let hit = |s: &String| s.eq_ignore_ascii_case(t.trim());
+            let want = normalize::fold(t);
+            let hit = |s: &String| normalize::fold(s) == want;
             if !tags.iter().any(hit) && !doc.topics.iter().any(hit) {
                 return false;
             }
         }
         if let Some(c) = &self.color {
-            if !color.is_some_and(|x| x.eq_ignore_ascii_case(c.trim())) {
+            let want = normalize::fold(c);
+            if color.is_none_or(|x| normalize::fold(x) != want) {
                 return false;
             }
         }

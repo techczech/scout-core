@@ -460,10 +460,25 @@ fn totals(conn: &Connection) -> Result<(i64, i64, i64)> {
     )?)
 }
 
+/// How many names a file has (Unix `nlink`); 1 where the platform does not
+/// say.
+fn link_count(m: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::MetadataExt::nlink(m)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = m;
+        1
+    }
+}
+
 /// Refuse a SQLite target before anything opens, writes or deletes it:
 /// the file or one of its side files (`-wal`, `-shm`, `-journal`) is a
-/// symlink, or its real location (symlinked folders resolved) is inside
-/// one of `roots`. Sources are never written (invariant 1).
+/// symlink or has more than one hard link (it may also be a source file
+/// under another name), or its real location (symlinked folders resolved)
+/// is inside one of `roots`. Sources are never written (invariant 1).
 pub(crate) fn check_target(path: &Path, roots: &[PathBuf]) -> Result<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let p = PathBuf::from(format!("{}{suffix}", path.display()));
@@ -471,6 +486,11 @@ pub(crate) fn check_target(path: &Path, roots: &[PathBuf]) -> Result<()> {
             Ok(m) if m.file_type().is_symlink() => bail!(
                 "index file {} is a symlink; refusing to open it (remove the link, then build again)",
                 p.display()
+            ),
+            Ok(m) if link_count(&m) > 1 => bail!(
+                "index file {} has a hard link elsewhere ({} names); refusing to open it (remove it, then build again)",
+                p.display(),
+                link_count(&m)
             ),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

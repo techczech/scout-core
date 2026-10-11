@@ -38,26 +38,26 @@ Only the set keys appear; `{}` means unfiltered.
 
 | key | type | meaning |
 |---|---|---|
-| `lang` | string[] | any-of, case-insensitive (`--lang en,cs`) |
-| `genre` | string[] | any-of, case-insensitive (`--genre essay,note`) |
+| `lang` | string[] | any-of (`--lang en,cs`) |
+| `genre` | string[] | any-of (`--genre essay,note`) |
 | `after` | string | inclusive lower bound; `YYYY`/`YYYY-MM` mean the first day of that period |
 | `before` | string | exclusive upper bound; `--before 2016` = up to 31 Dec 2015 |
 | `year` | int | the document's year (`--y 2016`) |
 | `source` | string[] | any-of the source system: `readwise`, `x`, `zotero` (`--source x`); Dominik's own tweets are `x` |
 | `kind` | string[] | any-of the document type (`tweet`, `article`, `book` …); a plural `s` is ignored (`ty:articles` matches `article`) |
-| `author` | string | case-insensitive substring of the author |
-| `title` | string | case-insensitive substring of the title |
-| `theme` | string | topic layer: the document carries this theme (exact name, case-insensitive) |
-| `entity` | string | topic layer: the document carries this entity (exact normalised name, case-insensitive) |
-| `event` | string | topic layer: the document's event id (`2026-09/E21`, case-insensitive) |
+| `author` | string | substring of the author |
+| `title` | string | substring of the title |
+| `theme` | string | topic layer: the document carries this theme (exact name) |
+| `entity` | string | topic layer: the document carries this entity (exact normalised name) |
+| `event` | string | topic layer: the document's event id (`2026-09/E21`) |
 | `ai` | bool | topic layer: the document's `ai_related` |
 | `month` | string | topic layer month: `YYYY-MM`, or `YYYY` for any month of that year |
 
-A document without a parseable date fails every date filter. A document without topic tags fails every topic filter, `ai:false` included. `source`, `kind`, `author`, `title` and the topic fields come from query fields (`source: ty: au: ti: theme: entity: event: ai: month:`) and slices; the analytics commands take `--source`.
+Every text comparison (equality or substring) is made under the fold of "Query grammar" below, on both the stored value and the filter value. A document without a parseable date fails every date filter. A document without topic tags fails every topic filter, `ai:false` included. `source`, `kind`, `author`, `title` and the topic fields come from query fields (`source: ty: au: ti: theme: entity: event: ai: month:`) and slices; the analytics commands take `--source`.
 
 ### Slice expressions (`collocates --compare`, `keyness --a/--b`)
 
-One quoted string, parsed by the `@scout/query` grammar (`crates/scout-query`); bare words are corpus ids:
+One quoted string, read by the query grammar ("Query grammar" below); bare words are corpus ids:
 
 | term | meaning |
 |---|---|
@@ -90,9 +90,30 @@ A slice carries only its own terms; it does not inherit the command's filter fla
 - `corpus`: every corpus in scope, zero counts included, by count desc, then key.
 - Without `--dist` the field is absent.
 
+## Query grammar (normative)
+
+One grammar, two implementations that must agree exactly: Rust `crates/scout-query` (`src/scan.rs`) and TS `packages/scout-query` (`src/scan.ts`). Neither uses a regular expression or a built-in whitespace class for tokenizing. Parity is held by `packages/scout-query/fixtures/grammar-cases.json` (hand-written cases, one or more per rule below) and `fixtures/generated-cases.json` (600 seeded random queries and 400 labels made by `packages/scout-query/generated.test.ts`; the Rust test `crates/scout-query/tests/fixtures.rs` must reproduce every TS result).
+
+**WS** (whitespace) is exactly this set of code points, a constant (`WS`) in both implementations: U+0009–U+000D (tab, LF, VT, FF, CR), U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. Nothing else separates tokens (U+FEFF does not).
+
+**Double-quote variants**: `"` U+0022, `“` U+201C, `”` U+201D, `„` U+201E, `‟` U+201F. **Opening quotes**: `"`, `“`, `„`.
+
+**Tokens.** The query is read left to right; WS separates tokens. A construct is recognised ONLY at a token start (the start of the query or right after WS), tried in this order:
+
+1. **Phrase**: an opening quote, then text up to the next double-quote variant (any of them closes). Inside, `\` before a double-quote variant or before another `\` makes that character literal; any other `\` is itself. One `-` directly before the opening quote negates the phrase. The text is phrase text: nothing inside is a field, a regex or an operator. An opening quote that is never closed is not a phrase (rule 4 applies).
+2. **Regex**: `/body/flags`, where `body` is one or more characters up to the next unescaped `/` (`\` escapes the next character; WS is allowed in the body), `flags` is zero or more of `a`–`z`, and the next character is WS or the end. Anything else starting with `/` is a term.
+3. **Field**: `name:value`, where `name` (everything before the first `:` of the token, ASCII case ignored) is a known field name. The value is either quoted (rule 1's quote rules, no negation) or bare: everything up to the next WS, taken literally, possibly empty. An unknown name makes the whole token a term.
+4. **Term**: everything up to the next WS. So `https://example.org/theme:Foo`, `km/h`, `(au:x)`, `foo-au:bar` and `-au:x` are single terms; a leading `-` negates a term; `OR`, `|` and `AND` (ASCII case ignored) are operators; `x*` is a prefix.
+
+Whatever directly follows a closed phrase or quoted value, up to the next WS, is a plain term (rule 4) and never a construct: `theme:"v"tail` is the field plus the term `tail`.
+
+**Writing a value** (`scout_corpus::topics::field_query(field, value)`, `scout_query::quote_value`, TS `quoteValue`): bare when the value is non-empty and holds no WS code point, no double-quote variant and no `\`; otherwise `"…"` with a `\` before every double-quote variant and every `\`. A value written this way reads back unchanged (`entity:"GPT \"Astra\""`).
+
+**Fold (matching).** Every field value is compared under one function (`scout_corpus::normalize::fold`), applied to the stored value and to the query value alike, for every text field (`tag: co: au: ti: ty: lang: genre: source: theme: entity: event:`) and for facet grouping: Unicode NFC → apostrophe variants (`‘ ’ ‚ ‛ ′ ʼ`) to `'` and double-quote variants (plus `″`) to `"` → each run of WS to one space, none at the ends → lowercase. `tag: co: lang: genre: source: theme: entity: event:` are equality under the fold; `ty:` equality after dropping a final `s`; `au: ti:` substring. Not folded, because they are parsed values or identifiers: `after: before: y: month:` (dates), `ai:` (boolean), `in:` (corpus ids, exact). Field values are kept as typed in `plan` and in the JSON `filters`.
+
 ## `scout search <query>` — schema_version 1
 
-The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates/scout-query`, one shared fixture file `packages/scout-query/fixtures/grammar-cases.json`):
+The query is read by the grammar above ("Query grammar"); this is what its constructs mean in `scout search`:
 
 | syntax | meaning in `scout search` |
 |---|---|
@@ -106,7 +127,7 @@ The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates
 | `after: before: y: lang: genre: source: zo: ty: tw: bo: … au: ti:` | document filters (the `filters` object) |
 | `tag:linguistics` | the highlight's tags, or the document's `topics` |
 | `co:yellow` | the highlight's colour |
-| `theme:"AI and mathematics"` | topic layer: documents carrying the theme (exact name, case-insensitive; quote names with spaces) |
+| `theme:"AI and mathematics"` | topic layer: documents carrying the theme (exact name; quote names with spaces) |
 | `entity:"GPT-6 Astra"` | topic layer: documents carrying the entity (exact normalised name; `entity:Astra` does not match it) |
 | `event:2026-09/E21` | topic layer: documents linked to the event (ids are per month, so the month part is required) |
 | `ai:true`, `ai:false` | topic layer: `ai_related` (`yes`/`no`/`1`/`0` too; anything else is a usage error) |
@@ -114,7 +135,6 @@ The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates
 
 Each field takes one value; a repeated field keeps the last. `tag:` is unchanged: it never matches topic-layer themes or entities, because those are model-made and `tag:` holds the reader's own labels (Readwise tags) and the writing's frontmatter `topics`.
 
-How the grammar reads a query: one left-to-right pass. A `"quoted phrase"` is kept whole (nothing inside it is a field or a regex); a `/regex/flags` is a whole whitespace-separated token (so `km/h` and URLs are words); a field `key:value` starts at a word boundary. A field value is a run of non-space characters, or a quoted string in which `\"` is a literal `"` and `\\` a literal `\` (`entity:"GPT \"Astra\""`). Field values are kept as typed; only the free text has curly quotes unified. Library: `scout_corpus::topics::field_query(field, value)` (Rust) and `quoteValue` (TS `@scout/query`) write a value so it reads back unchanged.
 `i:` (has image) has no meaning here and is listed in `plan.ignored`. A query with filters or a regex but no positive term lists every passage that passes them (score 0).
 
 ```json
@@ -198,7 +218,7 @@ A corpus folder may hold a topic layer: `analysis/topics/current.jsonl` (one mod
 - **Corrections.** One JSON object per line with `key` and any of `themes` (string list), `entities` (string list), `event` (string or null), `event_name`, `ai_related` (bool or null). Each field present replaces the layer's value for that key; later lines win; other keys (`by`, `date`, `note`) are provenance and are not read. A correction for a key the layer lacks is counted (`corrections_unmatched`), not applied; a line with a wrongly typed field is skipped whole (`corrections_bad_lines`). An event changed without an `event_name` takes the name the layer gives that event id.
 - **Month.** The item's `date` (its latest highlight) cut to `YYYY-MM`, else the layer's own `month` when that is `YYYY-MM`. `month:` filters on it and the `month` facet counts it.
 - **Unparseable layer lines** (the file may be mid-write) are skipped and counted (`bad_lines`); a key repeated in the layer keeps its last line.
-- **Matching** for themes, entities and event ids is exact under one fold, applied alike to the stored label, the query value and facet grouping: Unicode NFC, curly quotes and apostrophes unified to `"` and `'`, whitespace runs to one space, trimmed, lowercased (`entity:O'Reilly` matches `O’Reilly`). So every facet value, written with `field_query`, gives back exactly its `count` as `total_documents` (tested over labels with curly and straight quotes, apostrophes, backslashes, slashes and commas).
+- **Matching** for themes, entities and event ids is equality under the fold of "Query grammar" (`entity:O'Reilly` matches `O’Reilly`). So every facet value, written with `field_query`, gives back exactly its `count` as `total_documents` (tested over 400 generated labels with every whitespace code point, curly and straight quotes, apostrophes, backslashes, slashes and colons).
 - **Reading limits.** Both files are streamed line by line; a line over 1 MiB (`topics::MAX_LINE_BYTES`) or not valid UTF-8 is skipped and counted (`bad_lines`, `corrections_bad_lines`), never applied.
 - **Keys.** A highlights work's key comes from its frontmatter `source_system` + `source_id`; a markdown-folder document's from the same frontmatter keys when it has them (which also sets its `source:`); a tweet's is `x:<tweet id>`.
 
@@ -595,7 +615,7 @@ What each normalisation stage changed, read from the source files (read-only; no
 
 `full` is true on a first build, `--force`, or an engine or registry-entry change. `elapsed_ms` is the one non-deterministic field.
 
-A build refuses (exit 2, nothing opened or deleted) when the index file or one of its `-wal`/`-shm`/`-journal` side files is a symlink, or when the index's real location is inside any registered corpus folder; the vector store is checked the same way.
+A build refuses (exit 2, nothing opened or deleted) when the index file or one of its `-wal`/`-shm`/`-journal` side files is a symlink or has more than one hard link, or when the index's real location is inside any registered corpus folder; the vector store is checked the same way.
 
 A corpus whose folder has a topic layer adds a `topics` object (see "Topic layer"):
 

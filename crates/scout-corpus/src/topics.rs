@@ -84,13 +84,7 @@ pub struct TopicInfo {
 /// space, trimmed, lowercased. So `O’Reilly` = `o'reilly` and
 /// `GPT “Astra”` = `gpt "astra"`.
 pub fn fold(s: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    let unified = crate::normalize::unify_quotes_str(&s.nfc().collect::<String>());
-    unified
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    crate::normalize::fold(s)
 }
 
 impl TopicInfo {

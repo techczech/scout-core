@@ -43,3 +43,70 @@ fn date_range_cases_match_the_ts_package() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// A parse result without its default-valued keys, as the generated
+/// fixture stores it.
+fn sparse(v: Value) -> Value {
+    let Value::Object(m) = v else { return v };
+    Value::Object(
+        m.into_iter()
+            .filter(|(_, v)| match v {
+                Value::Null | Value::Bool(false) => false,
+                Value::String(s) => !s.is_empty(),
+                Value::Array(a) => !a.is_empty(),
+                _ => true,
+            })
+            .collect(),
+    )
+}
+
+/// Parity by generation: 600 seeded random queries and 400 labels made by
+/// `packages/scout-query/generated.test.ts`; this port must give exactly
+/// the TS results.
+#[test]
+fn generated_cases_match_the_ts_package() {
+    let text = include_str!("../../../packages/scout-query/fixtures/generated-cases.json");
+    let f: Value = serde_json::from_str(text).unwrap();
+    let cases = f["parse"].as_array().unwrap();
+    assert!(cases.len() >= 500);
+    let mut failures = Vec::new();
+    for c in cases {
+        let input = c["input"].as_str().unwrap();
+        let partial = c["partial"].as_bool().unwrap();
+        let got = sparse(serde_json::to_value(parse_search(input, partial)).unwrap());
+        if got != c["expected"] {
+            failures.push(format!(
+                "{input:?} partial={partial}\n  want {}\n  got  {}",
+                c["expected"], got
+            ));
+        }
+    }
+    let labels = f["quote"].as_array().unwrap();
+    assert!(labels.len() >= 300);
+    for c in labels {
+        let label = c["label"].as_str().unwrap();
+        let quoted = scout_query::quote_value(label);
+        if quoted != c["quoted"].as_str().unwrap() {
+            failures.push(format!(
+                "quote_value({label:?}): want {} got {quoted:?}",
+                c["quoted"]
+            ));
+        }
+        for q in [
+            format!("theme:{quoted}"),
+            format!("x theme:{quoted} y"),
+            format!("theme:{quoted}\u{2003}/re/"),
+        ] {
+            let got = parse_search(&q, false).theme;
+            if got.as_deref() != Some(label) {
+                failures.push(format!("{q:?}: theme {got:?}, want {label:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures\n{}",
+        failures.len(),
+        failures[..failures.len().min(8)].join("\n")
+    );
+}

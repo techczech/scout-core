@@ -2,6 +2,8 @@
 // highlighting (so "the", "of", etc. don't dominate). Quoted phrases keep them,
 // and an all-stopword query falls back to matching them (see buildFreeText).
 
+import { trimWs } from "./scan";
+
 export const STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can",
   "could", "did", "do", "does", "for", "from", "had", "has", "have", "he",
@@ -15,7 +17,7 @@ export const STOPWORDS = new Set([
 ]);
 
 export function isStopword(term: string): boolean {
-  return STOPWORDS.has(term.trim().toLowerCase());
+  return STOPWORDS.has(trimWs(term).toLowerCase());
 }
 
 /** Drop stop words from a term list, unless that would empty it. */

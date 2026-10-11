@@ -6,6 +6,9 @@
 
 import type { RegexFilter, SearchMode, SortMode } from "./types";
 import { isStopword } from "./stopwords";
+import { splitWs, tokenize, trimWs } from "./scan";
+
+export { quoteValue } from "./scan";
 
 const TYPE_SHORTCUTS: Record<string, string> = {
   art: "articles",
@@ -39,11 +42,7 @@ const FILTER_TOKENS = [
   ...Object.keys(TYPE_SHORTCUTS),
 ];
 
-// Anchored (sticky) forms for the one-pass scanner in `scan`. A field value
-// is a quoted string (`\"` and `\\` are escapes inside it) or a run of
-// non-space characters.
-const FIELD_RE = new RegExp(`(${FILTER_TOKENS.join("|")}):("(?:\\\\.|[^"\\\\])+"|\\S*)`, "iy");
-const REGEX_RE = /\/((?:\\.|[^/\\])+)\/([a-z]*)/y;
+const FIELD_NAMES = new Set(FILTER_TOKENS);
 const OR_THRESHOLD = 3;
 
 export interface ParsedQuery {
@@ -134,7 +133,7 @@ function canonical(key: string): keyof ParsedQuery | "after" | "before" {
 /** A `y:` / `date:` value as a half-open ISO range: `start` inclusive, `end`
  * exclusive. `null` when the value is not a date form. */
 export function dateRange(value: string): { start?: string; end?: string } | null {
-  const clean = value.trim();
+  const clean = trimWs(value);
   const year = clean.match(/^(\d{4})$/);
   if (year) {
     const y = Number(year[1]);
@@ -173,82 +172,6 @@ export function dateRange(value: string): { start?: string; end?: string } | nul
   return null;
 }
 
-const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c);
-const isWord = (c: string | undefined) => c !== undefined && /\w/.test(c);
-
-/** A field value as typed: a quoted value loses its quotes and its escapes
- * (`\"` -> `"`, `\\` -> `\`); any other value loses one leading and one
- * trailing `"`. */
-function fieldValue(v: string): string {
-  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
-    return v.slice(1, -1).replace(/\\(["\\])/g, "$1");
-  }
-  return v.replace(/^"|"$/g, "");
-}
-
-/** Write a field value so that `parseSearch` reads it back unchanged: bare
- * when it has no space, quote or backslash, else quoted with `"` and `\`
- * escaped. */
-export function quoteValue(v: string): string {
-  if (v && !/[\s"\\]/.test(v)) return v;
-  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-/** One left-to-right pass: quoted phrases are kept whole (nothing inside is
- * a field or a regex); a `/regex/flags` token must start and end a
- * whitespace-separated token; a field starts at an ASCII word boundary.
- * Spans never overlap. Each field or regex becomes a space in `rest`. */
-function scan(raw: string): {
-  rest: string;
-  regexes: RegexFilter[];
-  fields: Array<[string, string]>;
-} {
-  let rest = "";
-  const regexes: RegexFilter[] = [];
-  const fields: Array<[string, string]> = [];
-  let prev: string | undefined;
-  let i = 0;
-  while (i < raw.length) {
-    const c = raw[i];
-    if (c === '"') {
-      const j = raw.indexOf('"', i + 1);
-      if (j >= 0) {
-        rest += raw.slice(i, j + 1);
-        prev = '"';
-        i = j + 1;
-        continue;
-      }
-    } else if (c === "/" && (prev === undefined || isSpace(prev))) {
-      REGEX_RE.lastIndex = i;
-      const m = REGEX_RE.exec(raw);
-      if (m) {
-        const end = i + m[0].length;
-        if (end >= raw.length || isSpace(raw[end])) {
-          regexes.push({ source: m[1], flags: m[2] });
-          rest += " ";
-          prev = " ";
-          i = end;
-          continue;
-        }
-      }
-    } else if (isWord(c) && !isWord(prev)) {
-      FIELD_RE.lastIndex = i;
-      const m = FIELD_RE.exec(raw);
-      if (m) {
-        fields.push([m[1].toLowerCase(), fieldValue(m[2])]);
-        rest += " ";
-        prev = " ";
-        i += m[0].length;
-        continue;
-      }
-    }
-    rest += c;
-    prev = c;
-    i += 1;
-  }
-  return { rest, regexes, fields };
-}
-
 function escFts(term: string): string {
   return term.replace(/"/g, "");
 }
@@ -260,8 +183,16 @@ interface FreeText {
   negatives: string[];
 }
 
-function buildFreeText(text: string, partial: boolean): FreeText {
-  const tokens = text.match(/"[^"]*"|\S+/g) || [];
+/** A free-text token: a phrase, or a plain term as typed. */
+type Free = { phrase: true; negated: boolean; text: string } | { phrase: false; text: string };
+
+function asciiLower(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+const isOr = (t: string) => t === "|" || asciiLower(t) === "or";
+const isAnd = (t: string) => asciiLower(t) === "and";
+
+function buildFreeText(tokens: Free[], partial: boolean): FreeText {
   const positives: string[] = [];
   const positiveTerms: string[] = [];
   const negatives: string[] = [];
@@ -270,38 +201,41 @@ function buildFreeText(text: string, partial: boolean): FreeText {
 
   // Drop bare stop words from matching - unless every bare word is a stop word
   // (then keep them so the query isn't empty). Quoted phrases are never dropped.
-  const bareWords = tokens.filter((t) => !t.startsWith('"') && !/^(\||and|or)$/i.test(t));
-  const hasContent = bareWords.some((t) => !isStopword(t.replace(/^-/, "")));
+  const hasContent = tokens.some(
+    (t) => !t.phrase && !isOr(t.text) && !isAnd(t.text) && !isStopword(t.text.replace(/^-/, "")),
+  );
 
-  for (const raw of tokens) {
-    const upper = raw.toUpperCase();
-    if (raw === "|" || upper === "OR") { explicitOp = true; seq.push("OR"); continue; }
-    if (upper === "AND") { explicitOp = true; seq.push("AND"); continue; }
-
-    let tok = raw;
-    let negate = false;
-    if (tok.startsWith("-") && tok.length > 1) { negate = true; tok = tok.slice(1); }
-
-    // Skip bare stop words (keep quoted phrases and prefix* terms).
-    const isBare = !(tok.startsWith('"') && tok.endsWith('"')) && !/\*$/.test(tok);
-    if (hasContent && isBare && isStopword(tok)) continue;
-
+  for (const token of tokens) {
     let ftsTerm: string;
     let cleanTerm: string;
-    if (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) {
-      cleanTerm = escFts(tok.slice(1, -1)).trim();
+    let negate = false;
+    if (token.phrase) {
+      cleanTerm = trimWs(escFts(token.text));
       if (!cleanTerm) continue;
       ftsTerm = `"${cleanTerm}"`;
-    } else if (/^[\p{L}\p{N}_]+\*$/u.test(tok)) {
-      ftsTerm = tok;
-      cleanTerm = tok.slice(0, -1);
+      negate = token.negated;
     } else {
-      cleanTerm = escFts(tok).trim();
-      if (!cleanTerm) continue;
-      // Partial mode: prefix-match bare alphanumeric terms (cat -> category).
-      // Whole-word mode (default): exact token via a quoted phrase.
-      ftsTerm =
-        partial && /^[\p{L}\p{N}_]+$/u.test(cleanTerm) ? `${cleanTerm}*` : `"${cleanTerm}"`;
+      const raw = token.text;
+      if (isOr(raw)) { explicitOp = true; seq.push("OR"); continue; }
+      if (isAnd(raw)) { explicitOp = true; seq.push("AND"); continue; }
+
+      let tok = raw;
+      if (tok.startsWith("-") && tok.length > 1) { negate = true; tok = tok.slice(1); }
+
+      // Skip bare stop words (prefix* terms are kept).
+      if (hasContent && !tok.endsWith("*") && isStopword(tok)) continue;
+
+      if (/^[\p{L}\p{N}_]+\*$/u.test(tok)) {
+        ftsTerm = tok;
+        cleanTerm = tok.slice(0, -1);
+      } else {
+        cleanTerm = trimWs(escFts(tok));
+        if (!cleanTerm) continue;
+        // Partial mode: prefix-match bare alphanumeric terms (cat -> category).
+        // Whole-word mode (default): exact token via a quoted phrase.
+        ftsTerm =
+          partial && /^[\p{L}\p{N}_]+$/u.test(cleanTerm) ? `${cleanTerm}*` : `"${cleanTerm}"`;
+      }
     }
 
     if (negate) { negatives.push(cleanTerm); continue; }
@@ -347,12 +281,14 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     theme: null, entity: null, event: null, ai: null, month: null,
   };
 
-  const { rest, regexes, fields } = scan(raw);
-  parsed.regexes = regexes;
-
+  const freeTokens: Free[] = [];
   const shortcutText: string[] = [];
   const bag = parsed as unknown as Record<string, unknown>;
-  for (const [key, value] of fields) {
+  for (const t of tokenize(raw, (name) => FIELD_NAMES.has(name))) {
+    if (t.kind === "phrase") { freeTokens.push({ phrase: true, negated: t.negated, text: t.text }); continue; }
+    if (t.kind === "term") { freeTokens.push({ phrase: false, text: t.text }); continue; }
+    if (t.kind === "regex") { parsed.regexes.push({ source: t.source, flags: t.flags }); continue; }
+    const { name: key, value } = t;
     if (key === "i") { parsed.has_image = true; continue; }
     if (key === "zo") { parsed.zotero = true; continue; }
     if (key === "source") {
@@ -363,11 +299,14 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     const shortcutType = TYPE_SHORTCUTS[key];
     const field = shortcutType ? "type" : canonical(key);
     bag[field] = shortcutType || value;
-    if (shortcutType && value) shortcutText.push(value);
+    if (shortcutType) shortcutText.push(value);
   }
-
-  const freeText = [rest, ...shortcutText].join(" ").replace(/\s+/g, " ").trim();
-  const free = buildFreeText(freeText, partial);
+  // A type shortcut's value is free text, after everything else
+  // (`tw:karpathy` = tweets + the word karpathy).
+  for (const v of shortcutText) {
+    for (const piece of splitWs(v)) freeTokens.push({ phrase: false, text: piece });
+  }
+  const free = buildFreeText(freeTokens, partial);
   parsed.fts = free.fts;
   parsed.has_positive = free.hasPositive;
   parsed.positive_terms = free.positiveTerms;

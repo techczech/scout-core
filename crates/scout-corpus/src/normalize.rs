@@ -447,6 +447,31 @@ pub fn unify_quotes_str(s: &str) -> String {
     s.chars().map(|c| unify_quote(c).unwrap_or(c)).collect()
 }
 
+/// The ONE matching rule for field values, applied alike to the stored
+/// value and the query value of every field (`tag: co: au: ti: ty: lang:
+/// genre: source: theme: entity: event:`) and to facet grouping:
+/// Unicode NFC → apostrophe and double-quote variants unified to `'` and
+/// `"` → runs of whitespace (the grammar's `scout_query::WS`) to one space,
+/// none at the ends → lowercase. So `O’Reilly` = `o'reilly`,
+/// `GPT “Astra”` = `gpt "astra"` and `A\u{85}B` = `a b`.
+pub fn fold(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut out = String::with_capacity(s.len());
+    let mut gap = false;
+    for c in s.nfc() {
+        if scout_query::is_ws(c) {
+            gap = !out.is_empty();
+            continue;
+        }
+        if gap {
+            out.push(' ');
+            gap = false;
+        }
+        out.extend(unify_quote(c).unwrap_or(c).to_lowercase());
+    }
+    out
+}
+
 fn nfc(src: &Mapped) -> Mapped {
     if unicode_normalization::is_nfc(&src.text) {
         return src.clone();

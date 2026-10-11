@@ -14,7 +14,7 @@ pub const STOPWORDS: &[&str] = &[
 /// TS `isStopword`: trimmed and lowercased first.
 pub fn is_stopword(term: &str) -> bool {
     STOPWORDS
-        .binary_search(&term.trim().to_lowercase().as_str())
+        .binary_search(&crate::scan::trim_ws(term).to_lowercase().as_str())
         .is_ok()
 }
 

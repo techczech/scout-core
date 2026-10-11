@@ -65,8 +65,7 @@ impl std::str::FromStr for SearchMode {
 /// for an embedding model), without fields, exclusions or regexes.
 pub fn query_text(query: &str) -> String {
     let q = scout_query::parse_query(query);
-    let (any_of, _) = scout_query::parse_free(&normalize::unify_quotes_str(&q.free_text));
-    any_of
+    q.any_of
         .iter()
         .flatten()
         .map(|t| t.text.trim())

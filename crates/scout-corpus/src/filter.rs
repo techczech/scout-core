@@ -210,12 +210,14 @@ impl DocFilter {
         t.join(" ")
     }
 
+    /// Every comparison is under [`crate::normalize::fold`], both sides.
     pub fn matches(&self, d: &DocInfo) -> bool {
+        use crate::normalize::fold;
         let any_of = |want: &[String], have: &Option<String>| {
             want.is_empty()
                 || have
                     .as_deref()
-                    .is_some_and(|h| want.iter().any(|w| w.eq_ignore_ascii_case(h)))
+                    .is_some_and(|h| want.iter().any(|w| fold(w) == fold(h)))
         };
         if !any_of(&self.lang, &d.lang)
             || !any_of(&self.genre, &d.genre)
@@ -224,7 +226,7 @@ impl DocFilter {
             return false;
         }
         if !self.kind.is_empty() {
-            let sing = |s: &str| s.trim().to_lowercase().trim_end_matches('s').to_string();
+            let sing = |s: &str| fold(s).trim_end_matches('s').to_string();
             let Some(k) = d.kind.as_deref() else {
                 return false;
             };
@@ -234,7 +236,7 @@ impl DocFilter {
         }
         let contains = |want: &Option<String>, have: Option<&str>| match want {
             None => true,
-            Some(w) => have.is_some_and(|h| h.to_lowercase().contains(&w.to_lowercase())),
+            Some(w) => have.is_some_and(|h| fold(h).contains(&fold(w))),
         };
         if !contains(&self.author, d.author.as_deref()) || !contains(&self.title, Some(&d.title)) {
             return false;
