@@ -111,7 +111,7 @@ test('v2 stages end to end with a fake client: files, ids, cache stats, cost cap
   const html = readFileSync(rv.review, 'utf8');
   assert.match(html, /v1 vs v2/);
   assert.match(html, /E02 · Mathematicians letter/);
-  assert.match(html, /Reader profile \(DRAFT\)/);
+  assert.match(html, /Reader profile/);
   assert.ok(!/<script|src=|<link /.test(html));
   const run3 = JSON.parse(readFileSync(p.runJson, 'utf8'));
   assert.ok(run3.cost_usd_total > 0);

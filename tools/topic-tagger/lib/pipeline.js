@@ -8,7 +8,7 @@ import { assignShortIds } from './month-index.js';
 import { estimateTokens, costFromUsage, PRICES } from './cost.js';
 import { packItems } from './batching.js';
 import { readingsStatus } from './guard.js';
-import { readwiseTagCounts, parseTweetStream, condenseTweets, loadOwnTweets, findRoundup, condenseRoundup } from './sources.js';
+import { readwiseTagCounts, parseTweetStream, condenseTweets, loadOwnTweets, roundupForMonth, condenseRoundup } from './sources.js';
 import { buildArchiveIndex, loadXSnapshot, enrichItems } from './enrich.js';
 import { BRIEFING_PROMPT_VERSION, BRIEFING_SCHEMA, briefingSystem, condensedView, validateBriefing, renderBriefingMarkdown, briefingForPrompt } from './briefing.js';
 import { THEMES_PROMPT_VERSION, THEMES_SCHEMA, THEMES_SYSTEM, themesUserMessage, validateThemes, themesForPrompt } from './themes.js';
@@ -38,7 +38,9 @@ export function paths(env) {
     briefingMd: join(ctx, 'briefings', `${env.month}.md`),
     briefingJson: join(ctx, 'briefings', `${env.month}-briefing.json`),
     eventsJson: join(ctx, 'briefings', `${env.month}-events.json`),
-    themes: join(ctx, 'themes-draft.json'),
+    themes: join(ctx, env.themesName || 'themes-draft.json'),
+    themesDraft: join(ctx, 'themes-draft.json'),
+    themesFinal: join(ctx, 'themes.json'),
     run,
     runJson: join(run, 'run.json'),
     enrichment: join(run, 'enrichment.jsonl'),
@@ -93,7 +95,7 @@ export function spentSoFar(env) {
 }
 
 function guardSpend(env, stage, estimate, { replacing = 0 } = {}) {
-  const spent = spentSoFar(env) - replacing;
+  const spent = (env.spentFn ? env.spentFn() : spentSoFar(env)) - replacing; // spentFn: run-wide ledger (full run)
   env.log(`${stage}: estimated $${estimate.toFixed(3)}; spent so far $${spent.toFixed(3)} of $${env.maxUsd}`);
   if (spent + estimate > env.maxUsd) throw new Error(`${stage}: estimate $${estimate.toFixed(3)} + spent $${spent.toFixed(3)} exceeds cap $${env.maxUsd}; aborting before any request`);
   return env.maxUsd - spent;
@@ -131,7 +133,9 @@ export function stageProfileHtml(env) {
 export async function stageBriefing(env) {
   const p = paths(env);
   const { items } = loadMonthItems(env);
-  const view = condensedView(items);
+  let chars = 300;
+  let view = condensedView(items, { chars });
+  while (view.length > (env.maxViewChars || 600000) && chars > 80) { chars -= 40; view = condensedView(items, { chars }); } // condense harder for big months
   const system = briefingSystem(env.month);
   const user = `Items of ${env.month} (${items.length}; id | date | type | author | [title |] first characters):\n${view}`;
   const estIn = Math.ceil((system.length + user.length) / 3);
@@ -141,7 +145,7 @@ export async function stageBriefing(env) {
   const b = validateBriefing(r.parsed, items.map((i) => i.sid));
   const meta = {
     month: env.month, model: env.briefingModel, effort: 'medium', prompt_version: BRIEFING_PROMPT_VERSION,
-    generated: new Date().toISOString(), items: items.length, view_chars: view.length,
+    generated: new Date().toISOString(), items: items.length, view_chars: view.length, view_chars_per_item: chars,
     usage: r.usage, cost_usd: +r.cost.toFixed(4), problems: b.problems, system_prompt: system,
   };
   writeJson(p.briefingJson, { meta, ...b });
@@ -204,7 +208,8 @@ async function tagPrompt(env, items, { count }) {
   const themes = readJson(p.themes).themes;
   const briefing = readJson(p.briefingJson);
   const tw = existsSync(p.tweetStream) ? condenseTweets(parseTweetStream(readFileSync(p.tweetStream, 'utf8')), { maxChars: env.tweetsChars }) : null;
-  const rpath = env.roundupPath || findRoundup(env.roundupDir, env.month);
+  const rhit = env.roundupPath ? { path: env.roundupPath } : roundupForMonth(env.roundupDir, env.month);
+  const rpath = rhit && rhit.path;
   const rd = rpath ? condenseRoundup(readJson(rpath), { maxChars: env.roundupChars }) : null;
   const fixed = {
     instructions: TAG_INSTRUCTIONS,
@@ -290,7 +295,7 @@ export async function stageQa(env) {
   const { items } = loadMonthItems(env);
   const records = readJsonl(p.tags);
   const byKey = new Map(records.map((r) => [r.key, r]));
-  const sample = qaSample(records, { seed: env.seed });
+  const sample = qaSample(records, { seed: env.seed, random: env.qaRandom || 100, cap: (env.qaRandom || 100) + (env.qaLowCap ?? 50) });
   const contexts = new Map(readJsonl(p.enrichment).map((r) => [r.key, r]));
   const chosen = items.filter((it) => sample.group[it.key]);
   const system = readJson(p.promptJson);

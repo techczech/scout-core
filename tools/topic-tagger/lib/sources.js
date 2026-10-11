@@ -100,6 +100,28 @@ export function findRoundup(roundupDir, month) {
   return null;
 }
 
+// Month of a roundup library item date ("2026-08-04", "Jan 9, 2026", "Feb 10, 2026") or null.
+export function itemMonth(d) {
+  const s = String(d || '').trim();
+  if (/^\d{4}-\d{2}/.test(s)) return s.slice(0, 7);
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? null : new Date(t).toISOString().slice(0, 7);
+}
+
+// The roundup whose library has the most items dated in `month` (at least minItems), else null.
+// Roundups are named by publication month but cover the weeks before it, so names alone mislead.
+export function roundupForMonth(roundupDir, month, { minItems = 3 } = {}) {
+  if (!existsSync(roundupDir)) return null;
+  let best = null;
+  for (const f of readdirSync(roundupDir).filter((n) => /^mondai-.*\.json$/.test(n)).sort()) {
+    let j;
+    try { j = JSON.parse(readFileSync(join(roundupDir, f), 'utf8')); } catch { continue; }
+    const n = (j.content_library || []).filter((it) => itemMonth(it.date) === month).length;
+    if (n >= minItems && (!best || n > best.items_in_month)) best = { path: join(roundupDir, f), items_in_month: n };
+  }
+  return best;
+}
+
 const stripMd = (s) => squash(String(s ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>]/g, ''));
 
 // Title page + intro + one line per library item ("date [section] title: summary...").
