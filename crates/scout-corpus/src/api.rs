@@ -1113,11 +1113,13 @@ impl Engine {
         }
         let mut reports = Vec::new();
         let mut announced = false;
+        let roots: Vec<PathBuf> = self.registry.corpora.iter().map(|c| c.root()).collect();
         for c in self.select(&q.ids)? {
-            let mut r = c.build_index(q.force)?;
+            let mut r = c.build_index_within(q.force, &roots)?;
             if let Some(e) = &self.embedder {
                 let vpath = c.vectors_path();
                 if q.semantic || vpath.exists() {
+                    index::check_target(&vpath, &roots)?;
                     if !announced {
                         if let Some(n) = e.download_note() {
                             on(BuildEvent::Download(n));

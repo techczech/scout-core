@@ -325,6 +325,10 @@ pub fn doc_meta(cfg: &CorpusConfig, parsed: &ParsedFile) -> DocMeta {
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
         }),
+        // The topic layer key `<source_system>:<source_id>`, when the file
+        // names one (fixed keys, not in the field map).
+        source: get("source_system").filter(|v| !v.trim().is_empty()),
+        source_id: get("source_id").filter(|v| !v.trim().is_empty()),
         ..DocMeta::default()
     }
 }

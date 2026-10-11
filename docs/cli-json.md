@@ -112,7 +112,9 @@ The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates
 | `ai:true`, `ai:false` | topic layer: `ai_related` (`yes`/`no`/`1`/`0` too; anything else is a usage error) |
 | `month:2026-09`, `month:2026` | topic layer month (see "Topic layer" below); `y:`/`after:`/`before:` stay on the document's own date |
 
-Each field takes one value; a repeated field keeps the last. `tag:` is unchanged: it never matches topic-layer themes or entities, because those are model-made and `tag:` holds the reader's own labels (Readwise tags) and the writing's frontmatter `topics`. A `/regex/` in the same query must not sit after an `event:` value with a `/` in a way that pairs the two slashes (the grammar reads regexes first), e.g. write `/x/ event:2026-09/E21`, not `event:2026-09/E21 /x/`.
+Each field takes one value; a repeated field keeps the last. `tag:` is unchanged: it never matches topic-layer themes or entities, because those are model-made and `tag:` holds the reader's own labels (Readwise tags) and the writing's frontmatter `topics`.
+
+How the grammar reads a query: one left-to-right pass. A `"quoted phrase"` is kept whole (nothing inside it is a field or a regex); a `/regex/flags` is a whole whitespace-separated token (so `km/h` and URLs are words); a field `key:value` starts at a word boundary. A field value is a run of non-space characters, or a quoted string in which `\"` is a literal `"` and `\\` a literal `\` (`entity:"GPT \"Astra\""`). Field values are kept as typed; only the free text has curly quotes unified. Library: `scout_corpus::topics::field_query(field, value)` (Rust) and `quoteValue` (TS `@scout/query`) write a value so it reads back unchanged.
 `i:` (has image) has no meaning here and is listed in `plan.ignored`. A query with filters or a regex but no positive term lists every passage that passes them (score 0).
 
 ```json
@@ -196,7 +198,9 @@ A corpus folder may hold a topic layer: `analysis/topics/current.jsonl` (one mod
 - **Corrections.** One JSON object per line with `key` and any of `themes` (string list), `entities` (string list), `event` (string or null), `event_name`, `ai_related` (bool or null). Each field present replaces the layer's value for that key; later lines win; other keys (`by`, `date`, `note`) are provenance and are not read. A correction for a key the layer lacks is counted (`corrections_unmatched`), not applied; a line with a wrongly typed field is skipped whole (`corrections_bad_lines`). An event changed without an `event_name` takes the name the layer gives that event id.
 - **Month.** The item's `date` (its latest highlight) cut to `YYYY-MM`, else the layer's own `month` when that is `YYYY-MM`. `month:` filters on it and the `month` facet counts it.
 - **Unparseable layer lines** (the file may be mid-write) are skipped and counted (`bad_lines`); a key repeated in the layer keeps its last line.
-- Matching is exact and case-insensitive for themes, entities and event ids. Facets fold case the same way, so a facet's `count` equals `total_documents` of the same query plus that field.
+- **Matching** for themes, entities and event ids is exact under one fold, applied alike to the stored label, the query value and facet grouping: Unicode NFC, curly quotes and apostrophes unified to `"` and `'`, whitespace runs to one space, trimmed, lowercased (`entity:O'Reilly` matches `O’Reilly`). So every facet value, written with `field_query`, gives back exactly its `count` as `total_documents` (tested over labels with curly and straight quotes, apostrophes, backslashes, slashes and commas).
+- **Reading limits.** Both files are streamed line by line; a line over 1 MiB (`topics::MAX_LINE_BYTES`) or not valid UTF-8 is skipped and counted (`bad_lines`, `corrections_bad_lines`), never applied.
+- **Keys.** A highlights work's key comes from its frontmatter `source_system` + `source_id`; a markdown-folder document's from the same frontmatter keys when it has them (which also sets its `source:`); a tweet's is `x:<tweet id>`.
 
 ## `scout facets <query> [--in …] [--top 20] [--json]` — schema_version 1
 
@@ -590,6 +594,8 @@ What each normalisation stage changed, read from the source files (read-only; no
 ```
 
 `full` is true on a first build, `--force`, or an engine or registry-entry change. `elapsed_ms` is the one non-deterministic field.
+
+A build refuses (exit 2, nothing opened or deleted) when the index file or one of its `-wal`/`-shm`/`-journal` side files is a symlink, or when the index's real location is inside any registered corpus folder; the vector store is checked the same way.
 
 A corpus whose folder has a topic layer adds a `topics` object (see "Topic layer"):
 

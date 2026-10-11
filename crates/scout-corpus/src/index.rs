@@ -19,7 +19,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/7";
+pub const ENGINE_VERSION: &str = "scout-corpus/8";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.
@@ -460,20 +460,56 @@ fn totals(conn: &Connection) -> Result<(i64, i64, i64)> {
     )?)
 }
 
-/// Build or update the index at `path` for `cfg`.
-pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport> {
-    let started = Instant::now();
-    let root = cfg.root();
-    if let (Ok(r), Some(dir)) = (root.canonicalize(), path.parent()) {
-        let d = canonical_prefix(dir);
-        if d.starts_with(&r) {
-            bail!(
-                "index path {} is inside the source folder {}; refusing",
-                path.display(),
-                r.display()
-            );
+/// Refuse a SQLite target before anything opens, writes or deletes it:
+/// the file or one of its side files (`-wal`, `-shm`, `-journal`) is a
+/// symlink, or its real location (symlinked folders resolved) is inside
+/// one of `roots`. Sources are never written (invariant 1).
+pub(crate) fn check_target(path: &Path, roots: &[PathBuf]) -> Result<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let p = PathBuf::from(format!("{}{suffix}", path.display()));
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_symlink() => bail!(
+                "index file {} is a symlink; refusing to open it (remove the link, then build again)",
+                p.display()
+            ),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => bail!("inspect {}: {e}", p.display()),
         }
     }
+    let real = canonical_prefix(path);
+    for root in roots {
+        if let Ok(r) = root.canonicalize() {
+            if real.starts_with(&r) {
+                bail!(
+                    "index path {} is inside the source folder {}; refusing",
+                    path.display(),
+                    r.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build or update the index at `path` for `cfg`.
+pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport> {
+    build_within(cfg, path, force, &[])
+}
+
+/// [`build`], refusing an index path inside `cfg`'s folder or any of
+/// `other_roots` (the engine passes every registered corpus folder).
+pub fn build_within(
+    cfg: &CorpusConfig,
+    path: &Path,
+    force: bool,
+    other_roots: &[PathBuf],
+) -> Result<BuildReport> {
+    let started = Instant::now();
+    let root = cfg.root();
+    let mut roots = vec![root.clone()];
+    roots.extend(other_roots.iter().cloned());
+    check_target(path, &roots)?;
     let rules = normalize::compile_rules(&cfg.boilerplate)?;
     if force {
         remove_index_files(path)?;

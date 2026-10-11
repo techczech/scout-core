@@ -16,7 +16,7 @@
 //! AND binds tighter than OR), and the negated terms with their form.
 
 use chrono::{Duration, NaiveDate};
-use regex::{Captures, Regex};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -109,6 +109,11 @@ pub struct Query {
     pub any_of: Vec<Vec<FreeTerm>>,
     /// Negated terms (`-x`), in order.
     pub not: Vec<FreeTerm>,
+    /// The free text the terms came from: the query with its fields and
+    /// regexes taken out (shortcut values such as `tw:karpathy`'s appended),
+    /// whitespace collapsed. [`parse_free`] of it gives `any_of` and `not`.
+    #[serde(skip)]
+    pub free_text: String,
 }
 
 impl Query {
@@ -148,23 +153,126 @@ const FILTER_TOKENS: &[&str] = &[
 
 const OR_THRESHOLD: usize = 3;
 
-fn token_re() -> &'static Regex {
+/// A field token anchored at the start of the text: `key:value`, where a
+/// value is a quoted string (`"…"`, in which `\"` and `\\` are escapes) or
+/// a run of non-space characters.
+fn field_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         let mut keys: Vec<&str> = FILTER_TOKENS.to_vec();
         keys.extend(TYPE_SHORTCUTS.iter().map(|(k, _)| *k));
-        // JS `\b` without the `u` flag is an ASCII word boundary.
         Regex::new(&format!(
-            r#"(?i)(?-u:\b)({}):("[^"]+"|\S*)"#,
+            r#"(?i)^({}):("(?:\\.|[^"\\])+"|\S*)"#,
             keys.join("|")
         ))
-        .expect("token regex")
+        .expect("field regex")
     })
 }
 
+/// A `/regex/flags` token anchored at the start of the text.
 fn regex_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"/((?:\\.|[^/\\])+)/([a-z]*)").expect("regex regex"))
+    RE.get_or_init(|| Regex::new(r"^/((?:\\.|[^/\\])+)/([a-z]*)").expect("regex regex"))
+}
+
+/// JS `\s` (the TS grammar's whitespace).
+fn is_space(c: char) -> bool {
+    ('\u{2000}'..='\u{200a}').contains(&c)
+        || "\t\n\u{0b}\u{0c}\r \u{a0}\u{1680}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}"
+            .contains(c)
+}
+
+/// JS `\w` without the `u` flag.
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// A field value as typed: a quoted value loses its quotes and its
+/// escapes (`\"` → `"`, `\\` → `\`); any other value loses one leading and
+/// one trailing `"`.
+fn field_value(v: &str) -> String {
+    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
+        let inner = &v[1..v.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut it = inner.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '\\' {
+                if let Some(&n) = it.peek() {
+                    if n == '"' || n == '\\' {
+                        out.push(n);
+                        it.next();
+                        continue;
+                    }
+                }
+            }
+            out.push(c);
+        }
+        return out;
+    }
+    strip_quotes(v)
+}
+
+/// Write a field value so that [`parse_query`] reads it back unchanged:
+/// bare when it is non-empty and has no space, `"` or `\`, else quoted
+/// with `"` and `\` escaped.
+pub fn quote_value(v: &str) -> String {
+    if !v.is_empty() && !v.chars().any(|c| is_space(c) || c == '"' || c == '\\') {
+        return v.to_string();
+    }
+    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// One left-to-right pass: quoted phrases are kept whole (nothing inside
+/// them is a field or a regex); a `/regex/flags` token must start and end a
+/// whitespace-separated token; a field starts at an ASCII word boundary.
+/// Spans never overlap. Returns the remaining free text (each field or
+/// regex replaced by a space), the regexes and the `(key, value)` fields,
+/// all in order.
+fn scan(raw: &str) -> (String, Vec<RegexFilter>, Vec<(String, String)>) {
+    let mut rest = String::with_capacity(raw.len());
+    let mut regexes = Vec::new();
+    let mut fields = Vec::new();
+    let mut prev: Option<char> = None;
+    let mut i = 0;
+    while i < raw.len() {
+        let tail = &raw[i..];
+        let c = tail.chars().next().expect("char");
+        if c == '"' {
+            if let Some(j) = tail[1..].find('"') {
+                let end = i + 1 + j + 1;
+                rest.push_str(&raw[i..end]);
+                prev = Some('"');
+                i = end;
+                continue;
+            }
+        } else if c == '/' && prev.is_none_or(is_space) {
+            if let Some(m) = regex_re().captures(tail) {
+                let len = m[0].len();
+                if tail[len..].chars().next().is_none_or(is_space) {
+                    regexes.push(RegexFilter {
+                        source: m[1].to_string(),
+                        flags: m[2].to_string(),
+                    });
+                    rest.push(' ');
+                    prev = Some(' ');
+                    i += len;
+                    continue;
+                }
+            }
+        } else if is_word(c) && !prev.is_some_and(is_word) {
+            if let Some(m) = field_re().captures(tail) {
+                fields.push((m[1].to_ascii_lowercase(), field_value(&m[2])));
+                rest.push(' ');
+                prev = Some(' ');
+                i += m[0].len();
+                continue;
+            }
+        }
+        rest.push(c);
+        prev = Some(c);
+        i += c.len_utf8();
+    }
+    (rest, regexes, fields)
 }
 
 fn free_token_re() -> &'static Regex {
@@ -398,40 +506,30 @@ fn build_free_text(text: &str, partial: bool) -> FreeText {
 /// changes the `fts` string.
 pub fn parse_with(raw: &str, partial: bool) -> Query {
     let mut parsed = ParsedQuery::default();
-    let rest = regex_re().replace_all(raw, |c: &Captures| {
-        parsed.regexes.push(RegexFilter {
-            source: c[1].to_string(),
-            flags: c[2].to_string(),
-        });
-        " ".to_string()
-    });
+    let (rest, regexes, fields) = scan(raw);
+    parsed.regexes = regexes;
     let mut shortcut_text: Vec<String> = Vec::new();
-    let rest = token_re()
-        .replace_all(&rest, |c: &Captures| {
-            let key = c[1].to_ascii_lowercase();
-            let value = strip_quotes(&c[2]);
-            match key.as_str() {
-                "i" => parsed.has_image = true,
-                "zo" => parsed.zotero = true,
-                "source" => {
-                    if value.to_lowercase().contains("zotero") {
-                        parsed.zotero = true;
-                    }
-                    parsed.source = Some(value);
+    for (key, value) in fields {
+        match key.as_str() {
+            "i" => parsed.has_image = true,
+            "zo" => parsed.zotero = true,
+            "source" => {
+                if value.to_lowercase().contains("zotero") {
+                    parsed.zotero = true;
                 }
-                _ => match shortcut(&key) {
-                    Some(t) => {
-                        parsed.type_ = Some(t.to_string());
-                        if !value.is_empty() {
-                            shortcut_text.push(value);
-                        }
-                    }
-                    None => set_field(&mut parsed, &canonical(&key), value),
-                },
+                parsed.source = Some(value);
             }
-            " ".to_string()
-        })
-        .into_owned();
+            _ => match shortcut(&key) {
+                Some(t) => {
+                    parsed.type_ = Some(t.to_string());
+                    if !value.is_empty() {
+                        shortcut_text.push(value);
+                    }
+                }
+                None => set_field(&mut parsed, &canonical(&key), value),
+            },
+        }
+    }
     let mut joined = vec![rest];
     joined.extend(shortcut_text);
     let free_text = joined
@@ -448,7 +546,17 @@ pub fn parse_with(raw: &str, partial: bool) -> Query {
         parsed,
         any_of: free.any_of,
         not: free.not,
+        free_text,
     }
+}
+
+/// The positive AND-groups and the negated terms of free text alone (no
+/// fields or regexes are read from it). An engine that rewrites the free
+/// text (quote unification, say) without touching field values parses the
+/// rewritten [`Query::free_text`] with this.
+pub fn parse_free(text: &str) -> (Vec<Vec<FreeTerm>>, Vec<FreeTerm>) {
+    let free = build_free_text(text, false);
+    (free.any_of, free.not)
 }
 
 /// TS `parseSearch(raw, partial)`.

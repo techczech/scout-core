@@ -119,9 +119,13 @@ pub struct Plan {
 
 impl Plan {
     pub fn parse(query: &str) -> Result<Plan> {
-        let q = scout_query::parse_query(&normalize::unify_quotes_str(query));
-        let mut any_of: Vec<Vec<Term>> = q
-            .any_of
+        // Field values stay as typed (topic labels may hold curly quotes);
+        // only the free text has its quotes unified, so curly-quoted
+        // phrases still work.
+        let q = scout_query::parse_query(query);
+        let (free_any, free_not) =
+            scout_query::parse_free(&normalize::unify_quotes_str(&q.free_text));
+        let mut any_of: Vec<Vec<Term>> = free_any
             .iter()
             .map(|g| {
                 let mut terms: Vec<Term> = Vec::new();
@@ -140,7 +144,7 @@ impl Plan {
             }
         }
         any_of.retain(|g| !g.is_empty());
-        let not = q.not.iter().flat_map(Term::from_free).collect();
+        let not = free_not.iter().flat_map(Term::from_free).collect();
         let p = &q.parsed;
         let mut filter = DocFilter::default();
         let corpora = crate::filter::apply_query_fields(p, &mut filter)?;

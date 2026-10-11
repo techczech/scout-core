@@ -106,6 +106,12 @@ impl Corpus {
         index::build(&self.config, &self.index_path, force)
     }
 
+    /// [`Corpus::build_index`], also refusing an index path inside any of
+    /// `roots` (other corpus folders).
+    pub fn build_index_within(&self, force: bool, roots: &[PathBuf]) -> Result<BuildReport> {
+        index::build_within(&self.config, &self.index_path, force, roots)
+    }
+
     pub fn status(&self) -> Result<IndexStatus> {
         index::status(&self.config, &self.index_path)
     }

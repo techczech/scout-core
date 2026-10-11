@@ -43,6 +43,17 @@ pub const LAYER_FILE: &str = "analysis/topics/current.jsonl";
 /// The corrections file, relative to the corpus root.
 pub const CORRECTIONS_FILE: &str = "analysis/topics/corrections.jsonl";
 
+/// Longest layer or corrections line read, in bytes; a longer line is a
+/// bad line.
+pub const MAX_LINE_BYTES: usize = 1 << 20;
+
+/// A query term selecting one facet value: `field:value`, the value quoted
+/// and escaped as the grammar needs (`entity:"GPT \"Astra\""`). Every
+/// value `scout facets` returns gives the facet's count this way.
+pub fn field_query(field: &str, value: &str) -> String {
+    format!("{field}:{}", scout_query::quote_value(value))
+}
+
 /// The fields a correction may override.
 pub const CORRECTABLE: &[&str] = &["themes", "entities", "event", "event_name", "ai_related"];
 
@@ -67,8 +78,19 @@ pub struct TopicInfo {
     pub corrected: Vec<String>,
 }
 
-fn fold(s: &str) -> String {
-    s.trim().to_lowercase()
+/// The one matching rule for labels, applied alike to stored labels, query
+/// values and facet grouping: Unicode NFC, curly quotes and apostrophes
+/// unified to `"` and `'` (as `verify-quote` does), whitespace runs to one
+/// space, trimmed, lowercased. So `O’Reilly` = `o'reilly` and
+/// `GPT “Astra”` = `gpt "astra"`.
+pub fn fold(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let unified = crate::normalize::unify_quotes_str(&s.nfc().collect::<String>());
+    unified
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 impl TopicInfo {
@@ -168,46 +190,102 @@ pub struct Layer {
     pub corrections_bad_lines: usize,
 }
 
-/// The raw bytes of the layer and corrections files and their combined hash.
-struct LayerBytes {
-    layer: Vec<u8>,
-    corrections: Option<Vec<u8>>,
-    hash: String,
+/// A line of a layer file: valid UTF-8 within [`MAX_LINE_BYTES`], or bad.
+enum Line<'a> {
+    Text(&'a str),
+    Bad,
 }
 
-/// `None` when the layer file is missing.
-fn read_bytes(root: &Path) -> Result<Option<LayerBytes>> {
-    let read = |p: PathBuf| -> Result<Option<Vec<u8>>> {
-        match std::fs::read(&p) {
-            Ok(b) => Ok(Some(b)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("read {}", p.display())),
+/// Stream `path` line by line (`\n`, an optional `\r` dropped), feeding
+/// every byte to `hash` and every non-blank line to `each`. A line over
+/// `cap` bytes is not kept in memory: it is drained and reported `Bad`, as
+/// is a line that is not valid UTF-8. `Ok(false)` when the file is missing.
+fn stream_lines(
+    path: &Path,
+    cap: usize,
+    hash: &mut Sha1,
+    mut each: impl FnMut(Line<'_>),
+) -> Result<bool> {
+    use std::io::BufRead;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    let mut r = std::io::BufReader::with_capacity(64 * 1024, file);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut over = false;
+    let mut emit = |buf: &mut Vec<u8>, over: &mut bool| {
+        if *over {
+            each(Line::Bad);
+        } else {
+            let mut b: &[u8] = buf;
+            if b.last() == Some(&b'\r') {
+                b = &b[..b.len() - 1];
+            }
+            match std::str::from_utf8(b) {
+                Ok(t) if t.trim().is_empty() => {}
+                Ok(t) => each(Line::Text(t)),
+                Err(_) => each(Line::Bad),
+            }
         }
+        buf.clear();
+        *over = false;
     };
-    let Some(layer) = read(root.join(LAYER_FILE))? else {
-        return Ok(None);
-    };
-    let corr = read(root.join(CORRECTIONS_FILE))?;
-    let mut h = Sha1::new();
-    h.update(&layer);
-    h.update([0u8]);
-    if let Some(c) = &corr {
-        h.update(c);
+    loop {
+        let chunk = r
+            .fill_buf()
+            .with_context(|| format!("read {}", path.display()))?;
+        if chunk.is_empty() {
+            if !buf.is_empty() || over {
+                emit(&mut buf, &mut over);
+            }
+            return Ok(true);
+        }
+        let (part, newline) = match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => (&chunk[..i], Some(i)),
+            None => (chunk, None),
+        };
+        hash.update(&chunk[..newline.map_or(chunk.len(), |i| i + 1)]);
+        if !over {
+            if buf.len() + part.len() > cap {
+                over = true;
+                buf.clear();
+            } else {
+                buf.extend_from_slice(part);
+            }
+        }
+        let used = newline.map_or(chunk.len(), |i| i + 1);
+        r.consume(used);
+        if newline.is_some() {
+            emit(&mut buf, &mut over);
+        }
     }
-    let hash = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    Ok(Some(LayerBytes {
-        layer,
-        corrections: corr,
-        hash,
-    }))
+}
+
+fn hex(h: Sha1) -> String {
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The combined hash of the layer and corrections files, streamed; `None`
+/// when the layer file is missing.
+fn layer_hash(root: &Path) -> Result<Option<String>> {
+    let mut h = Sha1::new();
+    if !stream_lines(&root.join(LAYER_FILE), 0, &mut h, |_| {})? {
+        return Ok(None);
+    }
+    h.update([0u8]);
+    stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
+    Ok(Some(hex(h)))
 }
 
 /// Read the topic layer of the corpus at `root`; `None` when it has none.
 pub fn read_layer(root: &Path) -> Result<Option<Layer>> {
-    Ok(read_bytes(root)?.map(|b| parse_layer(root, &b.layer, b.corrections.as_deref())))
+    Ok(read_layer_hashed(root)?.map(|(l, _)| l))
 }
 
-fn parse_layer(root: &Path, layer: &[u8], corrections: Option<&[u8]>) -> Layer {
+/// [`read_layer`] plus the hash of exactly the bytes it read.
+fn read_layer_hashed(root: &Path) -> Result<Option<(Layer, String)>> {
     let mut out = Layer {
         layer_path: root.join(LAYER_FILE),
         items: BTreeMap::new(),
@@ -216,54 +294,76 @@ fn parse_layer(root: &Path, layer: &[u8], corrections: Option<&[u8]>) -> Layer {
         corrections_unmatched: 0,
         corrections_bad_lines: 0,
     };
-    for line in String::from_utf8_lossy(layer).lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(l) = serde_json::from_str::<LayerLine>(line) else {
-            out.bad_lines += 1;
-            continue;
-        };
-        let key = l.key.trim().to_string();
-        if key.is_empty() {
-            out.bad_lines += 1;
-            continue;
-        }
-        let info = TopicInfo {
-            key: key.clone(),
-            themes: l.themes.unwrap_or_default(),
-            entities: l.entities.unwrap_or_default(),
-            event: l.event.filter(|e| !e.trim().is_empty()),
-            event_name: l.event_name,
-            ai_related: l.ai_related,
-            month: month_of(l.date.as_deref(), l.month.as_deref()),
-            confidence: l.confidence,
-            run_id: l.run_id,
-            prompt_version: l.prompt_version,
-            corrected: vec![],
-        };
-        out.items.insert(
-            key,
-            LayerItem {
-                path: l.path.filter(|p| !p.trim().is_empty()),
-                info,
+    let mut h = Sha1::new();
+    let found = stream_lines(
+        &root.join(LAYER_FILE),
+        MAX_LINE_BYTES,
+        &mut h,
+        |l| match l {
+            Line::Text(t) => {
+                if !add_layer_line(&mut out.items, t) {
+                    out.bad_lines += 1;
+                }
+            }
+            Line::Bad => out.bad_lines += 1,
+        },
+    )?;
+    if !found {
+        return Ok(None);
+    }
+    h.update([0u8]);
+    let (mut applied, mut unknown, mut bad) = (0, 0, 0);
+    stream_lines(
+        &root.join(CORRECTIONS_FILE),
+        MAX_LINE_BYTES,
+        &mut h,
+        |l| match l {
+            Line::Text(t) => match apply_correction(&mut out.items, t) {
+                Correction::Applied => applied += 1,
+                Correction::UnknownKey => unknown += 1,
+                Correction::Bad => bad += 1,
             },
-        );
-    }
-    if let Some(c) = corrections {
-        for line in String::from_utf8_lossy(c).lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            match apply_correction(&mut out.items, line) {
-                Correction::Applied => out.corrections += 1,
-                Correction::UnknownKey => out.corrections_unmatched += 1,
-                Correction::Bad => out.corrections_bad_lines += 1,
-            }
-        }
-    }
+            Line::Bad => bad += 1,
+        },
+    )?;
+    out.corrections = applied;
+    out.corrections_unmatched = unknown;
+    out.corrections_bad_lines = bad;
     fill_event_names(&mut out.items);
-    out
+    Ok(Some((out, hex(h))))
+}
+
+/// Parse one layer line into `items` (a repeated key replaces the earlier
+/// line); false when it does not parse or has no key.
+fn add_layer_line(items: &mut BTreeMap<String, LayerItem>, line: &str) -> bool {
+    let Ok(l) = serde_json::from_str::<LayerLine>(line) else {
+        return false;
+    };
+    let key = l.key.trim().to_string();
+    if key.is_empty() {
+        return false;
+    }
+    let info = TopicInfo {
+        key: key.clone(),
+        themes: l.themes.unwrap_or_default(),
+        entities: l.entities.unwrap_or_default(),
+        event: l.event.filter(|e| !e.trim().is_empty()),
+        event_name: l.event_name,
+        ai_related: l.ai_related,
+        month: month_of(l.date.as_deref(), l.month.as_deref()),
+        confidence: l.confidence,
+        run_id: l.run_id,
+        prompt_version: l.prompt_version,
+        corrected: vec![],
+    };
+    items.insert(
+        key,
+        LayerItem {
+            path: l.path.filter(|p| !p.trim().is_empty()),
+            info,
+        },
+    );
+    true
 }
 
 enum Correction {
@@ -526,12 +626,8 @@ pub(crate) fn refresh(
     root: &Path,
     docs_changed: bool,
 ) -> Result<Option<TopicReport>> {
-    let bytes = read_bytes(root)?;
-    let hash = bytes
-        .as_ref()
-        .map(|b| b.hash.clone())
-        .unwrap_or_else(|| "none".into());
-    if !docs_changed && meta_get(conn, HASH_KEY)?.as_deref() == Some(hash.as_str()) {
+    let current = layer_hash(root)?.unwrap_or_else(|| "none".into());
+    if !docs_changed && meta_get(conn, HASH_KEY)?.as_deref() == Some(current.as_str()) {
         let stored: Option<TopicReport> = meta_get(conn, REPORT_KEY)?
             .and_then(|s| serde_json::from_str::<Option<TopicReport>>(&s).ok())
             .flatten();
@@ -540,7 +636,12 @@ pub(crate) fn refresh(
             r
         }));
     }
-    let layer = bytes.map(|b| parse_layer(root, &b.layer, b.corrections.as_deref()));
+    // Store the hash of the bytes actually parsed, so a file changed
+    // between the check and the read is re-read next build.
+    let (layer, hash) = match read_layer_hashed(root)? {
+        Some((l, h)) => (Some(l), h),
+        None => (None, "none".to_string()),
+    };
     let report = apply(conn, layer.as_ref())?;
     meta_set(conn, HASH_KEY, &hash)?;
     meta_set(conn, REPORT_KEY, &serde_json::to_string(&report)?)?;

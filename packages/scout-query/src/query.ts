@@ -39,8 +39,11 @@ const FILTER_TOKENS = [
   ...Object.keys(TYPE_SHORTCUTS),
 ];
 
-const TOKEN_RE = new RegExp(`\\b(${FILTER_TOKENS.join("|")}):("[^"]+"|\\S*)`, "gi");
-const REGEX_RE = /\/((?:\\.|[^/\\])+)\/([a-z]*)/g;
+// Anchored (sticky) forms for the one-pass scanner in `scan`. A field value
+// is a quoted string (`\"` and `\\` are escapes inside it) or a run of
+// non-space characters.
+const FIELD_RE = new RegExp(`(${FILTER_TOKENS.join("|")}):("(?:\\\\.|[^"\\\\])+"|\\S*)`, "iy");
+const REGEX_RE = /\/((?:\\.|[^/\\])+)\/([a-z]*)/y;
 const OR_THRESHOLD = 3;
 
 export interface ParsedQuery {
@@ -170,6 +173,82 @@ export function dateRange(value: string): { start?: string; end?: string } | nul
   return null;
 }
 
+const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c);
+const isWord = (c: string | undefined) => c !== undefined && /\w/.test(c);
+
+/** A field value as typed: a quoted value loses its quotes and its escapes
+ * (`\"` -> `"`, `\\` -> `\`); any other value loses one leading and one
+ * trailing `"`. */
+function fieldValue(v: string): string {
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+    return v.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  }
+  return v.replace(/^"|"$/g, "");
+}
+
+/** Write a field value so that `parseSearch` reads it back unchanged: bare
+ * when it has no space, quote or backslash, else quoted with `"` and `\`
+ * escaped. */
+export function quoteValue(v: string): string {
+  if (v && !/[\s"\\]/.test(v)) return v;
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** One left-to-right pass: quoted phrases are kept whole (nothing inside is
+ * a field or a regex); a `/regex/flags` token must start and end a
+ * whitespace-separated token; a field starts at an ASCII word boundary.
+ * Spans never overlap. Each field or regex becomes a space in `rest`. */
+function scan(raw: string): {
+  rest: string;
+  regexes: RegexFilter[];
+  fields: Array<[string, string]>;
+} {
+  let rest = "";
+  const regexes: RegexFilter[] = [];
+  const fields: Array<[string, string]> = [];
+  let prev: string | undefined;
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i];
+    if (c === '"') {
+      const j = raw.indexOf('"', i + 1);
+      if (j >= 0) {
+        rest += raw.slice(i, j + 1);
+        prev = '"';
+        i = j + 1;
+        continue;
+      }
+    } else if (c === "/" && (prev === undefined || isSpace(prev))) {
+      REGEX_RE.lastIndex = i;
+      const m = REGEX_RE.exec(raw);
+      if (m) {
+        const end = i + m[0].length;
+        if (end >= raw.length || isSpace(raw[end])) {
+          regexes.push({ source: m[1], flags: m[2] });
+          rest += " ";
+          prev = " ";
+          i = end;
+          continue;
+        }
+      }
+    } else if (isWord(c) && !isWord(prev)) {
+      FIELD_RE.lastIndex = i;
+      const m = FIELD_RE.exec(raw);
+      if (m) {
+        fields.push([m[1].toLowerCase(), fieldValue(m[2])]);
+        rest += " ";
+        prev = " ";
+        i += m[0].length;
+        continue;
+      }
+    }
+    rest += c;
+    prev = c;
+    i += 1;
+  }
+  return { rest, regexes, fields };
+}
+
 function escFts(term: string): string {
   return term.replace(/"/g, "");
 }
@@ -268,29 +347,24 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     theme: null, entity: null, event: null, ai: null, month: null,
   };
 
-  let rest = raw.replace(REGEX_RE, (_m, source: string, flags: string) => {
-    parsed.regexes.push({ source, flags });
-    return " ";
-  });
+  const { rest, regexes, fields } = scan(raw);
+  parsed.regexes = regexes;
 
   const shortcutText: string[] = [];
   const bag = parsed as unknown as Record<string, unknown>;
-  rest = rest.replace(TOKEN_RE, (_m, rawKey: string, rawValue: string) => {
-    const key = rawKey.toLowerCase();
-    const value = rawValue.replace(/^"|"$/g, "");
-    if (key === "i") { parsed.has_image = true; return " "; }
-    if (key === "zo") { parsed.zotero = true; return " "; }
+  for (const [key, value] of fields) {
+    if (key === "i") { parsed.has_image = true; continue; }
+    if (key === "zo") { parsed.zotero = true; continue; }
     if (key === "source") {
       parsed.source = value;
       if (value.toLowerCase().includes("zotero")) parsed.zotero = true;
-      return " ";
+      continue;
     }
     const shortcutType = TYPE_SHORTCUTS[key];
     const field = shortcutType ? "type" : canonical(key);
     bag[field] = shortcutType || value;
     if (shortcutType && value) shortcutText.push(value);
-    return " ";
-  });
+  }
 
   const freeText = [rest, ...shortcutText].join(" ").replace(/\s+/g, " ").trim();
   const free = buildFreeText(freeText, partial);

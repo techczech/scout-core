@@ -2838,23 +2838,13 @@
       "input": "https://x.com/a/status/1",
       "partial": false,
       "expected": {
-        "fts": "\"https:/\" \"1\"",
+        "fts": "\"https://x.com/a/status/1\"",
         "has_positive": true,
         "positive_terms": [
-          "https:/",
-          "1"
+          "https://x.com/a/status/1"
         ],
         "negatives": [],
-        "regexes": [
-          {
-            "source": "x.com",
-            "flags": "a"
-          },
-          {
-            "source": "status",
-            "flags": ""
-          }
-        ],
+        "regexes": [],
         "author": null,
         "title": null,
         "type": null,
@@ -3296,6 +3286,412 @@
         "genre": null,
         "source": null,
         "theme": "Research integrity, publishing and peer review",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "event:2026-09/E21 /proof/i",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "proof",
+            "flags": "i"
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": "2026-09/E21",
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "event:2026-09/E21 event:2026-09/E22 proof",
+      "partial": false,
+      "expected": {
+        "fts": "\"proof\"",
+        "has_positive": true,
+        "positive_terms": [
+          "proof"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": "2026-09/E22",
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "theme:\"AI/ML and proofs\" /x/ word",
+      "partial": false,
+      "expected": {
+        "fts": "\"word\"",
+        "has_positive": true,
+        "positive_terms": [
+          "word"
+        ],
+        "negatives": [],
+        "regexes": [
+          {
+            "source": "x",
+            "flags": ""
+          }
+        ],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "AI/ML and proofs",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "entity:\"GPT \\\"Astra\\\"\" and",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": "GPT \"Astra\"",
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "entity:\"back\\\\slash\" x",
+      "partial": false,
+      "expected": {
+        "fts": "\"x\"",
+        "has_positive": true,
+        "positive_terms": [
+          "x"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": "back\\slash",
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "entity:O’Reilly",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": "O’Reilly",
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "\"au:inside a phrase\" outside",
+      "partial": false,
+      "expected": {
+        "fts": "\"au:inside a phrase\" \"outside\"",
+        "has_positive": true,
+        "positive_terms": [
+          "au:inside a phrase",
+          "outside"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "\"a/b c/d\" e",
+      "partial": false,
+      "expected": {
+        "fts": "\"a/b c/d\" \"e\"",
+        "has_positive": true,
+        "positive_terms": [
+          "a/b c/d",
+          "e"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "km/h and m/s",
+      "partial": false,
+      "expected": {
+        "fts": "\"km/h\" \"m/s\"",
+        "has_positive": true,
+        "positive_terms": [
+          "km/h",
+          "m/s"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "au:\"unclosed value",
+      "partial": false,
+      "expected": {
+        "fts": "\"value\"",
+        "has_positive": true,
+        "positive_terms": [
+          "value"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": "unclosed",
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "-/x/ y",
+      "partial": false,
+      "expected": {
+        "fts": "(\"y\") NOT \"/x/\"",
+        "has_positive": true,
+        "positive_terms": [
+          "y"
+        ],
+        "negatives": [
+          "/x/"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null
+      }
+    },
+    {
+      "input": "/a/b/ c",
+      "partial": false,
+      "expected": {
+        "fts": "\"/a/b/\" \"c\"",
+        "has_positive": true,
+        "positive_terms": [
+          "/a/b/",
+          "c"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
         "entity": null,
         "event": null,
         "ai": null,

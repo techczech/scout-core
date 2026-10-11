@@ -155,6 +155,8 @@ pub fn split(cfg: &CorpusConfig, rel_path: &str, parsed: &ParsedFile) -> Vec<Doc
             meta.summary = None;
             meta.kind = Some("tweet".into());
             meta.source = Some("x".into());
+            // Each tweet's own key (`x:<id>`), never the file's.
+            meta.source_id = Some(t.id.clone());
             meta.public_url = Some(tweet_url(handle.as_deref(), &t.id));
             meta.handle = handle.clone();
             DocRecord {

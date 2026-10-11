@@ -64,8 +64,9 @@ impl std::str::FromStr for SearchMode {
 /// The free words of a query, as typed (stopwords kept: they carry meaning
 /// for an embedding model), without fields, exclusions or regexes.
 pub fn query_text(query: &str) -> String {
-    let q = scout_query::parse_query(&normalize::unify_quotes_str(query));
-    q.any_of
+    let q = scout_query::parse_query(query);
+    let (any_of, _) = scout_query::parse_free(&normalize::unify_quotes_str(&q.free_text));
+    any_of
         .iter()
         .flatten()
         .map(|t| t.text.trim())
