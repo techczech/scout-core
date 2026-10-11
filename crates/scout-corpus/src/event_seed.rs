@@ -12,8 +12,8 @@
 //!   members as held would leave those events without a usable record.
 //! - Every record the seed means to write is rendered to bytes and given
 //!   to [`events::parse_bytes`], the function every record the reader
-//!   accepts has passed through (size cap, UTF-8, frontmatter, YAML,
-//!   fields). What comes back must equal the record meant. Then the whole
+//!   accepts has passed through (size cap, UTF-8, control characters,
+//!   frontmatter, YAML, fields). What comes back must equal the record meant. Then the whole
 //!   set, old and new, goes through [`EventSet::from_records`]: no id may
 //!   repeat and every new member must resolve to its new record.
 //! - Only then is anything written, and a failure of any check leaves the
@@ -56,11 +56,28 @@
 //! writing, renamed or removed; no temporary or log file is made. The
 //! run's counts go to the caller.
 //!
-//! The out folder is the path given, made absolute with `.` and `..`
-//! taken out. It must be a real folder, not a symlink. Symlinks in the
-//! folders above it are accepted (macOS `/tmp` is one) and resolved when
-//! the folder is looked at (before the plan and, with `apply`, once more
-//! after it is made); the report names the resolved folder.
+//! A control character in a briefing's name or alias is written to the
+//! frontmatter as an escape inside a double-quoted scalar, so the file
+//! holds none and the reader gives the value back whole. A description is
+//! the body, plain prose without escapes: there the characters the reader
+//! refuses are taken out before the record is made (`render::body_text`:
+//! a bare CR, U+0085, U+2028 and U+2029 become LF, the rest are dropped).
+//!
+//! A path with a `..` component is refused, for the archive and for the
+//! out folder alike, before anything is looked at (a dry run too): `..`
+//! after a symlink means the parent of the link's target, which no
+//! reading of the path's text can tell. The seed has no code that takes
+//! a `..` out of a path.
+//!
+//! The out folder is the path given, made absolute: the current folder in
+//! front of a relative path, and the path's components put back together
+//! without its `.` components and trailing `/` (so `link/.` and `link/`
+//! are the link, and refused as one). It must be a real folder, not a
+//! symlink. Symlinks in the folders above it are accepted
+//! (macOS `/tmp` is one). When the folder exists they are resolved as it
+//! is looked at (before the plan and, with `apply`, once more after it is
+//! made) and the report names the resolved folder; a dry run over a
+//! folder that does not exist yet reports the absolute path unresolved.
 //!
 //! Threat model. A single-user desktop tool; no hostile process runs
 //! beside it.
@@ -79,7 +96,7 @@
 //!     one, refused when it is not. Reading it is harmless; there is no
 //!     link-count check.
 //!   - No traversal through ids: an id is a slug, the file name a bare
-//!     `<slug>.md`.
+//!     `<slug>.md`. None through the paths given either: `..` is refused.
 //!   - No partial state after a failed check: every check runs before the
 //!     first write. (A stop during the writes leaves whole records only;
 //!     see above.)
@@ -192,12 +209,27 @@ struct Planned {
     text: String,
 }
 
+/// Refuse `path` when it has a `..` component. Nothing is looked at.
+fn refuse_parent_dir(path: &Path, what: &str) -> Result<()> {
+    if path.components().any(|c| c == Component::ParentDir) {
+        bail!(
+            "{}: {what} path has a `..` component; give the path without it (nothing was written)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Seed lasting-event records (see the module notes). Stops with an error
-/// naming every file or monthly event at fault, before any write, when the
-/// out folder is a symlink or not a folder, when the reader skips a record
-/// already there, or when it would not read back a record about to be
-/// written.
+/// naming every file or monthly event at fault, before any write, when a
+/// path given has a `..` component, when the out folder is a symlink or
+/// not a folder, when the reader skips a record already there, or when it
+/// would not read back a record about to be written.
 pub fn seed(opts: &SeedOptions) -> Result<SeedReport> {
+    refuse_parent_dir(&opts.archive, "the archive")?;
+    if let Some(out) = &opts.out {
+        refuse_parent_dir(out, "the out")?;
+    }
     if !opts.archive.is_dir() {
         bail!("{}: the archive is not a folder", opts.archive.display());
     }
@@ -243,31 +275,21 @@ pub fn seed(opts: &SeedOptions) -> Result<SeedReport> {
 
 // ---------- the out folder ----------
 
-/// `path` made absolute, `.` and `..` taken out without touching the disk.
-fn absolute(path: &Path) -> Result<PathBuf> {
-    let mut out = if path.is_absolute() {
+/// The folder records are created in: `path` (which has no `..`, see
+/// [`seed`]) made absolute and, when it exists, required to be a real
+/// folder (not a symlink, dangling or not; not a file), with the symlinks
+/// of the folders above it resolved. A missing folder is returned
+/// absolute and unresolved. Nothing is written.
+fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
+    refuse_parent_dir(path, "the out")?;
+    // Not `std::path::absolute`: it keeps a trailing `/.` and `/`, under
+    // which a symlink is looked at as the folder it points to.
+    let mut wanted = if path.is_absolute() {
         PathBuf::new()
     } else {
         std::env::current_dir().context("the current folder")?
     };
-    for c in path.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    Ok(out)
-}
-
-/// The folder records are created in: `path` made absolute and, when it
-/// exists, required to be a real folder (not a symlink, dangling or not;
-/// not a file), with the symlinks of the folders above it resolved. A
-/// missing folder is returned as given. Nothing is written.
-fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
-    let wanted = absolute(path)?;
+    wanted.extend(path.components().filter(|c| *c != Component::CurDir));
     let at = wanted.display();
     match std::fs::symlink_metadata(&wanted) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(wanted),
@@ -643,13 +665,23 @@ mod tests {
     }
 
     #[test]
-    fn the_out_path_is_made_absolute_without_touching_the_disk() {
-        assert_eq!(
-            absolute(Path::new("/a/b/../c/./d")).unwrap(),
-            Path::new("/a/c/d")
-        );
-        assert_eq!(absolute(Path::new("/a/../../b")).unwrap(), Path::new("/b"));
+    fn a_path_with_a_parent_component_is_refused_and_no_other() {
+        for p in ["..", "../x", "a/../b", "/a/b/..", "/a/../../b", "./a/.."] {
+            let e = refuse_parent_dir(Path::new(p), "the out").unwrap_err();
+            assert!(e.to_string().contains("the out path has a `..`"), "{p}");
+            assert!(resolve_out_dir(Path::new(p)).is_err(), "{p}");
+        }
+        for p in [
+            ".", "./a", "a/./b/", "/a/b", "a..b/c", "...", "a/..b", "a/b../c",
+        ] {
+            assert!(refuse_parent_dir(Path::new(p), "the out").is_ok(), "{p}");
+        }
+        // A missing folder: absolute, the `.` gone, nothing made.
         let here = std::env::current_dir().unwrap();
-        assert_eq!(absolute(Path::new("x/../y")).unwrap(), here.join("y"));
+        assert_eq!(
+            resolve_out_dir(Path::new("./no-such-folder-xyz/./sub/")).unwrap(),
+            here.join("no-such-folder-xyz/sub")
+        );
+        assert!(!here.join("no-such-folder-xyz").exists());
     }
 }

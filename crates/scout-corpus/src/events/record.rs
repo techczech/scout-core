@@ -30,7 +30,8 @@ pub fn record_stem(file_name: &str) -> Option<&str> {
 }
 
 /// The record in a file's bytes, or why the reader skips it: the size cap,
-/// UTF-8 and [`parse_record`]. Every record the index reads has passed
+/// UTF-8 and [`parse_record`] (which looks for control characters in the
+/// whole file before it reads any of it). Every record the index reads has passed
 /// through here, and so has every record `scout events seed` writes.
 pub fn parse_bytes(bytes: &[u8], stem: &str) -> std::result::Result<EventRecord, String> {
     if bytes.len() as u64 > MAX_RECORD_BYTES {
@@ -137,10 +138,47 @@ impl Flat {
     }
 }
 
+/// Why a record holding one of these characters is skipped.
+pub(super) const CONTROL: &str = "control character in record";
+
+/// A character no record file may hold anywhere: a C0 control other than
+/// TAB, LF and CR, DEL, a C1 control (U+0080 to U+009F), the line and
+/// paragraph separators U+2028 and U+2029, and U+FEFF. (CR is judged by
+/// what follows it, in [`has_control`]; one leading U+FEFF is allowed
+/// there.)
+pub fn is_record_control(c: char) -> bool {
+    matches!(c,
+        '\0'..='\u{8}'
+        | '\u{b}'
+        | '\u{c}'
+        | '\u{e}'..='\u{1f}'
+        | '\u{7f}'..='\u{9f}'
+        | '\u{2028}'
+        | '\u{2029}'
+        | '\u{feff}')
+}
+
+/// Does `text`, a whole record file, hold a character the reader refuses:
+/// one of [`is_record_control`], or a CR that is not followed by LF? One
+/// byte-order mark at the very start is not counted (it is cut off before
+/// the frontmatter is looked for, as it always was); any other is.
+///
+/// After this check a line ends at LF and nowhere else, for `str::lines`
+/// and for the YAML scanner alike (YAML also breaks a line at a bare CR
+/// and stops reading at NUL), so the two cannot disagree about where a
+/// line, a `...` marker or the input ends.
+fn has_control(text: &str) -> bool {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let b = text.as_bytes();
+    let bare_cr = (0..b.len()).any(|i| b[i] == b'\r' && b.get(i + 1) != Some(&b'\n'));
+    bare_cr || text.chars().any(is_record_control)
+}
+
 /// Is there a document end marker in `front`: a line that is `...`, alone
 /// or followed by whitespace? YAML reads such a line as the end of the
 /// document wherever it stands (content of a block scalar is indented, so
-/// an indented `...` is not one).
+/// an indented `...` is not one). Lines are `str::lines`'s, which are the
+/// YAML scanner's once [`has_control`] has passed the file.
 fn has_document_end(front: &str) -> bool {
     front.lines().any(|l| {
         l.strip_prefix("...")
@@ -205,8 +243,14 @@ fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// Parse one record file; `stem` is its file name without `.md`.
+/// Parse one record file; `stem` is its file name without `.md`. The
+/// whole file, body included, is refused when it holds a control character
+/// ([`has_control`]); that is looked at first, before the frontmatter is
+/// found or any YAML is read.
 pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, String> {
+    if has_control(text) {
+        return Err(CONTROL.into());
+    }
     let (front, body) = split_frontmatter(text).ok_or("no frontmatter")?;
     let flat = read_flat(front)?;
     if let Some(e) = flat.err {
@@ -337,6 +381,56 @@ mod tests {
             let text = format!("---\n{front}---\n...\n--- more\n");
             assert!(parse_record(&text, "x").is_ok(), "{front:?}");
         }
+    }
+
+    #[test]
+    fn a_control_character_anywhere_in_the_file_refuses_the_record() {
+        // The review's two cases: the YAML scanner stops at NUL, and it
+        // ends a line at a bare CR where `str::lines` does not.
+        for text in [
+            "---\nid: x\nmembers: [2026-09/E01]\n\x00garbage: [\n---\n",
+            "---\nid: x\rmembers: [2026-09/E01]\r...\n---\n",
+            "---\nid: x\rname: y\n---\n",
+            "---\nid: x\n---\nbody\rmore\n",
+            "---\nid: x\n---\nbody\r",
+            "---\nid: x\r\r\n---\n",
+            "\r---\nid: x\n---\n",
+            "---\nid: x\n---\nbody\u{0}\n",
+            "---\nid: x\nname: a\u{1}b\n---\n",
+            "---\nid: x\nname: a\u{b}b\n---\n",
+            "---\nid: x\nname: a\u{c}b\n---\n",
+            "---\nid: x\nname: a\u{1b}b\n---\n",
+            "---\nid: x\nname: a\u{1f}b\n---\n",
+            "---\nid: x\nname: a\u{7f}b\n---\n",
+            "---\nid: x\nname: a\u{80}b\n---\n",
+            "---\nid: x\nname: a\u{85}b\n---\n",
+            "---\nid: x\nname: a\u{9f}b\n---\n",
+            "---\nid: x\nname: a\u{2028}b\n---\n",
+            "---\nid: x\nname: a\u{2029}b\n---\n",
+            "---\nid: x\nname: \"a\u{2028}b\"\n---\n",
+            "---\nid: x\nname: a\u{feff}b\n---\n",
+            "---\nid: x\n---\nbody \u{feff}\n",
+            "\u{feff}\u{feff}---\nid: x\n---\n",
+            "---\nid: x\n# a comment \u{7}\n---\n",
+        ] {
+            let e = parse_record(text, "x").unwrap_err();
+            assert_eq!(e, CONTROL, "{text:?}");
+            assert_eq!(parse_bytes(text.as_bytes(), "x").unwrap_err(), CONTROL);
+        }
+        // Read: TAB, LF, CR before LF, one leading byte-order mark, the
+        // characters next to the refused ranges, and any of them written
+        // as an escape in a double-quoted value.
+        for text in [
+            "---\nid: x\nname: a\tb\n---\nbody\tmore\n",
+            "---\r\nid: x\r\nname: y\r\n---\r\nbody\r\n",
+            "\u{feff}---\nid: x\n---\n",
+            "---\nid: x\nname: a\u{a0}b ~ \u{2027}\u{202a}\u{200b}\u{fffd}\n---\n",
+        ] {
+            assert!(parse_record(text, "x").is_ok(), "{text:?}");
+        }
+        let escaped = "---\nid: x\nname: \"a\\0b\\rc\\x7Fd\\x85e\\u2028f\\uFEFFg\"\n---\n";
+        let r = parse_record(escaped, "x").unwrap();
+        assert_eq!(r.name, "a\u{0}b\rc\u{7f}d\u{85}e\u{2028}f\u{feff}g");
     }
 
     /// Records nested 100,000 deep, in every shape that fits the size cap.

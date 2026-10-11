@@ -357,11 +357,12 @@ enum EventsCmd {
     /// written, is one `index build` would skip.
     Seed {
         /// The archive folder (holds analysis/context/briefings and
-        /// analysis/topics/current.jsonl).
+        /// analysis/topics/current.jsonl). A path with `..` is refused.
         #[arg(long)]
         archive: std::path::PathBuf,
         /// Where records go (default: <archive>/analysis/events). Must be
-        /// the folder itself, not a symlink to it.
+        /// the folder itself, not a symlink to it. A path with `..` is
+        /// refused.
         #[arg(long)]
         out: Option<std::path::PathBuf>,
         /// Write the records.

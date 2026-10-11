@@ -11,10 +11,11 @@
 //!   merged into, followed to the end of the chain. A `merged_into` that
 //!   names no record, or that closes a cycle, is reported and that record
 //!   is treated as not merged.
-//! - A malformed record (no frontmatter, bad YAML, no `id`, an `id` that
-//!   is not the file stem, a repeated id, a wrongly typed field, YAML
-//!   nested deeper than [`MAX_YAML_DEPTH`]) is skipped with a warning
-//!   naming its file; the rest is read.
+//! - A malformed record (a control character anywhere in the file, no
+//!   frontmatter, bad YAML, no `id`, an `id` that is not the file stem, a
+//!   repeated id, a wrongly typed field, YAML nested deeper than
+//!   [`MAX_YAML_DEPTH`]) is skipped with a warning naming its file; the
+//!   rest is read.
 //! - Nothing here recurses over record content. One file's bytes are
 //!   parsed in `events/record.rs` (the frontmatter is pulled one parser
 //!   event at a time and the pull stops at the first value that nests too
@@ -39,7 +40,9 @@ use std::path::{Path, PathBuf};
 
 mod record;
 use record::TOO_LARGE;
-pub use record::{parse_bytes, parse_record, record_stem, MAX_RECORD_BYTES, MAX_YAML_DEPTH};
+pub use record::{
+    is_record_control, parse_bytes, parse_record, record_stem, MAX_RECORD_BYTES, MAX_YAML_DEPTH,
+};
 
 /// The records folder, relative to the corpus root.
 pub const EVENTS_DIR: &str = "analysis/events";

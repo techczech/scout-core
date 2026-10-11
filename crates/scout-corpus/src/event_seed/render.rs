@@ -3,8 +3,36 @@
 //! not as a number, a null, a tag, an anchor, a comment or a second
 //! document. An empty single value is written as nothing after the key and
 //! an empty list as `[]`.
+//!
+//! The reader refuses a record file that holds a control character
+//! (`events::is_record_control`, or a CR without LF). In the frontmatter
+//! such a character is written as an escape, so the file's bytes hold
+//! none and the value comes back whole. The body is plain prose with no
+//! escapes: [`body_text`] takes the characters out before the record is
+//! made, so the description a record carries is the one its file holds.
 
-use crate::events::EventRecord;
+use crate::events::{is_record_control, EventRecord};
+
+/// A briefing description as a record body: plain prose the reader
+/// accepts. A line break that is not LF or CR LF (a bare CR, U+0085,
+/// U+2028, U+2029) becomes LF, so the words on either side stay apart;
+/// every other character the reader refuses in a record
+/// (`events::is_record_control`: NUL and the other C0 controls but TAB,
+/// DEL, the C1 controls, U+FEFF) is taken out; then the ends are trimmed.
+/// TAB, LF and CR LF stay.
+pub(crate) fn body_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' if chars.peek() == Some(&'\n') => out.push('\r'),
+            '\r' | '\u{85}' | '\u{2028}' | '\u{2029}' => out.push('\n'),
+            c if is_record_control(c) => {}
+            c => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
 
 /// `s` as a double-quoted YAML scalar. Printable ASCII and printable
 /// non-ASCII characters stand as they are; `"`, `\`, every control
@@ -60,7 +88,9 @@ fn list(out: &mut String, key: &str, values: &[String]) {
 /// The file text of `record`: the frontmatter in the spec's field order,
 /// a blank line, then the description. What the reader gives back for it
 /// equals `record` whenever each of its values is trimmed and not empty
-/// (the seed checks that for every record before it writes any).
+/// and its description is a [`body_text`] (the description is written as
+/// it is, so one holding a control character gives a file the reader
+/// refuses). The seed checks that for every record before it writes any.
 pub fn render_record(record: &EventRecord) -> String {
     let mut out = String::from("---\n");
     single(&mut out, "id", Some(&record.id));
@@ -98,7 +128,8 @@ mod tests {
             origin: Some("model".into()),
             edited: None,
             merged_into: None,
-            description: format!("About {name}."),
+            // A body: what the seed makes of a briefing description.
+            description: body_text(&format!("About {name}.")),
         }
     }
 
@@ -253,8 +284,42 @@ mod tests {
             tried += 1;
             let mut r = record(&name);
             r.aliases = vec![alias];
-            r.description = rng.string().trim().to_string();
+            r.description = body_text(&rng.string());
             round_trips(&r);
         }
+    }
+
+    #[test]
+    fn a_body_keeps_its_prose_and_loses_what_the_reader_refuses() {
+        for (from, to) in [
+            ("plain\ttab\nline\r\ncrlf", "plain\ttab\nline\r\ncrlf"),
+            ("nul\u{0}in\u{7}side\u{1b}[0m", "nulinside[0m"),
+            ("del\u{7f}c1\u{80}\u{9f}bom\u{feff}", "delc1bom"),
+            ("old\rmac\rlines", "old\nmac\nlines"),
+            (
+                "next\u{85}line\u{2028}sep\u{2029}para",
+                "next\nline\nsep\npara",
+            ),
+            ("cr\r\u{0}\nthen", "cr\n\nthen"),
+            ("\u{0} \r\nedges \r", "edges"),
+            ("\u{feff}\u{0}\r", ""),
+            (
+                "kept: \u{a0}nbsp \u{200b}zw \u{202e}rtl é 日本 🎉",
+                "kept: \u{a0}nbsp \u{200b}zw \u{202e}rtl é 日本 🎉",
+            ),
+        ] {
+            let body = body_text(from);
+            assert_eq!(body, to, "{from:?}");
+            assert_eq!(body_text(&body), body, "{from:?}: cleaned once");
+            let mut r = record("x");
+            r.description = body;
+            round_trips(&r);
+        }
+        // The same description written as it came: a file the reader
+        // refuses, which is why the seed cleans it first.
+        let mut r = record("x");
+        r.description = "nul\u{0}inside".into();
+        let e = parse_bytes(render_record(&r).as_bytes(), &r.id).unwrap_err();
+        assert_eq!(e, "control character in record");
     }
 }

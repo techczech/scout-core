@@ -295,7 +295,9 @@ fn a_record_he_changed_is_never_rewritten_and_its_members_are_not_seeded_again()
 #[test]
 fn awkward_names_reach_the_reader_as_the_briefing_has_them() {
     // Name in the briefing -> name the record must be read with (runs of
-    // whitespace, line ends among them, are one space in a name).
+    // whitespace, line ends among them, are one space in a name). A
+    // control character in a name or alias is kept: it is written as an
+    // escape, so the file holds none.
     let cases: Vec<(&str, &str)> = vec![
         ("\"quoted\" and 'single'", "\"quoted\" and 'single'"),
         ("key: value", "key: value"),
@@ -313,6 +315,12 @@ fn awkward_names_reach_the_reader_as_the_briefing_has_them() {
         ("back\\slash \\n", "back\\slash \\n"),
         ("nul\u{0}and bell\u{7}", "nul\u{0}and bell\u{7}"),
         ("bom\u{feff}in", "bom\u{feff}in"),
+        ("del\u{7f}in c1\u{9f}in", "del\u{7f}in c1\u{9f}in"),
+        (
+            "next\u{85}line sep\u{2028}para\u{2029}end",
+            "next line sep para end",
+        ),
+        ("old\rmac", "old mac"),
         ("123", "123"),
         ("1e3", "1e3"),
         ("true", "true"),
@@ -346,8 +354,25 @@ fn awkward_names_reach_the_reader_as_the_briefing_has_them() {
         let rec = rec(&set, set.resolve(&member).unwrap());
         assert_eq!(rec.name, *want, "{raw:?}");
         assert_eq!(rec.aliases, [want.to_string()], "{raw:?}");
-        assert_eq!(rec.description, raw.trim(), "{raw:?}");
+        // The same text as a description is the body, plain prose with
+        // no escapes: there the characters the reader refuses are taken
+        // out, and a line break that is not LF or CR LF becomes LF.
+        let body = match *raw {
+            "nul\u{0}and bell\u{7}" => "nuland bell",
+            "bom\u{feff}in" => "bomin",
+            "del\u{7f}in c1\u{9f}in" => "delin c1in",
+            "next\u{85}line sep\u{2028}para\u{2029}end" => "next\nline sep\npara\nend",
+            "old\rmac" => "old\nmac",
+            other => other.trim(),
+        };
+        assert_eq!(rec.description, body, "{raw:?}");
         assert_eq!(rec.members, [member]);
+        // The file's own bytes hold no control character, in the
+        // frontmatter (escaped) or in the body (taken out).
+        let file = tmp.path().join(format!("analysis/events/{}.md", rec.id));
+        let text = fs::read_to_string(file).unwrap();
+        assert!(!text.chars().any(events::is_record_control), "{raw:?}");
+        assert!(!text.replace("\r\n", "\n").contains('\r'), "{raw:?}");
     }
     // Idempotent over these too.
     assert_eq!(seed(&opts(tmp.path(), None, true)).unwrap().created, 0);
@@ -396,7 +421,7 @@ fn out_takes_the_records_and_the_archive_is_untouched() {
     let scratch = tempfile::tempdir().unwrap();
     let real = scratch.path().join("real");
     fs::create_dir(&real).unwrap();
-    let r = seed(&opts(a.path(), Some(&real.join("x").join("..")), true)).unwrap();
+    let r = seed(&opts(a.path(), Some(&real.join(".")), true)).unwrap();
     assert_eq!(r.created, 10);
     // Links in the folders above (the temp folder's own, on macOS) are
     // resolved; the report names the real folder.

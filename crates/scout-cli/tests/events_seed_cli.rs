@@ -309,4 +309,31 @@ fn a_refusal_is_a_non_zero_exit_with_the_file_and_the_reason_and_no_write() {
     assert_eq!(r.status.code(), Some(2));
     assert!(text(&r.stderr).contains("the out folder is not a folder"));
     assert_eq!(fs::read_to_string(&file).unwrap(), "keep\n");
+    // A `..` in either path: refused, dry run too, nothing made.
+    let before = names(tmp.path());
+    let up_out = tmp.path().join("fresh/../up");
+    let up_archive = h.join("analysis/..");
+    for apply in [&["--apply"][..], &[]] {
+        for (archive, out, why) in [
+            (
+                a,
+                up_out.to_str().unwrap(),
+                "the out path has a `..` component",
+            ),
+            (
+                up_archive.to_str().unwrap(),
+                fresh.to_str().unwrap(),
+                "the archive path has a `..` component",
+            ),
+        ] {
+            let mut args = vec!["events", "seed", "--archive", archive, "--out", out];
+            args.extend(apply);
+            let r = scout(tmp.path(), &args);
+            assert_eq!(r.status.code(), Some(2));
+            assert_eq!(text(&r.stdout), "");
+            assert!(text(&r.stderr).contains(why), "{}", text(&r.stderr));
+        }
+    }
+    assert_eq!(names(tmp.path()), before);
+    assert!(!h.join("analysis/events").exists());
 }

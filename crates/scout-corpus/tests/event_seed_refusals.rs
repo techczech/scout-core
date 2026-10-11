@@ -93,6 +93,159 @@ fn a_record_the_reader_skips_stops_the_run_with_the_readers_reason() {
     assert_eq!(tree(a.path()), before);
 }
 
+/// The shared control-character cases (`tests/fixtures/event-records/
+/// verdicts.json`, every case refused as a control character): file name
+/// and bytes.
+fn control_cases() -> Vec<(String, Vec<u8>)> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/event-records/verdicts.json");
+    let v: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    v["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["why"] == "control character in record")
+        .map(|c| {
+            let h = c["make"]["hex"].as_str().expect("made from hex");
+            let bytes = (0..h.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+                .collect();
+            (c["file"].as_str().unwrap().to_string(), bytes)
+        })
+        .collect()
+}
+
+#[test]
+fn a_record_with_a_control_character_stops_the_run_before_any_write() {
+    let cases = control_cases();
+    for must in [
+        "control-nul.md",
+        "control-bare-cr.md",
+        "control-cr-doc-end.md",
+        "control-c1.md",
+        "control-line-separator.md",
+        "control-in-body.md",
+    ] {
+        assert!(cases.iter().any(|(n, _)| n == must), "{must}");
+    }
+    for (name, bytes) in &cases {
+        for apply in [true, false] {
+            // In the archive's own folder, and in an `--out` folder.
+            for own in [true, false] {
+                let a = archive();
+                let scratch = tempfile::tempdir().unwrap();
+                let out = match own {
+                    true => a.path().join("analysis/events"),
+                    false => scratch.path().join("out"),
+                };
+                fs::create_dir_all(&out).unwrap();
+                fs::write(out.join(name), bytes).unwrap();
+                let before = (tree(a.path()), tree(scratch.path()));
+                let given = (!own).then_some(out.as_path());
+                let e = seed(&opts(a.path(), given, apply)).unwrap_err().to_string();
+                let file = fs::canonicalize(out.join(name)).unwrap();
+                assert!(
+                    e.contains(&format!(
+                        "{}: cannot read the record (control character in record)",
+                        file.display()
+                    )),
+                    "{name}: {e}"
+                );
+                assert!(e.contains("nothing was written"), "{name}: {e}");
+                assert_eq!((tree(a.path()), tree(scratch.path())), before, "{name}");
+                assert_eq!(names(&out), [name.as_str()], "{name}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_path_with_a_parent_component_is_refused_with_nothing_created() {
+    let a = archive();
+    let scratch = tempfile::tempdir().unwrap();
+    let s = scratch.path();
+    fs::create_dir_all(s.join("a")).unwrap();
+    let archive_before = tree(a.path());
+    for apply in [true, false] {
+        // `--out a/../b`, existing or not, absolute or relative.
+        for out in [
+            s.join("a/../b"),
+            s.join("a/../a"),
+            s.join("missing/../b"),
+            s.join("b/.."),
+            s.join("a").join("..").join("a").join("events"),
+            PathBuf::from("a/../b"),
+            PathBuf::from("../b"),
+            PathBuf::from(".."),
+        ] {
+            let e = seed(&opts(a.path(), Some(&out), apply))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains(&format!(
+                    "{}: the out path has a `..` component",
+                    out.display()
+                )),
+                "{e}"
+            );
+            assert!(e.contains("nothing was written"), "{e}");
+        }
+        // `--archive a/../b`: refused although it names the archive, with
+        // and without an out folder of its own.
+        let name = a.path().file_name().unwrap();
+        let through = a.path().join("analysis").join("..");
+        let sideways = a.path().join("..").join(name);
+        for archive in [&through, &sideways] {
+            assert!(archive.join("analysis/topics/current.jsonl").is_file());
+            for out in [None, Some(s.join("out"))] {
+                let e = seed(&opts(archive, out.as_deref(), apply))
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    e.contains(&format!(
+                        "{}: the archive path has a `..` component",
+                        archive.display()
+                    )),
+                    "{e}"
+                );
+            }
+        }
+        assert_eq!(names(s), ["a"]);
+        assert!(names(&s.join("a")).is_empty());
+        assert_eq!(tree(a.path()), archive_before);
+        assert!(!a.path().join("analysis/events").exists());
+        assert!(!Path::new("b").exists() && !Path::new("../b").exists());
+    }
+}
+
+/// The sixth review's case: `base/link` points at `base/real/child`, and
+/// `--out base/link/../events` would be `base/real/events` to the file
+/// system and `base/events` to a reading of the path's text. Neither is
+/// written.
+#[cfg(unix)]
+#[test]
+fn an_out_path_through_a_link_and_back_up_is_refused_and_writes_in_neither_place() {
+    use std::os::unix::fs::symlink;
+    let a = archive();
+    let scratch = tempfile::tempdir().unwrap();
+    let base = scratch.path();
+    fs::create_dir_all(base.join("real/child")).unwrap();
+    symlink(base.join("real/child"), base.join("link")).unwrap();
+    let out = base.join("link/../events");
+    for apply in [true, false] {
+        let e = seed(&opts(a.path(), Some(&out), apply)).unwrap_err();
+        assert!(e.to_string().contains("the out path has a `..`"), "{e}");
+        assert_eq!(names(base), ["link", "real"]);
+        assert_eq!(names(&base.join("real")), ["child"]);
+        assert!(names(&base.join("real/child")).is_empty());
+    }
+    // The folder itself, named without `..`, is written to.
+    let r = seed(&opts(a.path(), Some(&base.join("real/events")), true)).unwrap();
+    assert_eq!(r.created, 10);
+    assert_eq!(names(base), ["link", "real"]);
+}
+
 #[test]
 fn a_record_too_large_for_the_reader_stops_the_run_before_any_write() {
     // The description alone is exactly the cap; with its frontmatter the
@@ -167,7 +320,8 @@ fn an_out_folder_that_is_a_symlink_or_not_a_folder_is_refused_before_anything() 
     for apply in [true, false] {
         for (out, why) in [
             (s.join("link"), "the out folder is a symlink"),
-            (s.join("link/../link"), "the out folder is a symlink"),
+            (s.join("link/."), "the out folder is a symlink"),
+            (s.join("./link/"), "the out folder is a symlink"),
             (s.join("dangling"), "the out folder is a symlink"),
             (file.clone(), "the out folder is not a folder"),
         ] {

@@ -1,5 +1,5 @@
 {
- "about": "Event record files and the verdict the reader (crates/scout-corpus/src/events.rs) gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs. The reader is the one implementation of the record format: `scout events seed` reads and checks records with it. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
+ "about": "Event record files and the verdict the reader (crates/scout-corpus/src/events.rs) gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs. A control-* case holds a control character the reader refuses anywhere in a record file (events/record.rs, `has_control`); they are all made from hex, a raw NUL or CR does not sit well in git. The reader is the one implementation of the record format: `scout events seed` reads and checks records with it. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
  "cases": [
   {
    "file": "valid-full.md",
@@ -375,6 +375,124 @@
    "file": "valid-dots.md",
    "verdict": "accept",
    "note": "dots in a value, indented in a block scalar and in the body are not a document end marker"
+  },
+  {
+   "file": "control-nul.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d6e756c0a6d656d626572733a205b323032362d30392f4530315d0a00676172626167653a205b0a2d2d2d0a"
+   },
+   "note": "the sixth review's case: the YAML scanner ends its input at a raw NUL, so the broken tail after it went unread"
+  },
+  {
+   "file": "control-bare-cr.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d626172652d63720d6d656d626572733a205b323032362d30392f4530315d0a2d2d2d0a"
+   },
+   "note": "a CR without LF: YAML ends a line there, the reader's line splitting does not"
+  },
+  {
+   "file": "control-cr-doc-end.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d63722d646f632d656e640d6d656d626572733a205b323032362d30392f4530315d0d2e2e2e0a2d2d2d0a"
+   },
+   "note": "the sixth review's case: `...` after a bare CR is a document end marker to YAML and the middle of a line to the marker check"
+  },
+  {
+   "file": "control-c1.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d63310a6e616d653a206e657874c2856c696e650a2d2d2d0a"
+   },
+   "note": "a C1 control (U+0085, next line)"
+  },
+  {
+   "file": "control-line-separator.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d6c696e652d736570617261746f720a6e616d653a206c696e65e280a8736570617261746f720a2d2d2d0a"
+   },
+   "note": "U+2028 in the frontmatter"
+  },
+  {
+   "file": "control-paragraph-separator.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d7061726167726170682d736570617261746f720a6e616d653a202270617261e280a96772617068220a2d2d2d0a"
+   },
+   "note": "U+2029, raw inside a quoted value"
+  },
+  {
+   "file": "control-del.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d64656c0a6e616d653a20617f620a2d2d2d0a"
+   },
+   "note": "DEL"
+  },
+  {
+   "file": "control-escape.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d6573636170650a2320636f6d6d656e74201b5b306d0a2d2d2d0a"
+   },
+   "note": "a C0 control in a comment"
+  },
+  {
+   "file": "control-bom-inside.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d626f6d2d696e736964650a6e616d653a2061efbbbf620a2d2d2d0a"
+   },
+   "note": "U+FEFF anywhere but the very start of the file"
+  },
+  {
+   "file": "control-two-boms.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "efbbbfefbbbf2d2d2d0a69643a20636f6e74726f6c2d74776f2d626f6d730a2d2d2d0a"
+   },
+   "note": "one leading byte-order mark is read, a second is not"
+  },
+  {
+   "file": "control-in-body.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d696e2d626f64790a2d2d2d0a626f6479006d6f72650a"
+   },
+   "note": "the rule is for the whole file, the body too"
+  },
+  {
+   "file": "control-body-bare-cr.md",
+   "verdict": "reject",
+   "why": "control character in record",
+   "make": {
+    "hex": "2d2d2d0a69643a20636f6e74726f6c2d626f64792d626172652d63720a2d2d2d0a6f6c640d6d61630d6c696e65730a"
+   },
+   "note": "a bare CR in the body"
+  },
+  {
+   "file": "valid-escaped-controls.md",
+   "verdict": "accept",
+   "note": "control characters written as escapes in double-quoted values (what `scout events seed` writes): the file holds none"
+  },
+  {
+   "file": "valid-tab.md",
+   "verdict": "accept",
+   "note": "TAB is not refused, in a value or in the body"
   },
   {
    "file": ".hidden.md",

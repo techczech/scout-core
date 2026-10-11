@@ -8,6 +8,7 @@
 //! must be stops the run with the file named; none is skipped.
 
 use super::naming::{is_period, monthly_id};
+use super::render::body_text;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -22,7 +23,7 @@ pub(crate) struct MonthlyEvent {
     /// Whitespace runs as one space, trimmed; may be empty.
     pub name: String,
     pub aliases: Vec<String>,
-    /// Trimmed.
+    /// A record body: [`body_text`] (no control characters, trimmed).
     pub description: String,
 }
 
@@ -145,7 +146,7 @@ fn parse_briefing(
         let event = MonthlyEvent {
             name: one_line(text("name")?),
             aliases,
-            description: text("description")?.trim().to_string(),
+            description: body_text(text("description")?),
         };
         if out.insert(id.clone(), event).is_some() {
             return Err(format!("event {id} appears twice"));
