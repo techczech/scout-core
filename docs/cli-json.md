@@ -72,7 +72,7 @@ One quoted string, read by the query grammar ("Query grammar" below); bare words
 
 A slice refuses search terms (`-x`, `"phrase"`, `x*`, `/re/`) and the highlight fields `tag:`, `co:`, `i:`.
 
-A slice carries only its own terms; it does not inherit the command's filter flags. So `scout collocates metaphor --after 2020 --compare "before:2015"` compares after-2020 writing (A) with before-2015 writing (B), and `--compare highlights` compares the same filters' writing with the highlights corpus. The echoed `spec` is the slice as given; for the main side of `--compare` it is the filter flags written as a slice (`after:2020`, or `all`).
+A slice carries only its own terms; it does not inherit the command's filter flags. So `scout collocates metaphor --after 2020 --compare "before:2015"` compares after-2020 writing (A) with before-2015 writing (B), and `--compare highlights` compares the same filters' writing with the highlights corpus. The echoed `spec` is the slice as given; for the main side of `--compare` it is the filter flags written as a slice (`after:2020`, or `all`), every value written by the grammar's value-writing rule (`ti:"GPT \\"Astra\\""`), so it parses back to the same filter. `lang: genre: source: ty:` are comma lists, so an item cannot itself hold a comma.
 
 ### Row distribution object (`--dist year|doc|corpus` on `ngrams` and `collocates`)
 
@@ -615,7 +615,7 @@ What each normalisation stage changed, read from the source files (read-only; no
 
 `full` is true on a first build, `--force`, or an engine or registry-entry change. `elapsed_ms` is the one non-deterministic field.
 
-A build refuses (exit 2, nothing opened or deleted) when the index file or one of its `-wal`/`-shm`/`-journal` side files is a symlink or has more than one hard link, or when the index's real location is inside any registered corpus folder; the vector store is checked the same way.
+A build refuses (exit 2, nothing opened or deleted) when the index file or one of its `-wal`/`-shm`/`-journal` side files is a symlink or has more than one hard link, or when the index's real location is inside any registered corpus folder; the vector store is checked the same way. The side-file paths are built byte for byte from the index path (never through a text conversion), so a folder name that is not valid UTF-8 is checked as the same files SQLite will open.
 
 A corpus whose folder has a topic layer adds a `topics` object (see "Topic layer"):
 
@@ -653,7 +653,7 @@ The added registry entry, exactly as written to the registry (the `[[corpus]]` t
 - `id`: default a slug of the folder name (ASCII, lower case, accents dropped), de-duplicated as `notes`, `notes-2`. An explicit `--id` already in use is refused, naming the clash.
 - `kind`: default `markdown-folder`; never guessed from the folder's contents. `highlight-scout-archive` only when asked for (`--kind highlight-scout-archive`), and the folder must have `readings/works/`.
 - markdown-folder defaults: include `**/*.md` and `**/*.txt`, no required frontmatter, no link template, no default author, one document per file. A `.txt` file with no frontmatter title is titled by its file stem and stays undated.
-- Refused (exit 2, registry unchanged): a missing path or a file, a path already registered (`path … already registered as \`<id>\``), a clashing id, a bad glob, a registry that does not parse.
+- Refused (exit 2, registry unchanged): a path that is not valid UTF-8 (the registry is text and would record a different folder), a missing path or a file, a path already registered (`path … already registered as \`<id>\``), a clashing id, a bad glob, a registry that does not parse.
 - Creates the registry when missing. Does not build the index; the human output ends `next: scout index build <id>`.
 
 Library: `scout_corpus::api::add_corpus(AddCorpus) -> Result<CorpusConfig>` (the user registry); `scout_corpus::register::RegistryStore::new(registry_path, index_dir).add(&AddCorpus)` for an explicit registry. `AddCorpus` is a serde struct with every field but `path` optional: `{"path": "~/Notes", "id": null, "name": null, "kind": null, "author": null, "include": [], "exclude": []}`.

@@ -319,7 +319,7 @@ fn new_config(req: &AddCorpus, src: &Source, reg: &Registry) -> Result<CorpusCon
         id,
         name,
         kind,
-        path: stored_path(&spelled),
+        path: stored_path(&spelled)?,
         include,
         exclude: req.exclude.clone(),
         require_frontmatter: vec![],
@@ -425,19 +425,30 @@ fn ids_clash(a: &str, b: &str) -> bool {
 
 /// The registry form of an absolute path: `~/…` when under the home
 /// folder, as spelled or canonical.
-fn stored_path(abs: &Path) -> String {
+fn stored_path(abs: &Path) -> Result<String> {
+    // The registry is text: a path that is not valid UTF-8 cannot be
+    // written exactly, and a lossy copy would name a different folder.
+    let text = |p: &Path| -> Result<String> {
+        match p.to_str() {
+            Some(s) => Ok(s.to_string()),
+            None => bail!(
+                "path {} is not valid UTF-8; the registry cannot record it exactly",
+                p.display()
+            ),
+        }
+    };
     if let Some(home) = dirs::home_dir() {
         let canon = home.canonicalize().unwrap_or_else(|_| home.clone());
         for h in [home, canon] {
             if abs == h {
-                return "~".into();
+                return Ok("~".into());
             }
             if let Ok(rest) = abs.strip_prefix(&h) {
-                return format!("~/{}", rest.to_string_lossy());
+                return Ok(format!("~/{}", text(rest)?));
             }
         }
     }
-    abs.to_string_lossy().into_owned()
+    text(abs)
 }
 
 /// A corpus id from a folder name: ASCII lowercase, accents dropped, runs
@@ -712,6 +723,25 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "no corpus registry at /x/corpora.toml; add a folder with `scout corpora add <folder>`"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod path_tests {
+    use super::stored_path;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[test]
+    fn a_non_utf8_folder_path_is_refused_not_stored_lossily() {
+        let p = Path::new(OsStr::from_bytes(b"/data/notes\xff"));
+        let err = stored_path(p).unwrap_err().to_string();
+        assert!(err.contains("not valid UTF-8"), "{err}");
+        assert_eq!(
+            stored_path(Path::new("/data/notes")).unwrap(),
+            "/data/notes"
         );
     }
 }

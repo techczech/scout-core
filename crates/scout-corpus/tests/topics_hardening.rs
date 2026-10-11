@@ -438,3 +438,39 @@ fn constructs_are_read_only_at_token_start() {
     let p = Plan::parse("x(theme:Foo) theme:Bar").unwrap();
     assert_eq!(p.filter.theme.as_deref(), Some("Bar"));
 }
+
+// ---------- round 3 ----------
+
+/// The guard inspects the real files when the index folder's name is not
+/// valid UTF-8 (possible on Linux; APFS refuses such names, so this skips
+/// on macOS, where `index::path_tests` covers the byte-exact suffix).
+#[cfg(unix)]
+#[test]
+fn the_guard_sees_hard_links_under_a_non_utf8_index_folder() {
+    use std::os::unix::ffi::OsStrExt;
+    let (src, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(src.path(), "readings/works/w1.md", &work("1", "A proof."));
+    let odd = data
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"idx\xff\xfe"));
+    if fs::create_dir(&odd).is_err() {
+        eprintln!("skipped: this filesystem refuses non-UTF-8 names");
+        return;
+    }
+    let source = src.path().join("readings/works/w1.md");
+    let before = fs::read(&source).unwrap();
+    let c = Corpus::from_config(cfg(src.path(), CorpusKind::HighlightScoutArchive), &odd);
+    for suffix in ["", "-wal", "-journal"] {
+        let mut name = c.index_path().as_os_str().to_os_string();
+        name.push(suffix);
+        if fs::hard_link(&source, &name).is_err() {
+            return;
+        }
+        let err = c.build_index(false).unwrap_err().to_string();
+        assert!(err.contains("hard link"), "{suffix}: {err}");
+        assert_eq!(fs::read(&source).unwrap(), before, "{suffix}");
+        fs::remove_file(&name).unwrap();
+    }
+    // With nothing in the way, the odd folder works.
+    assert_eq!(c.build_index(false).unwrap().docs, 1);
+}

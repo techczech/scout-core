@@ -164,27 +164,29 @@ impl DocFilter {
     /// The filter written as a slice expression (`after:2020 lang:en`), the
     /// inverse of [`SliceSpec::parse`]; empty when unfiltered.
     pub fn spec(&self) -> String {
+        // Every value goes through the grammar's `quote_value`, so the
+        // expression reads back as this filter whatever a value holds.
+        let q = scout_query::quote_value;
         let mut t = Vec::new();
         if let Some(a) = &self.after {
-            t.push(format!("after:{a}"));
+            t.push(format!("after:{}", q(a)));
         }
         if let Some(b) = &self.before {
-            t.push(format!("before:{b}"));
+            t.push(format!("before:{}", q(b)));
         }
         if let Some(y) = self.year {
             t.push(format!("y:{y}"));
         }
-        if !self.lang.is_empty() {
-            t.push(format!("lang:{}", self.lang.join(",")));
-        }
-        if !self.genre.is_empty() {
-            t.push(format!("genre:{}", self.genre.join(",")));
-        }
-        if !self.source.is_empty() {
-            t.push(format!("source:{}", self.source.join(",")));
-        }
-        if !self.kind.is_empty() {
-            t.push(format!("ty:{}", self.kind.join(",")));
+        // Comma lists: an item cannot itself hold a comma.
+        for (k, v) in [
+            ("lang", &self.lang),
+            ("genre", &self.genre),
+            ("source", &self.source),
+            ("ty", &self.kind),
+        ] {
+            if !v.is_empty() {
+                t.push(format!("{k}:{}", q(&v.join(","))));
+            }
         }
         for (k, v) in [
             ("au", &self.author),
@@ -194,18 +196,14 @@ impl DocFilter {
             ("event", &self.event),
         ] {
             if let Some(v) = v {
-                if v.contains(char::is_whitespace) {
-                    t.push(format!("{k}:\"{v}\""));
-                } else {
-                    t.push(format!("{k}:{v}"));
-                }
+                t.push(format!("{k}:{}", q(v)));
             }
         }
         if let Some(a) = self.ai {
             t.push(format!("ai:{a}"));
         }
         if let Some(m) = &self.month {
-            t.push(format!("month:{m}"));
+            t.push(format!("month:{}", q(m)));
         }
         t.join(" ")
     }

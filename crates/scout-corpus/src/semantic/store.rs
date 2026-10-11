@@ -92,7 +92,7 @@ fn from_blob(b: &[u8]) -> Vec<f32> {
 fn file_bytes(path: &Path) -> u64 {
     ["", "-wal"]
         .iter()
-        .filter_map(|s| std::fs::metadata(format!("{}{s}", path.display())).ok())
+        .filter_map(|s| std::fs::metadata(crate::index::with_suffix(path, s)).ok())
         .map(|m| m.len())
         .sum()
 }

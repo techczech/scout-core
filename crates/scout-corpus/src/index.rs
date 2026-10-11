@@ -100,6 +100,18 @@ pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
     meta_get(conn, GENERATION_KEY)
 }
 
+/// SQLite's side-file suffixes; the empty one is the database itself.
+pub(crate) const SQLITE_SUFFIXES: [&str; 4] = ["", "-wal", "-shm", "-journal"];
+
+/// `path` with `suffix` appended to its last component (`x.sqlite` +
+/// `-wal`), byte for byte: the path is never converted to text, so a name
+/// that is not valid UTF-8 stays the same file.
+pub(crate) fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 /// The files of the SQLite database at `path` that exist: the database and
 /// its `-wal`, `-shm` and `-journal` side files. A symlink counts as a file
 /// (it is the link that would be removed, never its target). Only "not
@@ -107,8 +119,8 @@ pub fn content_generation(conn: &Connection) -> Result<Option<String>> {
 /// searched, say) is returned, never read as "no index".
 pub(crate) fn sqlite_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let p = PathBuf::from(format!("{}{suffix}", path.display()));
+    for suffix in SQLITE_SUFFIXES {
+        let p = with_suffix(path, suffix);
         match std::fs::symlink_metadata(&p) {
             Ok(_) => out.push(p),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -480,8 +492,10 @@ fn link_count(m: &std::fs::Metadata) -> u64 {
 /// under another name), or its real location (symlinked folders resolved)
 /// is inside one of `roots`. Sources are never written (invariant 1).
 pub(crate) fn check_target(path: &Path, roots: &[PathBuf]) -> Result<()> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let p = PathBuf::from(format!("{}{suffix}", path.display()));
+    // Paths are built and compared as raw OS strings; `display()` appears
+    // only inside error messages.
+    for suffix in SQLITE_SUFFIXES {
+        let p = with_suffix(path, suffix);
         match std::fs::symlink_metadata(&p) {
             Ok(m) if m.file_type().is_symlink() => bail!(
                 "index file {} is a symlink; refusing to open it (remove the link, then build again)",
@@ -722,4 +736,26 @@ pub fn status(cfg: &CorpusConfig, path: &Path) -> Result<IndexStatus> {
         });
     }
     Ok(st)
+}
+
+#[cfg(all(test, unix))]
+mod path_tests {
+    use super::with_suffix;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[test]
+    fn suffix_helper_preserves_raw_bytes() {
+        let raw: &[u8] = b"/tmp/d\xff\xfe/idx\x80.sqlite";
+        let p = Path::new(OsStr::from_bytes(raw));
+        assert_eq!(with_suffix(p, "").as_os_str().as_bytes(), raw);
+        let mut want = raw.to_vec();
+        want.extend_from_slice(b"-wal");
+        assert_eq!(with_suffix(p, "-wal").as_os_str().as_bytes(), &want[..]);
+        assert_eq!(
+            with_suffix(Path::new("/a/b.sqlite"), "-journal"),
+            Path::new("/a/b.sqlite-journal")
+        );
+    }
 }

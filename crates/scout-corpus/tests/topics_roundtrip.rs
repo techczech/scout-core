@@ -166,3 +166,93 @@ fn every_generated_label_round_trips_from_facet_to_query() {
     assert!(checked >= 900, "{checked}");
     assert!(tag_checked >= 150, "{tag_checked} tag labels");
 }
+
+/// A filter written as a slice expression reads back as the same filter,
+/// for every generated label in every text field.
+#[test]
+fn filter_serialisation_round_trips_every_generated_label() {
+    use scout_corpus::{DocFilter, SliceSpec};
+    let ws = |c: char| scout_query::is_ws(c);
+    let labels: Vec<String> = labels()
+        .iter()
+        .map(|l| l.trim_matches(ws).to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert!(labels.len() >= 300);
+    let round = |f: &DocFilter| {
+        let spec = f.spec();
+        let back = SliceSpec::parse(&spec).unwrap_or_else(|e| panic!("{spec:?}: {e}"));
+        assert_eq!(&back.filter, f, "{spec:?}");
+        assert!(back.corpora.is_empty(), "{spec:?}");
+    };
+    let (mut single, mut lists) = (0, 0);
+    for (i, l) in labels.iter().enumerate() {
+        let v = Some(l.clone());
+        for f in [
+            DocFilter {
+                author: v.clone(),
+                ..Default::default()
+            },
+            DocFilter {
+                title: v.clone(),
+                ..Default::default()
+            },
+            DocFilter {
+                theme: v.clone(),
+                ..Default::default()
+            },
+            DocFilter {
+                entity: v.clone(),
+                ..Default::default()
+            },
+            DocFilter {
+                event: v.clone(),
+                ..Default::default()
+            },
+        ] {
+            round(&f);
+            single += 1;
+        }
+        // Everything at once, with the fixed-form fields.
+        let other = labels[(i + 1) % labels.len()].clone();
+        round(&DocFilter {
+            author: v.clone(),
+            title: Some(other.clone()),
+            theme: v.clone(),
+            entity: Some(other),
+            event: v.clone(),
+            after: Some("2020".into()),
+            before: Some("2026-10".into()),
+            year: Some(2024),
+            ai: Some(i % 2 == 0),
+            month: Some("2026-09".into()),
+            ..Default::default()
+        });
+        // List fields are comma lists, so an item cannot hold a comma.
+        if !l.contains(',') {
+            let two = vec![l.clone(), "plain".to_string()];
+            for f in [
+                DocFilter {
+                    lang: two.clone(),
+                    ..Default::default()
+                },
+                DocFilter {
+                    genre: two.clone(),
+                    ..Default::default()
+                },
+                DocFilter {
+                    source: two.clone(),
+                    ..Default::default()
+                },
+                DocFilter {
+                    kind: two.clone(),
+                    ..Default::default()
+                },
+            ] {
+                round(&f);
+                lists += 1;
+            }
+        }
+    }
+    assert!(single >= 1500 && lists >= 800, "{single} {lists}");
+}
