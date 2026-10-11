@@ -1,5 +1,5 @@
 {
- "about": "Event record files and the verdict the reader (crates/scout-corpus/src/events.rs) gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs. A control-* case holds a control character the reader refuses anywhere in a record file (events/record.rs, `has_control`); they are all made from hex, a raw NUL or CR does not sit well in git. The reader is the one implementation of the record format: `scout events seed` reads and checks records with it. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
+ "about": "Event record files and the verdict the reader (crates/scout-corpus/src/events.rs) gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs. A control-* case holds a control character the reader refuses anywhere in a record file (events/record.rs, `has_control`); they are all made from hex, a raw NUL or CR does not sit well in git. The reader is the one implementation of the record format: `scout events seed` reads and checks records with it. An accepted case may name the `removed` date its record must carry; every other accepted record must carry none. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
  "cases": [
   {
    "file": "valid-full.md",
@@ -498,6 +498,22 @@
    "file": ".hidden.md",
    "verdict": "ignored",
    "note": "a name starting with . is not a record"
+  },
+  {
+   "file": "valid-removed.md",
+   "verdict": "accept",
+   "note": "`removed` holds the date he removed the event; the record is read like any other",
+   "removed": "2026-10-12"
+  },
+  {
+   "file": "valid-removed-empty.md",
+   "verdict": "accept",
+   "note": "an empty `removed` is no value: the event is not removed"
+  },
+  {
+   "file": "removed-list.md",
+   "verdict": "reject",
+   "why": "removed is not a single value"
   },
   {
    "file": "notes.txt",

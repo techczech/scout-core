@@ -701,12 +701,16 @@ fn resolve_events(
                 _ => {}
             }
         }
+        // A removed event is no event of any item, whoever put it there.
+        ids.retain(|e| !set.is_removed(e));
         // Taken out of its tag row's event: `event` no longer names it.
-        if let Some(f) = first.as_deref().map(fold) {
+        // (A removed event is not a correction of the item.)
+        if let Some(first) = first.as_deref() {
+            let f = fold(first);
             if !ids.iter().any(|e| fold(e) == f) {
                 t.event = None;
                 t.event_name = None;
-                if !t.corrected.iter().any(|c| c == "event") {
+                if !set.is_removed(first) && !t.corrected.iter().any(|c| c == "event") {
                     t.corrected.push("event".into());
                     t.corrected
                         .sort_by_key(|f| CORRECTABLE.iter().position(|c| c == f));

@@ -4,6 +4,7 @@
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
+mod event_cmds;
 mod topic_views;
 mod views;
 
@@ -118,11 +119,13 @@ enum Cmd {
     },
     /// List events with their record fields, item counts and counts per
     /// month (lasting events where the corpus has records); `events seed`
-    /// creates the record files.
+    /// creates the record files, and `events set`, `merge`, `unmerge`,
+    /// `apply-proposals`, `proposals`, `decide`, `remove`, `restore`,
+    /// `create` and `check` edit them.
     #[command(args_conflicts_with_subcommands = true)]
     Events {
         #[command(subcommand)]
-        cmd: Option<EventsCmd>,
+        cmd: Option<event_cmds::EventsCmd>,
         /// Only events with an item in this layer month (YYYY-MM or YYYY).
         #[arg(long)]
         month: Option<String>,
@@ -136,6 +139,9 @@ enum Cmd {
         /// Also list records merged into another.
         #[arg(long)]
         merged: bool,
+        /// Also list removed records.
+        #[arg(long)]
+        removed: bool,
         /// Events kept (0 = all).
         #[arg(long, default_value_t = EventsQuery::default().top)]
         top: usize,
@@ -349,29 +355,6 @@ impl Scope {
 }
 
 #[derive(Subcommand)]
-enum EventsCmd {
-    /// Create one record file for every monthly event no record holds yet
-    /// (`<out>/<id>.md`). No model call. Without --apply nothing is
-    /// written. Prints its counts as one JSON line. Stops before any write
-    /// when a record already in the out folder, or one about to be
-    /// written, is one `index build` would skip.
-    Seed {
-        /// The archive folder (holds analysis/context/briefings and
-        /// analysis/topics/current.jsonl). A path with `..` is refused.
-        #[arg(long)]
-        archive: std::path::PathBuf,
-        /// Where records go (default: <archive>/analysis/events). Must be
-        /// the folder itself, not a symlink to it. A path with `..` is
-        /// refused.
-        #[arg(long)]
-        out: Option<std::path::PathBuf>,
-        /// Write the records.
-        #[arg(long)]
-        apply: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum CorporaCmd {
     /// List registered corpora.
     List {
@@ -571,30 +554,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 cmd: Cmd::Corpora { cmd },
             },
         },
-        // The seed reads an archive folder, not the registry or an index.
-        Cmd::Events {
-            cmd:
-                Some(EventsCmd::Seed {
-                    archive,
-                    out,
-                    apply,
-                }),
-            ..
-        } => {
-            let r = scout_corpus::event_seed::seed(&scout_corpus::event_seed::SeedOptions {
-                archive,
-                out,
-                apply,
-            })?;
-            println!("{}", serde_json::to_string(&r)?);
-            if !r.apply {
-                eprintln!(
-                    "dry run: nothing written; {} records would be created in {} (add --apply)",
-                    r.to_create, r.out
-                );
-            }
-            return Ok(ExitCode::SUCCESS);
-        }
+        // The seed and the record edits work on an archive folder, not on
+        // the registry or an index.
+        Cmd::Events { cmd: Some(cmd), .. } => return event_cmds::run(cmd),
         cmd => Cli { cmd },
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
@@ -672,6 +634,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             in_,
             min_items,
             merged,
+            removed,
             top,
             json,
         } => {
@@ -680,6 +643,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 in_,
                 min_items,
                 merged,
+                removed,
                 top,
             };
             out(engine.events(&q), json, topic_views::print_events)

@@ -30,6 +30,8 @@ pub struct EventsQuery {
     pub min_items: usize,
     /// Also list records merged into another (they hold no items).
     pub merged: bool,
+    /// Also list removed records (`removed` set; they hold no items).
+    pub removed: bool,
     /// Events kept (0 = all).
     pub top: usize,
 }
@@ -41,6 +43,7 @@ impl Default for EventsQuery {
             in_: vec![],
             min_items: 1,
             merged: false,
+            removed: false,
             top: 0,
         }
     }
@@ -78,6 +81,9 @@ pub struct EventListing {
     pub origin: Option<String>,
     pub edited: Option<String>,
     pub merged_into: Option<String>,
+    /// The date the event was removed; the key is absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<String>,
     pub description: String,
 }
 
@@ -89,6 +95,9 @@ pub struct EventsResults {
     pub corpora: Vec<String>,
     pub min_items: usize,
     pub merged: bool,
+    /// Removed records are listed too; the key is absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
     /// Events before `top`.
     pub distinct: usize,
     pub events: Vec<EventListing>,
@@ -151,7 +160,9 @@ impl Engine {
                 }
             }
             for (k, r) in &records {
-                if r.merged_into.is_some() && !q.merged {
+                let hidden =
+                    (r.merged_into.is_some() && !q.merged) || (r.removed.is_some() && !q.removed);
+                if hidden {
                     tally.remove(k);
                 } else {
                     tally.entry(k.clone()).or_default();
@@ -189,6 +200,7 @@ impl Engine {
                 corpora: corpora.iter().map(|c| c.id().to_string()).collect(),
                 min_items: q.min_items,
                 merged: q.merged,
+                removed: q.removed,
                 distinct,
                 events: out,
             },
@@ -235,6 +247,7 @@ fn listing(
         origin: r.origin,
         edited: r.edited,
         merged_into: r.merged_into,
+        removed: r.removed,
         description: r.description,
     }
 }

@@ -274,6 +274,7 @@ pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, 
     let (start, end) = (scalar("start")?, scalar("end")?);
     let (origin, edited) = (scalar("origin")?, scalar("edited")?);
     let merged_into = scalar("merged_into")?;
+    let removed = scalar("removed")?;
     let mut list = |k: &str| match map.remove(k) {
         None | Some(Val::Null) => Ok(Vec::new()),
         Some(Val::List(l)) => Ok(l
@@ -294,6 +295,7 @@ pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, 
         origin,
         edited,
         merged_into,
+        removed,
         description: body.trim().to_string(),
     })
 }
@@ -317,6 +319,19 @@ mod tests {
         assert_eq!(r.name, "null");
         // No name: the id stands in.
         assert_eq!(parse_record("---\nid: x\n---\n", "x").unwrap().name, "x");
+        // `removed`: absent, empty and null are no value; else the date.
+        assert_eq!(r.removed, None);
+        for (front, want) in [
+            ("removed:\n", None),
+            ("removed: ~\n", None),
+            ("removed: 2026-10-11\n", Some("2026-10-11")),
+            ("removed: \"2026-10-11\"\n", Some("2026-10-11")),
+        ] {
+            let r = parse_record(&format!("---\nid: x\n{front}---\n"), "x").unwrap();
+            assert_eq!(r.removed.as_deref(), want, "{front:?}");
+        }
+        let e = parse_record("---\nid: x\nremoved: [a]\n---\n", "x").unwrap_err();
+        assert!(e.contains("removed is not a single value"), "{e}");
     }
 
     #[test]

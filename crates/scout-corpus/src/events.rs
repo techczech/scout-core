@@ -5,7 +5,14 @@
 //! - A record's YAML frontmatter is the contract: `id` (equal to the file
 //!   stem), `name`, `aliases[]`, `start`, `end`, `members[]` (the monthly
 //!   event ids folded into it, `2026-09/E21`), `themes[]`, `origin`,
-//!   `edited`, `merged_into`. The body is the description.
+//!   `edited`, `merged_into`, and the optional `removed` (the date he
+//!   removed the event). The body is the description.
+//! - A removed event keeps its record and its hold on its ids (`resolve`
+//!   still gives it, so the seed makes no second record for its members);
+//!   the topic layer takes it out of every item's events
+//!   ([`EventSet::is_removed`]), and it is not listed. `removed` counts on
+//!   the record an id resolves to; on a record merged into another it has
+//!   no effect.
 //! - Resolution: a monthly id resolves to the record that lists it in
 //!   `members`; a record with `merged_into` resolves to the record it was
 //!   merged into, followed to the end of the chain. A `merged_into` that
@@ -69,6 +76,10 @@ pub struct EventRecord {
     /// value in effect: `None` when the file's value names no record or
     /// closes a cycle.
     pub merged_into: Option<String>,
+    /// The date the event was removed (`scout events remove`); absent on
+    /// every other record, in the file and in the index copy alike.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<String>,
     /// The record body.
     #[serde(default)]
     pub description: String,
@@ -278,6 +289,14 @@ impl EventSet {
         self.aliases.get(&fold(id)).map(String::as_str)
     }
 
+    /// Is the event `id` resolves to (or names) a removed one? False for
+    /// an id no record holds.
+    pub fn is_removed(&self, id: &str) -> bool {
+        self.resolve(id)
+            .and_then(|last| self.records.get(&fold(last)))
+            .is_some_and(|r| r.removed.is_some())
+    }
+
     pub fn report(&self) -> EventsReport {
         EventsReport {
             dir: self.dir.display().to_string(),
@@ -368,7 +387,7 @@ fn scan(dir: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Resul
 /// The file's bytes, or `None` when it grew past the cap since it was
 /// measured. The open does not follow a link put there after the check
 /// above, and what was opened must itself be a plain file.
-fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut open = std::fs::OpenOptions::new();
     open.read(true);
@@ -410,13 +429,39 @@ pub(crate) fn read_hashed(root: &Path, hash: &mut Sha1) -> Result<Option<EventSe
     read_dir_hashed(&root.join(EVENTS_DIR), hash)
 }
 
+/// A set and, by file name, the bytes each of its records was read from.
+pub(crate) type SetWithBytes = (EventSet, BTreeMap<String, Vec<u8>>);
+
+/// [`read_dir`], with the bytes each record was read from, by file name
+/// (only the files read as records). `scout events` edits compare a file
+/// with these bytes before replacing it.
+pub(crate) fn read_dir_with_bytes(dir: &Path) -> Result<Option<SetWithBytes>> {
+    let mut bytes = BTreeMap::new();
+    let set = read_dir_kept(dir, &mut Sha1::new(), Some(&mut bytes))?;
+    Ok(set.map(|s| (s, bytes)))
+}
+
 fn read_dir_hashed(dir: &Path, hash: &mut Sha1) -> Result<Option<EventSet>> {
+    read_dir_kept(dir, hash, None)
+}
+
+fn read_dir_kept(
+    dir: &Path,
+    hash: &mut Sha1,
+    mut keep: Option<&mut BTreeMap<String, Vec<u8>>>,
+) -> Result<Option<EventSet>> {
     let mut records = Vec::new();
     let mut refused: Vec<Refused> = Vec::new();
     let found = scan(dir, hash, |name, entry| {
         let parsed = match entry {
             Entry::Refused(why) => Err(why.to_string()),
-            Entry::Bytes(b) => parse_bytes(&b, record_stem(name).unwrap_or(name)),
+            Entry::Bytes(b) => {
+                let parsed = parse_bytes(&b, record_stem(name).unwrap_or(name));
+                if let (Ok(_), Some(keep)) = (&parsed, keep.as_deref_mut()) {
+                    keep.insert(name.to_string(), b);
+                }
+                parsed
+            }
         };
         match parsed {
             Ok(r) => records.push(r),

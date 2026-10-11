@@ -121,8 +121,8 @@
 //!   writes are not anchored to a directory descriptor (driver's ruling,
 //!   2026-10-11: outside the threat model).
 
-mod naming;
-mod render;
+pub(crate) mod naming;
+pub(crate) mod render;
 mod sources;
 
 use crate::events::{self, EventRecord, EventSet, EVENTS_DIR};
@@ -224,7 +224,7 @@ struct Planned {
 }
 
 /// Refuse `path` when it has a `..` component. Nothing is looked at.
-fn refuse_parent_dir(path: &Path, what: &str) -> Result<()> {
+pub(crate) fn refuse_parent_dir(path: &Path, what: &str) -> Result<()> {
     if path.components().any(|c| c == Component::ParentDir) {
         bail!(
             "{}: {what} path has a `..` component; give the path without it (nothing was written)",
@@ -295,7 +295,7 @@ pub fn seed(opts: &SeedOptions) -> Result<SeedReport> {
 /// folder (not a symlink, dangling or not; not a file), with the symlinks
 /// of the folders above it resolved. A missing folder is returned
 /// absolute and unresolved. Nothing is written.
-fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
     refuse_parent_dir(path, "the out")?;
     // Not `std::path::absolute`: it keeps a trailing `/.` and `/`, under
     // which a symlink is looked at as the folder it points to.
@@ -323,7 +323,7 @@ fn resolve_out_dir(path: &Path) -> Result<PathBuf> {
 /// fold characters (on APFS an existing `ſtory.MD` answers to `story.md`),
 /// and the seed does not work such rules out. Any planned name that
 /// already leads to something stops the run, before the first write.
-fn preflight_names<'a>(dir: &Path, ids: impl Iterator<Item = &'a str>) -> Result<()> {
+pub(crate) fn preflight_names<'a>(dir: &Path, ids: impl Iterator<Item = &'a str>) -> Result<()> {
     match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e).with_context(|| format!("{}: the out folder", dir.display())),
@@ -345,7 +345,7 @@ fn preflight_names<'a>(dir: &Path, ids: impl Iterator<Item = &'a str>) -> Result
 }
 
 /// `Ok` for no faults; else one error of at most [`MAX_FAULTS`] of them.
-fn fail_with(mut faults: Vec<String>) -> Result<()> {
+pub(crate) fn fail_with(mut faults: Vec<String>) -> Result<()> {
     if faults.is_empty() {
         return Ok(());
     }
@@ -415,7 +415,17 @@ fn read_existing(dir: &Path) -> Result<Existing> {
         lines.push("nothing was written".into());
         bail!("{}", lines.join("\n"));
     }
-    taken.extend(set.records.keys().cloned());
+    taken.append(&mut names_in_use(dir, &set)?);
+    Ok(Existing {
+        set: Some(set),
+        taken,
+    })
+}
+
+/// The lower-case ids no new record of `dir` is given: every record's
+/// id, and the name of every entry of the folder without its `.md`.
+pub(crate) fn names_in_use(dir: &Path, set: &EventSet) -> Result<BTreeSet<String>> {
+    let mut taken: BTreeSet<String> = set.records.keys().cloned().collect();
     for e in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
         let name = e
             .with_context(|| format!("read {}", dir.display()))?
@@ -424,10 +434,7 @@ fn read_existing(dir: &Path) -> Result<Existing> {
             .to_lowercase();
         taken.insert(name.strip_suffix(".md").unwrap_or(&name).to_string());
     }
-    Ok(Existing {
-        set: Some(set),
-        taken,
-    })
+    Ok(taken)
 }
 
 // ---------- the plan ----------
@@ -514,6 +521,7 @@ fn plan(archive: &Path, existing: &Existing) -> Result<(Vec<Planned>, SeedReport
             origin: Some("model".into()),
             edited: None,
             merged_into: None,
+            removed: None,
             description: brief.map(|b| b.description.clone()).unwrap_or_default(),
         };
         planned.push(Planned {
@@ -620,7 +628,7 @@ fn verify(planned: &[Planned], existing: &Existing) -> Result<()> {
 /// no-follow), so the bytes cannot land in a file that existed, through a
 /// symlink or a hard link. When `fill` fails the file, which is this
 /// call's own, is removed. `name` must be a bare `<slug>.md`.
-fn create_exclusive(
+pub(crate) fn create_exclusive(
     dir: &Path,
     name: &str,
     fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,

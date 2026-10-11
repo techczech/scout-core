@@ -63,6 +63,7 @@ fn apply_writes_one_record_per_monthly_event_with_the_spec_frontmatter() {
             origin: Some("model".into()),
             edited: None,
             merged_into: None,
+            removed: None,
             description: "Line one: with a colon.\n\n--- not a fence\nLine \"two\".".into(),
         }
     );
@@ -191,6 +192,7 @@ fn an_event_without_tagged_items_is_dated_by_its_month_or_quarter() {
             origin: Some("model".into()),
             edited: None,
             merged_into: None,
+            removed: None,
             description: "About Nobody tagged this.".into(),
         }
     );

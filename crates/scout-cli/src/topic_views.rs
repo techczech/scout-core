@@ -98,12 +98,17 @@ pub fn print_events(r: &EventsResults) {
             .as_deref()
             .map(|m| format!("  (merged into {m})"))
             .unwrap_or_default();
+        let removed = e
+            .removed
+            .as_deref()
+            .map(|d| format!("  (removed {d})"))
+            .unwrap_or_default();
         let in_month = e
             .month_items
             .map(|n| format!("  [{n} in month]"))
             .unwrap_or_default();
         println!(
-            "  {:>w$}  {}  {}{span}{in_month}{merged}",
+            "  {:>w$}  {}  {}{span}{in_month}{merged}{removed}",
             e.items,
             e.id,
             e.name.as_deref().unwrap_or("")

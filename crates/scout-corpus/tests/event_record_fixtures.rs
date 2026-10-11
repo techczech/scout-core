@@ -104,7 +104,14 @@ fn the_reader_gives_every_shared_case_its_verdict() {
             continue;
         }
         match want {
-            "accept" => accepted += 1,
+            "accept" => {
+                accepted += 1;
+                // `removed` is absent unless the case names its date.
+                let r = set.records.values().find(|r| r.id == stem(file)).unwrap();
+                if r.removed.as_deref() != c["removed"].as_str() {
+                    wrong.push(format!("{file}: removed is {:?}", r.removed));
+                }
+            }
             "reject" => {
                 rejected += 1;
                 let why = c["why"].as_str().unwrap();

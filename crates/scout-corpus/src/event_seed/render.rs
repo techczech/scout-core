@@ -85,13 +85,12 @@ fn list(out: &mut String, key: &str, values: &[String]) {
     }
 }
 
-/// The file text of `record`: the frontmatter in the spec's field order,
-/// a blank line, then the description. What the reader gives back for it
-/// equals `record` whenever each of its values is trimmed and not empty
-/// and its description is a [`body_text`] (the description is written as
-/// it is, so one holding a control character gives a file the reader
-/// refuses). The seed checks that for every record before it writes any.
-pub fn render_record(record: &EventRecord) -> String {
+/// The frontmatter block of `record`, both `---` lines included: the
+/// fields in the spec's order, and `removed` after them only when the
+/// record has it (a record that was never removed has no such line, so
+/// the records written before the field existed are still what the writer
+/// writes).
+pub(crate) fn render_front(record: &EventRecord) -> String {
     let mut out = String::from("---\n");
     single(&mut out, "id", Some(&record.id));
     single(&mut out, "name", Some(&record.name));
@@ -103,7 +102,22 @@ pub fn render_record(record: &EventRecord) -> String {
     single(&mut out, "origin", record.origin.as_deref());
     single(&mut out, "edited", record.edited.as_deref());
     single(&mut out, "merged_into", record.merged_into.as_deref());
-    out.push_str("---\n\n");
+    if let Some(removed) = &record.removed {
+        single(&mut out, "removed", Some(removed));
+    }
+    out.push_str("---\n");
+    out
+}
+
+/// The file text of `record`: the frontmatter ([`render_front`]),
+/// a blank line, then the description. What the reader gives back for it
+/// equals `record` whenever each of its values is trimmed and not empty
+/// and its description is a [`body_text`] (the description is written as
+/// it is, so one holding a control character gives a file the reader
+/// refuses). The seed checks that for every record before it writes any.
+pub fn render_record(record: &EventRecord) -> String {
+    let mut out = render_front(record);
+    out.push('\n');
     if !record.description.is_empty() {
         out.push_str(&record.description);
         out.push('\n');
@@ -128,6 +142,7 @@ mod tests {
             origin: Some("model".into()),
             edited: None,
             merged_into: None,
+            removed: None,
             // A body: what the seed makes of a briefing description.
             description: body_text(&format!("About {name}.")),
         }
@@ -150,6 +165,10 @@ mod tests {
         );
         r.description.clear();
         assert!(render_record(&r).ends_with("merged_into:\n---\n\n"));
+        round_trips(&r);
+        // `removed` is written only when the record has it.
+        r.removed = Some("2026-10-11".into());
+        assert!(render_record(&r).ends_with("merged_into:\nremoved: \"2026-10-11\"\n---\n\n"));
         round_trips(&r);
     }
 
