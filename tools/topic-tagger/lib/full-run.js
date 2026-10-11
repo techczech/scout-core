@@ -27,11 +27,13 @@ export function monthsBetween(from, to) {
   return out;
 }
 
-// Structural stop rule: more than 2% failed items or validation problems on more than 15% of items.
+// Structural stop rule: more than 2% failed items or validation problems (other than dropped extra ids) on more than 15% of items.
 export function structuralProblem(run) {
   const n = run.item_count || 1;
   const failed = (run.failed_keys || []).length;
-  const probs = (run.stages.tagging && run.stages.tagging.problem_count) || 0;
+  // "unknown id" = the model answered for an id outside the batch; the answer is dropped and no item is lost, so it is not structural.
+  const tg = run.stages.tagging || {};
+  const probs = (tg.problem_count || 0) - (tg.problems || []).filter((p) => /^unknown id /.test(p)).length;
   if (failed / n > 0.02) return `${failed} of ${n} items failed`;
   if (probs / n > 0.15) return `${probs} validation problems for ${n} items`;
   return null;
@@ -132,12 +134,30 @@ export async function fullRun(base) {
   }, (b, r) => { if (r.error) report.failures.push(`${b.id}: ${r.error}`); });
   if (stop) throw new Error(`stopped: ${stop}`);
 
+  return mergeAndRender(base, { months, briefingKeyOf: (m) => m, costs, ledger, ledgerPath, report });
+}
+
+/**
+ * Entity merge -> current.jsonl -> overview.html -> ledger, over `months` (each with run `<runPrefix>-<month>`).
+ * briefingKeyOf(month): file stem of the briefing that month used (a quarter key for merged months).
+ * costs(): {per[month]:{briefing,briefing_new,tagging,qa}, themes, ents, total} for the whole layer shown.
+ * themeInfo: {name: {note, notAppliedFrom, label}} marks themes added later (shown, not applied to older/newer months).
+ */
+export async function mergeAndRender(base, { months, briefingKeyOf, costs, ledger, ledgerPath, report, themeInfo = {} }) {
+  const A = base.archiveRoot;
+  const ctx = join(A, 'analysis/context');
+  const topics = join(A, 'analysis/topics');
+  const themesPath = join(ctx, 'themes.json');
+  const aliasesPath = join(ctx, 'entity-aliases.json');
+  const log = base.log;
+  const briefingJson = (m) => join(ctx, 'briefings', `${briefingKeyOf(m)}-briefing.json`);
+  const keys = [...new Set(months.map(briefingKeyOf))];
   // 4. entity merge
   const all = [];
   for (const m of months) for (const r of readJsonl(join(topics, `${base.runPrefix}-${m}`, 'tags.jsonl'))) all.push({ ...r, month: m });
   if (!existsSync(aliasesPath) || base.forceEntities) {
     const counts = entityCounts(all);
-    const rules = ruleMap(counts, months.map((m) => aliasMap(readJson(briefingJson(m)))));
+    const rules = ruleMap(counts, keys.map((k) => aliasMap(readJson(join(ctx, 'briefings', `${k}-briefing.json`)))));
     const names = rules.canonical.filter((n) => counts.get(n) >= 2).sort((a, b) => a.localeCompare(b));
     log(`entities: ${counts.size} raw, ${Object.keys(rules.map).length} mapped by rules; ${names.length} sent to the model`);
     const r = await callJson(base.client, { model: base.entityModel, effort: 'medium', system: ENTITY_SYSTEM, user: `Entity names (count, name), sorted alphabetically:\n${names.map((n) => `${counts.get(n)}\t${n}`).join('\n')}`, schema: ENTITY_SCHEMA, maxTokens: 64000 });
@@ -168,10 +188,10 @@ export async function fullRun(base) {
 
   // 5. current.jsonl + overview.html
   const evNames = {};
-  for (const m of months) for (const e of readJson(briefingJson(m)).events) evNames[`${m}/${e.id}`] = e.name;
+  for (const k of keys) for (const e of readJson(join(ctx, 'briefings', `${k}-briefing.json`)).events) evNames[`${k}/${e.id}`] = e.name;
   const current = all.map((r) => {
     const runId = `${base.runPrefix}-${r.month}`;
-    const ev = r.event ? `${r.month}/${r.event}` : null;
+    const ev = r.event ? `${briefingKeyOf(r.month)}/${r.event}` : null;
     return { key: r.key, path: r.path, date: r.date, type: r.type, month: r.month, ai_related: r.ai_related, themes: r.themes,
       entities: normaliseEntities(aliases, r.entities), event: ev, event_name: ev ? evNames[ev] || null : null,
       relevance: r.relevance, confidence: r.confidence, run_id: runId, prompt_version: 'topics-v2' };
@@ -189,19 +209,19 @@ export async function fullRun(base) {
     const run = readJson(join(topics, `${base.runPrefix}-${m}`, 'run.json'));
     for (const q of readJsonl(join(topics, `${base.runPrefix}-${m}`, 'qa.jsonl'))) allPairs.push({ a: q.tagger, b: q.qa, group: q.group });
     return { month: m, items: run.tagged_items, ai_share: run.ai_share, cost: c.per[m], qa: run.qa && run.qa.all, failed: (run.failed_keys || []).length,
-      review: `${base.runPrefix}-${m}/review.html`, briefing: `../context/briefings/${m}.md` };
+      review: `${base.runPrefix}-${m}/review.html`, briefing: `../context/briefings/${briefingKeyOf(m)}.md` };
   });
   const qaOverall = { all: agreement(allPairs), random: agreement(allPairs.filter((x) => x.group === 'random')), low_confidence: agreement(allPairs.filter((x) => x.group === 'low-confidence')) };
   const html = renderOverview({
     generated: new Date().toISOString(), months: monthRows, themes: [...themes].sort((a, b) => (totals[b] || 0) - (totals[a] || 0)), counts, totals,
     entities: [...ents.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 60).map(([name, count]) => ({ name, count })),
     extraCosts: [{ stage: 'Final themes (Opus)', usd: c.themes }, { stage: 'Entity merge (model pass)', usd: c.ents }],
-    total: c.total, qaOverall: qaOverall.all, themesHref: '../context/themes.json', aliasesHref: '../context/entity-aliases.json',
+    total: c.total, qaOverall: qaOverall.all, themeInfo, themesHref: '../context/themes.json', aliasesHref: '../context/entity-aliases.json',
   });
   writeFileSync(join(topics, 'overview.html'), html);
   ledger.finished = new Date().toISOString();
   ledger.costs = c;
   ledger.qa_overall = qaOverall;
   writeJson(ledgerPath, ledger);
-  return { months: months.length, items: current.length, total: +c.total.toFixed(4), qaOverall, failures: report.failures };
+  return { months: months.length, items: current.length, total: +c.total.toFixed(4), qaOverall, failures: report ? report.failures : [] };
 }

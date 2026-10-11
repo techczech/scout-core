@@ -75,3 +75,59 @@ export function themesFinalUserMessage({ profile, briefings, draft, septStats, r
   const tags = readwiseTags.tags.map((t) => `${t.count}\t${t.tag}`).join('\n');
   return `<reader_profile>\n${profile}\n</reader_profile>\n\n<monthly_briefings>\n${months}\n</monthly_briefings>\n\n<draft_themes note="items tagged in September 2026 (of ${septStats.items}), name: definition">\n${d}\n</draft_themes>\n\n<names_tried_off_list note="count, name the tagger proposed that was not a theme">\n${off}\n</names_tried_off_list>\n\n<readwise_tags note="count, tag">\n${tags}\n</readwise_tags>`;
 }
+
+// ---- extension of the final list to older months (append-only) ----
+export const THEMES_EXTEND_PROMPT_VERSION = 'themes-extend-v1';
+export const MIN_ADDED = 8;
+export const MAX_ADDED = 30;
+
+export const THEMES_EXTEND_SYSTEM = `${THEMES_SYSTEM.split('Produce about 40 themes')[0]}This is an extension of an existing list. The {N} themes already on the list were made for 2025-2026 (mostly AI) and have been used to tag thousands of items; they cannot be changed, renamed or removed. You add themes so that the January 2022 to December 2024 part of the archive can be tagged too. ALL items in that range will be tagged, AI and non-AI. Before 2023 most items are not about AI at all: articles and books highlighted on their own terms (anthropology, history, religion, philosophy, education, linguistics, metaphor, economics, politics, science and technology, writing and so on), plus a growing share about machine learning and language models from late 2022.
+
+You get the reader profile, a briefing for each month (or quarter, where a month had too few items) of 2022-2024, the existing list with definitions and include/exclude notes, his Readwise tags (over the whole archive and over the 2022-2024 items alone).
+- Read the existing list first. Add a theme only where the 2022-2024 material has a recurring subject that no existing theme covers well, or where an existing theme is too broad for the volume of material (for example, one "Culture, anthropology and religion" theme may need finer neighbours so that anthropology, religion and kinship can be separated). A new theme must cover material in several months, not one.
+- New themes must not duplicate an existing one. Write include and exclude notes that say where the borderline cases go, naming existing themes exactly where they are the neighbour.
+- Cover the early AI period too if the existing AI themes do not fit it (for example machine learning before language models, the arrival of ChatGPT in education, early image generators), but do not recreate 2025-2026 themes under new names.
+- Products, models, companies, people and one-month events are entities, never themes.
+
+Return between ${MIN_ADDED} and ${MAX_ADDED} new themes only (not the existing ones). For each: a short name (2-7 words, sentence case), a one-sentence definition, "include" (what belongs, with concrete examples from the briefings), "exclude" (what goes elsewhere and to which theme). Add short "notes" on which gaps you found and why each theme is needed. Use his own vocabulary where it is clear.`;
+
+export const themesExtendSystem = (n) => THEMES_EXTEND_SYSTEM.replace('{N}', String(n));
+
+export function themesExtendUserMessage({ profile, briefings, existing, readwiseTags, rangeTags }) {
+  const months = briefings.map(({ month, text }) => `<briefing period="${month}">\n${text}\n</briefing>`).join('\n\n');
+  const ex = existing.map((t) => `- ${t.name}: ${t.definition} Include: ${t.include} Exclude: ${t.exclude}`).join('\n');
+  const tags = readwiseTags.tags.map((t) => `${t.count}\t${t.tag}`).join('\n');
+  const rtags = rangeTags.map((t) => `${t.count}\t${t.tag}`).join('\n');
+  return `<reader_profile>\n${profile}\n</reader_profile>\n\n<existing_themes note="fixed; do not repeat these">\n${ex}\n</existing_themes>\n\n<briefings_2022_2024>\n${months}\n</briefings_2022_2024>\n\n<readwise_tags_whole_archive note="count, tag">\n${tags}\n</readwise_tags_whole_archive>\n\n<readwise_tags_2022_2024_items note="count, tag; only items highlighted in 2022-2024">\n${rtags}\n</readwise_tags_2022_2024_items>`;
+}
+
+/**
+ * Append-only guard. existingDoc = the stored themes file; parsed = model output {themes, notes}.
+ * Returns the new document's theme list: every existing theme untouched (same object content, same order),
+ * then the added ones (ids continue, added_in set). Throws if the existing part would change or counts are out of bounds;
+ * added themes whose name case-folds to an existing or earlier added name are dropped (reported in `dropped`).
+ */
+export function extendThemes(existingThemes, parsed, { addedIn, min = MIN_ADDED, max = MAX_ADDED } = {}) {
+  const seen = new Set(existingThemes.map((t) => t.name.toLowerCase()));
+  const added = [];
+  const dropped = [];
+  for (const t of (parsed && parsed.themes) || []) {
+    const name = squash(t.name);
+    const k = name.toLowerCase();
+    if (!name || seen.has(k)) { dropped.push(name || '(empty)'); continue; }
+    seen.add(k);
+    added.push({ id: `T${String(existingThemes.length + added.length + 1).padStart(2, '0')}`, name, definition: squash(t.definition), include: squash(t.include), exclude: squash(t.exclude), added_in: addedIn });
+  }
+  if (added.length < min || added.length > max) throw new Error(`theme extension has ${added.length} new themes; expected ${min}-${max}`);
+  const themes = [...existingThemes, ...added];
+  assertAppendOnly(existingThemes, themes);
+  return { themes, added, dropped, notes: squash(parsed.notes) };
+}
+
+// The first existingThemes.length entries of `next` must be byte-identical (as JSON) to `existingThemes`.
+export function assertAppendOnly(existingThemes, next) {
+  if (next.length < existingThemes.length) throw new Error('theme list shrank; the list is append-only');
+  existingThemes.forEach((t, i) => {
+    if (JSON.stringify(t) !== JSON.stringify(next[i])) throw new Error(`theme ${t.name} changed; the list is append-only`);
+  });
+}

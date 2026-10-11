@@ -3,6 +3,7 @@
 //   v2 (context-aware, one month):  cli.js <stage> --month YYYY-MM [--run-id id]
 //     stages: profile-sources | profile-html | briefing | themes | enrich | tag | qa | review | all
 //   full run over many months:      cli.js full --from-month 2025-01 --to-month 2026-10 --run-prefix 2026-10-11-final --max-usd 45
+//   extend the layer to older months: cli.js extend --from-month 2022-01 --to-month 2024-12 --run-prefix 2026-10-11-final --ledger-name 2026-10-11-extend-2022-2024 --max-usd 40
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
@@ -12,9 +13,10 @@ import { consolidateRun, executeRun } from './lib/run.js';
 import { DEFAULT_MAX_ITEMS, DEFAULT_MAX_TOKENS } from './lib/batching.js';
 import * as v2 from './lib/pipeline.js';
 import { fullRun } from './lib/full-run.js';
+import { extendRun } from './lib/extend-run.js';
 
-const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full'];
-const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full']);
+const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend'];
+const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend']);
 const log = (m) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
 const home = (p) => join(homedir(), p);
 
@@ -27,6 +29,7 @@ const { values: v, positionals } = parseArgs({
     'from-month': { type: 'string' },
     'to-month': { type: 'string' },
     'run-prefix': { type: 'string' },
+    'ledger-name': { type: 'string' },
     'sept-v2-run': { type: 'string', default: '2026-10-11-v2-2026-09' },
     'entity-model': { type: 'string', default: 'claude-sonnet-5-5' },
     'month-concurrency': { type: 'string', default: '2' },
@@ -76,7 +79,7 @@ try {
 
 async function runV2(stage) {
   if (!STAGES.includes(stage)) { console.error(`unknown stage ${stage}; one of ${STAGES.join(', ')}`); process.exit(2); }
-  if (stage === 'full' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : !v.month) { console.error('v2 stages need --month YYYY-MM (full: --from-month --to-month --run-prefix)'); process.exit(2); }
+  if (stage === 'extend' ? !(v['from-month'] && v['to-month'] && v['run-prefix'] && v['ledger-name']) : stage === 'full' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : !v.month) { console.error('v2 stages need --month YYYY-MM (full: --from-month --to-month --run-prefix)'); process.exit(2); }
   const env = {
     archiveRoot: v.archive, month: v.month,
     runId: v['run-id'] || `${new Date().toISOString().slice(0, 10)}-v2-${v.month}`,
@@ -87,6 +90,11 @@ async function runV2(stage) {
     maxUsd: Number(v['max-usd'] || 5), concurrency: Number(v.concurrency || 4), seed: Number(v.seed), force: v.force, dryRun: v['dry-run'],
     client: PAID.has(stage) ? new Anthropic({ maxRetries: 4 }) : null, log,
   };
+  if (stage === 'extend') {
+    const r = await extendRun({ ...env, fromMonth: v['from-month'], toMonth: v['to-month'], runPrefix: v['run-prefix'], ledgerName: v['ledger-name'], entityModel: v['entity-model'], monthConcurrency: Number(v['month-concurrency']), maxUsd: Number(v['max-usd'] || 40) });
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
   if (stage === 'full') {
     const r = await fullRun({ ...env, fromMonth: v['from-month'], toMonth: v['to-month'], runPrefix: v['run-prefix'], septV2RunId: v['sept-v2-run'], entityModel: v['entity-model'], monthConcurrency: Number(v['month-concurrency']), forceEntities: v['force-entities'], maxUsd: Number(v['max-usd'] || 45) });
     console.log(JSON.stringify(r, null, 2));

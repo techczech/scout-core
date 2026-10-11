@@ -10,7 +10,7 @@ nav{display:flex;flex-wrap:wrap;gap:.2rem .8rem}.meta{color:var(--mut);font-size
 .sum{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;background:var(--card);padding:.75rem 1rem;border-radius:8px}.sum b{display:block;font-size:1.3rem}.sum span{color:var(--mut);font-size:.85rem}
 .tbl{overflow-x:auto}table{border-collapse:collapse;font-size:.82rem}th,td{border-bottom:1px solid var(--line);padding:.3rem .4rem;text-align:right;white-space:nowrap}
 th{color:var(--mut);font-weight:600}td.l,th.l{text-align:left;position:sticky;left:0;background:var(--bg);white-space:normal;min-width:12rem;max-width:18rem}
-.ents{columns:3 14rem;padding-left:1.4rem}.n{color:var(--mut)}`;
+.ents{columns:3 14rem;padding-left:1.4rem}.n{color:var(--mut)}td.na{color:var(--mut);background:repeating-linear-gradient(45deg,transparent 0 4px,var(--card) 4px 8px)}.new{color:var(--a);font-size:.75rem}`;
 
 const stat = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
 const pct = (x) => (x === null || x === undefined ? '–' : `${Math.round(x * 100)}%`);
@@ -26,20 +26,38 @@ export function renderOverview(d) {
   const max = Math.max(1, ...d.themes.flatMap((t) => ms.map((m) => (d.counts[t] || {})[m] || 0)));
   const share = (t, m) => { const mm = d.months.find((x) => x.month === m); const n = (d.counts[t] || {})[m] || 0; return mm && mm.items ? n / mm.items : 0; };
   const maxShare = Math.max(0.0001, ...d.themes.flatMap((t) => ms.map((m) => share(t, m))));
-  const themeRows = d.themes.map((t) => `<tr><td class="l">${esc(t)} <span class="n">(${d.totals[t] || 0})</span></td>${ms.map((m) => {
+  const info = d.themeInfo || {};
+  const notApplied = (t, m) => !!(info[t] && info[t].notAppliedFrom && m >= info[t].notAppliedFrom);
+  const tag = (t) => (info[t] ? ` <span class="new">${esc(info[t].label || 'added later')}</span>` : '');
+  const themeRows = d.themes.map((t) => `<tr><td class="l">${esc(t)} <span class="n">(${d.totals[t] || 0})</span>${tag(t)}</td>${ms.map((m) => {
+    if (notApplied(t, m)) return `<td class="na" title="${esc(t)} was added after ${esc(m)} was tagged and is not applied to it">·</td>`;
     const n = (d.counts[t] || {})[m] || 0;
     const a = (share(t, m) / maxShare * 0.75).toFixed(2);
     return `<td style="background:rgba(var(--heat),${n ? a : 0})" title="${esc(t)} ${m}: ${n} items (${Math.round(share(t, m) * 100)}% of the month)">${n || ''}</td>`;
   }).join('')}</tr>`).join('\n');
+  const years = [...new Set(ms.map((m) => m.slice(0, 4)))];
+  const yearItems = (y) => d.months.filter((m) => m.month.startsWith(y)).reduce((n, m) => n + m.items, 0);
+  const yearCount = (t, y) => ms.filter((m) => m.startsWith(y)).reduce((n, m) => n + ((d.counts[t] || {})[m] || 0), 0);
+  const yearApplied = (t, y) => !ms.filter((m) => m.startsWith(y)).every((m) => notApplied(t, m));
+  const yearShare = (t, y) => (yearItems(y) ? yearCount(t, y) / yearItems(y) : 0);
+  const maxYear = Math.max(0.0001, ...d.themes.flatMap((t) => years.map((y) => yearShare(t, y))));
+  const yearRows = d.themes.map((t) => `<tr><td class="l">${esc(t)}${tag(t)}</td>${years.map((y) => {
+    if (!yearApplied(t, y)) return '<td class="na" title="not applied to this year">·</td>';
+    const n = yearCount(t, y);
+    return `<td style="background:rgba(var(--heat),${n ? (yearShare(t, y) / maxYear * 0.75).toFixed(2) : 0})" title="${esc(t)} ${y}: ${n} of ${yearItems(y)} items">${n ? `${n} <span class="n">${Math.round(yearShare(t, y) * 100)}%</span>` : ''}</td>`;
+  }).join('')}</tr>`).join('\n');
+  const yearsTable = years.length > 1 ? `<h2 id="years">Themes by year (items and share of the year; hatched = theme not applied to that period)</h2>
+<div class="tbl"><table><tr><th class="l">Theme</th>${years.map((y) => `<th>${esc(y)} (${yearItems(y)})</th>`).join('')}</tr>${yearRows}</table></div>` : '';
   const extra = (d.extraCosts || []).map((c) => `<tr><td class="l">${esc(c.stage)}</td><td>${usd(c.usd)}</td></tr>`).join('');
   const items = d.months.reduce((s, m) => s + m.items, 0);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Topic layer overview ${esc(ms[0])} to ${esc(ms[ms.length - 1])}</title><style>${CSS}</style></head><body>
 <h1>Topic layer overview: ${esc(ms[0])} to ${esc(ms[ms.length - 1])}</h1>
 <p class="meta">Generated ${esc(d.generated)} · themes from <a href="${esc(d.themesHref)}">themes.json</a> · entity map <a href="${esc(d.aliasesHref)}">entity-aliases.json</a> · combined layer <a href="current.jsonl">current.jsonl</a> (max ${d.colorMax || max} items in one cell)</p>
-<nav><a href="#months">Months</a><a href="#themes">Themes by month</a><a href="#entities">Top entities</a><a href="#cost">Cost</a></nav>
+<nav><a href="#months">Months</a>${years.length > 1 ? '<a href="#years">Themes by year</a>' : ''}<a href="#themes">Themes by month</a><a href="#entities">Top entities</a><a href="#cost">Cost</a></nav>
 <div class="sum">${stat(items, 'items')}${stat(d.months.length, 'months')}${stat(d.themes.length, 'themes')}${stat(pct(d.qaOverall && d.qaOverall.themes_any_overlap), 'QA theme overlap')}${stat(usd(d.total), 'cost of this run')}</div>
 <h2 id="months">Months</h2><div class="tbl"><table><tr><th class="l">Month</th><th>Items</th><th>AI</th><th>Briefing</th><th>Tagging</th><th>QA</th><th>QA themes overlap</th><th>QA event same</th><th>Failed</th></tr>${monthRows}</table></div>
+${yearsTable}
 <h2 id="themes">Themes by month (item counts; shading = share of that month's items)</h2>
 <div class="tbl"><table><tr><th class="l">Theme</th>${ms.map((m) => `<th>${esc(m.slice(2))}</th>`).join('')}</tr>${themeRows}</table></div>
 <h2 id="entities">Top ${d.entities.length} entities (normalised)</h2><ol class="ents">${d.entities.map((e) => `<li>${esc(e.name)} <span class="n">(${e.count})</span></li>`).join('')}</ol>

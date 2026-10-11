@@ -35,9 +35,10 @@ export function paths(env) {
     ctx,
     profile: join(ctx, 'reader-profile.md'),
     readwiseTags: join(ctx, 'readwise-tags.json'),
-    briefingMd: join(ctx, 'briefings', `${env.month}.md`),
-    briefingJson: join(ctx, 'briefings', `${env.month}-briefing.json`),
-    eventsJson: join(ctx, 'briefings', `${env.month}-events.json`),
+    // briefingKey: a month's briefing may be a quarter briefing shared by several months ("2022-Q2")
+    briefingMd: join(ctx, 'briefings', `${env.briefingKey || env.month}.md`),
+    briefingJson: join(ctx, 'briefings', `${env.briefingKey || env.month}-briefing.json`),
+    eventsJson: join(ctx, 'briefings', `${env.briefingKey || env.month}-events.json`),
     themes: join(ctx, env.themesName || 'themes-draft.json'),
     themesDraft: join(ctx, 'themes-draft.json'),
     themesFinal: join(ctx, 'themes.json'),
@@ -62,6 +63,14 @@ export function monthRange(month) {
 export function loadMonthItems(env) {
   const { from, to } = monthRange(env.month);
   const { items, stats } = selectWorks(join(env.archiveRoot, 'readings/works'), from, to);
+  return { items: assignShortIds(items), stats };
+}
+
+// Items a briefing covers: the month, or all months of a quarter briefing (env.briefingMonths), ids assigned over the whole set.
+export function loadBriefingItems(env) {
+  if (!env.briefingMonths || !env.briefingMonths.length) return loadMonthItems(env);
+  const ms = [...env.briefingMonths].sort();
+  const { items, stats } = selectWorks(join(env.archiveRoot, 'readings/works'), monthRange(ms[0]).from, monthRange(ms[ms.length - 1]).to);
   return { items: assignShortIds(items), stats };
 }
 
@@ -132,25 +141,26 @@ export function stageProfileHtml(env) {
 // ---------- stage 2: month briefing ----------
 export async function stageBriefing(env) {
   const p = paths(env);
-  const { items } = loadMonthItems(env);
+  const label = env.briefingKey || env.month;
+  const { items } = loadBriefingItems(env);
   let chars = 300;
   let view = condensedView(items, { chars });
   while (view.length > (env.maxViewChars || 600000) && chars > 80) { chars -= 40; view = condensedView(items, { chars }); } // condense harder for big months
-  const system = briefingSystem(env.month);
-  const user = `Items of ${env.month} (${items.length}; id | date | type | author | [title |] first characters):\n${view}`;
+  const system = briefingSystem(label);
+  const user = `Items of ${label} (${items.length}; id | date | type | author | [title |] first characters):\n${view}`;
   const estIn = Math.ceil((system.length + user.length) / 3);
   const replacing = existsSync(p.briefingJson) ? readJson(p.briefingJson).meta.cost_usd || 0 : 0;
   guardSpend(env, 'briefing', costFromUsage(env.briefingModel, { input_tokens: estIn, output_tokens: 30000 }), { replacing });
   const r = await callJson(env.client, { model: env.briefingModel, effort: 'medium', system, user, schema: BRIEFING_SCHEMA, maxTokens: 64000 });
   const b = validateBriefing(r.parsed, items.map((i) => i.sid));
   const meta = {
-    month: env.month, model: env.briefingModel, effort: 'medium', prompt_version: BRIEFING_PROMPT_VERSION,
+    month: label, months: env.briefingMonths || [env.month], model: env.briefingModel, effort: 'medium', prompt_version: BRIEFING_PROMPT_VERSION,
     generated: new Date().toISOString(), items: items.length, view_chars: view.length, view_chars_per_item: chars,
     usage: r.usage, cost_usd: +r.cost.toFixed(4), problems: b.problems, system_prompt: system,
   };
   writeJson(p.briefingJson, { meta, ...b });
-  writeJson(p.eventsJson, { month: env.month, model: env.briefingModel, generated: meta.generated, events: b.events.map(({ id, name, date, aliases, description, items: its }) => ({ id, name, date, aliases, description, items: its })) });
-  writeText(p.briefingMd, renderBriefingMarkdown(env.month, b, meta));
+  writeJson(p.eventsJson, { month: label, model: env.briefingModel, generated: meta.generated, events: b.events.map(({ id, name, date, aliases, description, items: its }) => ({ id, name, date, aliases, description, items: its })) });
+  writeText(p.briefingMd, renderBriefingMarkdown(label, b, meta));
   env.log(`briefing: ${b.events.length} events, ${b.names.length} names, ${b.debates.length} debates; $${r.cost.toFixed(3)}`);
   return { events: b.events.length, cost: r.cost, usage: r.usage };
 }

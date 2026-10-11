@@ -19,7 +19,8 @@ export function condensedView(items, { chars = VIEW_CHARS } = {}) {
 }
 
 export function briefingSystem(month) {
-  return `You write a factual briefing of one month (${month}) as seen through one person's reading archive: the tweets he liked and the articles he highlighted that month. The briefing will be given to a smaller model that tags each item, and whose training data ends before this month, so it must learn from you what happened, what things were called, and what people argued about.
+  const span = /Q\d$/.test(month) ? `one quarter (${month}; its months were too thin to brief separately)` : `one month (${month})`;
+  return `You write a factual briefing of ${span} as seen through one person's reading archive: the tweets he liked and the articles he highlighted that month. The briefing will be given to a smaller model that tags each item, and whose training data ends before this month, so it must learn from you what happened, what things were called, and what people argued about.
 
 Rules:
 - Use only the items given. Do not add facts from your own knowledge, even when you think you know them; your knowledge may be out of date. If items disagree, say so.

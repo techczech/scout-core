@@ -60,6 +60,9 @@ test('months between, structural stop rule', () => {
   assert.equal(structuralProblem(run(2, 10)), null);
   assert.match(structuralProblem(run(3, 0)), /failed/);
   assert.match(structuralProblem(run(0, 16)), /validation problems/);
+  const extras = run(0, 48, 266);
+  extras.stages.tagging.problems = Array(48).fill('unknown id m0081');
+  assert.equal(structuralProblem(extras), null, 'extra ids the model invented are dropped, nothing lost');
 });
 
 test('roundup chosen by how many of its items fall in the month, not by its name', () => {
