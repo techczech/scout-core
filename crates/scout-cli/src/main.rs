@@ -4,6 +4,7 @@
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
+mod topic_views;
 mod views;
 
 use anyhow::Result;
@@ -55,7 +56,8 @@ enum Cmd {
     Search {
         /// The @scout/query grammar: words are prefix-matched and ANDed;
         /// "quoted phrases" match exactly; OR, -exclude, prefix*, /regex/i;
-        /// fields in: au: ti: ty: tag: co: after: before: y: lang: genre: source:.
+        /// fields in: au: ti: ty: tag: co: after: before: y: lang: genre: source:,
+        /// and the topic layer's theme: entity: event: ai: month:.
         query: Vec<String>,
         /// Comma-separated corpus ids (default: every indexable corpus).
         #[arg(long = "in", value_delimiter = ',')]
@@ -77,6 +79,36 @@ enum Cmd {
         /// Full text only, even where vectors exist.
         #[arg(long)]
         fts: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Topic-layer counts (themes, entities, events, months) over the
+    /// documents a search query matches.
+    Facets {
+        /// The same grammar as `scout search`, e.g. 'event:2026-09/E21'.
+        query: Vec<String>,
+        /// Comma-separated corpus ids (default: every indexable corpus).
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        /// Values per facet for themes, entities and events (0 = all).
+        #[arg(long, default_value_t = FacetsQuery::default().top)]
+        top: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List topic-layer values with document counts.
+    Topics {
+        /// themes, entities, events or months.
+        field: String,
+        /// Only this layer month (YYYY-MM or YYYY).
+        #[arg(long)]
+        month: Option<String>,
+        /// Comma-separated corpus ids (default: every indexable corpus).
+        #[arg(long = "in", value_delimiter = ',')]
+        in_: Vec<String>,
+        /// Values kept (0 = all).
+        #[arg(long, default_value_t = TopicsQuery::default().top)]
+        top: usize,
         #[arg(long)]
         json: bool,
     },
@@ -525,6 +557,34 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 None => views::print_hits(res),
             })
+        }
+        Cmd::Facets {
+            query,
+            in_,
+            top,
+            json,
+        } => {
+            let q = FacetsQuery {
+                query: query.join(" "),
+                in_,
+                top,
+            };
+            out(engine.facets(&q), json, topic_views::print_facets)
+        }
+        Cmd::Topics {
+            field,
+            month,
+            in_,
+            top,
+            json,
+        } => {
+            let q = TopicsQuery {
+                field,
+                month,
+                in_,
+                top,
+            };
+            out(engine.topics(&q), json, topic_views::print_topics)
         }
         Cmd::Kwic {
             term,

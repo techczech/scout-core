@@ -19,7 +19,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/6";
+pub const ENGINE_VERSION: &str = "scout-corpus/7";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.
@@ -205,6 +205,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             source TEXT,
             date_source TEXT,
             handle TEXT,
+            source_id TEXT,
             passages INTEGER NOT NULL,
             tokens INTEGER NOT NULL
         );
@@ -225,7 +226,9 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(tokens, tokenize = \"{FTS_TOKENIZE}\");
         CREATE VIRTUAL TABLE IF NOT EXISTS titles_fts USING fts5(rel_path UNINDEXED, tokens, tokenize = \"{FTS_TOKENIZE}\");
         CREATE VIRTUAL TABLE IF NOT EXISTS fields_fts USING fts5(rel_path UNINDEXED, tokens, tokenize = \"{FTS_TOKENIZE}\");
-        "
+        {topic_docs}
+        ",
+        topic_docs = crate::topics::TABLE_SQL
     ))?;
     Ok(())
 }
@@ -266,6 +269,10 @@ pub struct BuildReport {
     /// corpus has (or was asked for) vectors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vectors: Option<crate::semantic::VectorReport>,
+    /// The topic layer join, when the corpus folder has a layer
+    /// (`analysis/topics/current.jsonl`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topics: Option<crate::topics::TopicReport>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -391,8 +398,8 @@ fn index_doc(
             .unwrap_or_default()
     });
     conn.execute(
-        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, public_url, kind, source, date_source, handle, passages, tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        "INSERT INTO documents (rel_path, title, date, genre, topics, lang, summary, author, public_url, kind, source, date_source, handle, passages, tokens, source_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             d.key,
             title,
@@ -408,7 +415,8 @@ fn index_doc(
             meta.date_source,
             meta.handle,
             n_pass,
-            n_tok
+            n_tok,
+            meta.source_id
         ],
     )?;
     let field_tokens = |s: &str| {
@@ -503,6 +511,8 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
 
     let tx = conn.transaction()?;
     let (mut indexed, mut unchanged) = (0usize, 0usize);
+    // Any document row deleted or written (the topic join must re-run).
+    let mut docs_touched = false;
     for f in &files {
         let prev = existing.remove(&f.rel_path);
         if let Some((mt, sz, _)) = &prev {
@@ -524,6 +534,7 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
             }
             delete_doc(&tx, &f.rel_path)?;
         }
+        docs_touched = true;
         if index_file(&tx, cfg, &rules, f, &text, &hash)? {
             indexed += 1;
         }
@@ -542,6 +553,10 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
             .unwrap_or(0);
         meta_set(&tx, GENERATION_KEY, &format!("{now:x}-{}", files.len()))?;
     }
+    // The topic layer beside the sources: re-joined when its files or the
+    // documents changed. Not part of the fingerprint, so a new layer never
+    // forces a full rebuild.
+    let topics = crate::topics::refresh(&tx, &root, full || docs_touched || removed > 0)?;
     meta_set(&tx, "fingerprint", &fp)?;
     meta_set(&tx, "engine", ENGINE_VERSION)?;
     meta_set(&tx, "corpus", &cfg.id)?;
@@ -576,6 +591,7 @@ pub fn build(cfg: &CorpusConfig, path: &Path, force: bool) -> Result<BuildReport
         not_documents: not_docs,
         elapsed_ms: started.elapsed().as_millis(),
         vectors: None,
+        topics,
     })
 }
 

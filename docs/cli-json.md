@@ -11,7 +11,7 @@ Values in the examples are illustrative. Every `--json` document is one pretty-p
 
 ## Library facade (apps)
 
-Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `SimilarQuery`, `IndexBuildQuery`, `CleanReportQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
+Every command is one call on `scout_corpus::api::Engine` (`Engine::from_env()` = the CLI's registry and index dir; `Engine::new(registry, index_dir)` for apps and tests). Each call takes a request struct (`SearchQuery`, `KwicQuery`, `CollocatesQuery`, `KeynessQuery`, `DistQuery`, `NgramsQuery`, `ProfileQuery`, `VerifyQuoteQuery`, `CiteQuery`, `SimilarQuery`, `IndexBuildQuery`, `CleanReportQuery`, `FacetsQuery`, `TopicsQuery`; `index_status()` and `corpora_list()` take none) and returns `Reply { body, notes }`.
 
 - `api::to_json(&reply.body)` is byte-for-byte the command's `--json` stdout (minus the final newline); `notes` are the stderr lines; `Outcome::has_results(&body)` is exit 0 vs 1. Errors are the same typed errors the CLI maps to exit 2/3 (`IndexMissing`, `RegistryMissing`, `NoIndexedCorpus`) or 1 (`PassageNotFound`). `crates/scout-cli/tests/facade_parity.rs` holds this for every command.
 - Requests are serde structs with every field defaulted to the CLI default, so partial JSON works: `{"term": "metaphor", "scope": {"in": ["writing"], "after": "2020"}}`. Rust `in_` fields serialise as `"in"`. `Scope` = `in`, `lang`, `genre`, `after`, `before`, `year`, `source`. Enumerated options stay strings as on the command line (`sort: "R1"`, `score: "mi"`, `by: "year"`, `n: "3-5"`, `dist: "doc"`).
@@ -47,8 +47,13 @@ Only the set keys appear; `{}` means unfiltered.
 | `kind` | string[] | any-of the document type (`tweet`, `article`, `book` …); a plural `s` is ignored (`ty:articles` matches `article`) |
 | `author` | string | case-insensitive substring of the author |
 | `title` | string | case-insensitive substring of the title |
+| `theme` | string | topic layer: the document carries this theme (exact name, case-insensitive) |
+| `entity` | string | topic layer: the document carries this entity (exact normalised name, case-insensitive) |
+| `event` | string | topic layer: the document's event id (`2026-09/E21`, case-insensitive) |
+| `ai` | bool | topic layer: the document's `ai_related` |
+| `month` | string | topic layer month: `YYYY-MM`, or `YYYY` for any month of that year |
 
-A document without a parseable date fails every date filter. `source`, `kind`, `author` and `title` come from query fields (`source: ty: au: ti:`) and slices; the analytics commands take `--source`.
+A document without a parseable date fails every date filter. A document without topic tags fails every topic filter, `ai:false` included. `source`, `kind`, `author`, `title` and the topic fields come from query fields (`source: ty: au: ti: theme: entity: event: ai: month:`) and slices; the analytics commands take `--source`.
 
 ### Slice expressions (`collocates --compare`, `keyness --a/--b`)
 
@@ -63,6 +68,7 @@ One quoted string, parsed by the `@scout/query` grammar (`crates/scout-query`); 
 | `y:2016-05`, `y:2016-`, `y:-2016` | the grammar's other date forms, as a range |
 | `lang:en,cs`, `genre:essay,note` | as `--lang` / `--genre` |
 | `source:zotero`, `zo:`, `ty:books`, `au:lakoff`, `ti:"metaphors we"` | the document fields above |
+| `theme:"AI and mathematics"`, `entity:`, `event:`, `ai:true`, `month:2026-09` | the topic-layer fields above |
 
 A slice refuses search terms (`-x`, `"phrase"`, `x*`, `/re/`) and the highlight fields `tag:`, `co:`, `i:`.
 
@@ -100,7 +106,13 @@ The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates
 | `after: before: y: lang: genre: source: zo: ty: tw: bo: … au: ti:` | document filters (the `filters` object) |
 | `tag:linguistics` | the highlight's tags, or the document's `topics` |
 | `co:yellow` | the highlight's colour |
+| `theme:"AI and mathematics"` | topic layer: documents carrying the theme (exact name, case-insensitive; quote names with spaces) |
+| `entity:"GPT-6 Astra"` | topic layer: documents carrying the entity (exact normalised name; `entity:Astra` does not match it) |
+| `event:2026-09/E21` | topic layer: documents linked to the event (ids are per month, so the month part is required) |
+| `ai:true`, `ai:false` | topic layer: `ai_related` (`yes`/`no`/`1`/`0` too; anything else is a usage error) |
+| `month:2026-09`, `month:2026` | topic layer month (see "Topic layer" below); `y:`/`after:`/`before:` stay on the document's own date |
 
+Each field takes one value; a repeated field keeps the last. `tag:` is unchanged: it never matches topic-layer themes or entities, because those are model-made and `tag:` holds the reader's own labels (Readwise tags) and the writing's frontmatter `topics`. A `/regex/` in the same query must not sit after an `event:` value with a `/` in a way that pairs the two slashes (the grammar reads regexes first), e.g. write `/x/ event:2026-09/E21`, not `event:2026-09/E21 /x/`.
 `i:` (has image) has no meaning here and is listed in `plan.ignored`. A query with filters or a regex but no positive term lists every passage that passes them (score 0).
 
 ```json
@@ -135,7 +147,20 @@ The query is the `@scout/query` grammar (TS `packages/scout-query`, Rust `crates
 }
 ```
 
-`plan` keys other than `any_of`, `not` and `filters` appear only when set; so do `date_source`, `kind`, `source` and the hit's `tags`, `color`, `saved_at` (highlights).
+`plan` keys other than `any_of`, `not` and `filters` appear only when set; so do `date_source`, `kind`, `source`, `topics` and the hit's `tags`, `color`, `saved_at` (highlights).
+
+A result whose document carries topic tags has a `topics` object (the same object in semantic and hybrid results):
+
+```json
+"topics": {
+  "key": "x:1965432109876543210", "themes": ["AI and mathematics"], "entities": ["GPT-6 Astra", "Terence Tao"],
+  "event": "2026-09/E21", "event_name": "Fields Medallists' declaration", "ai_related": true, "month": "2026-09",
+  "confidence": "medium", "run_id": "2026-10-11-final-2026-09", "prompt_version": "topics-v2",
+  "corrected": ["themes"]
+}
+```
+
+`corrected` (only when non-empty) names the fields a correction overrode, in the order `themes`, `entities`, `event`, `event_name`, `ai_related`.
 
 Order: `results` by `rank` desc, then `score` desc, corpus, path; `hits` by score desc, then line. `score` is BM25 (plus the title's score when the title matches); `rank` = `score` / the best `score` in the same corpus, so each corpus's best document has rank 1 and `--in a,b,c` interleaves the corpora instead of letting one corpus's BM25 scale win. With one corpus, rank order = score order.
 
@@ -162,6 +187,61 @@ Modes (`SearchQuery.mode` in the facade: `auto`, `fts`, `semantic`, `hybrid`):
 - A corpus whose vectors are stale (the index changed since, or another model) is searched as full text, with the note ``scout: note: full text only for <id> (<why>); run `scout index build --semantic` ``.
 
 Vectors live in `<corpus>.vectors.sqlite` beside the index. `index build --semantic --json` adds a `vectors` object to each report: `vectors_path`, `model`, `dim`, `full`, `passages`, `embedded`, `reused`, `removed`, `bytes`, `elapsed_ms`. Once a corpus has vectors, every `index build` updates them (only new or changed passage text is embedded). The model (default `minilm-l12`, `Xenova/paraphrase-multilingual-MiniLM-L12-v2`, about 490 MB; chosen by the ticket 07 recall test) is downloaded once on first use to `$HF_HOME` when set, else `<data dir>/scout/models`; `SCOUT_EMBED_MODEL` picks another (`e5-small`, `e5-base`). Passages under 5 tokens (headings, link lines) get no vector.
+
+## Topic layer
+
+A corpus folder may hold a topic layer: `analysis/topics/current.jsonl` (one model-tagged item per line, keyed `<source_system>:<source_id>`; format in `docs/specs/2026-10-10-topic-tagging-layer.md`) and the optional, append-only `analysis/topics/corrections.jsonl`. Both are read, never written.
+
+- **Build.** `scout index build` copies the layer into the derived index, joined to documents by key (the work's frontmatter `source_system` + `source_id`), else by the layer's `path` = the document key. It re-joins when either file's bytes or the corpus's documents change; a new layer never forces a full rebuild. No layer file = nothing happens (no `topics` in the report).
+- **Corrections.** One JSON object per line with `key` and any of `themes` (string list), `entities` (string list), `event` (string or null), `event_name`, `ai_related` (bool or null). Each field present replaces the layer's value for that key; later lines win; other keys (`by`, `date`, `note`) are provenance and are not read. A correction for a key the layer lacks is counted (`corrections_unmatched`), not applied; a line with a wrongly typed field is skipped whole (`corrections_bad_lines`). An event changed without an `event_name` takes the name the layer gives that event id.
+- **Month.** The item's `date` (its latest highlight) cut to `YYYY-MM`, else the layer's own `month` when that is `YYYY-MM`. `month:` filters on it and the `month` facet counts it.
+- **Unparseable layer lines** (the file may be mid-write) are skipped and counted (`bad_lines`); a key repeated in the layer keeps its last line.
+- Matching is exact and case-insensitive for themes, entities and event ids. Facets fold case the same way, so a facet's `count` equals `total_documents` of the same query plus that field.
+
+## `scout facets <query> [--in …] [--top 20] [--json]` — schema_version 1
+
+Topic-layer counts over the documents `scout search` matches for the same query: the full-text and filter match, all of it (no `--limit`; semantic-only documents of hybrid search are not included). Facade: `Engine::facets(&FacetsQuery { query, in, top })`. Exit 1 when no document matches; 2 for an empty query or a bad field value.
+
+```json
+{
+  "schema_version": 1,
+  "query": "event:2026-09/E21",
+  "plan": {"any_of": [], "not": [], "filters": {"event": "2026-09/E21"}},
+  "corpora": ["highlights"],
+  "total_documents": 41,
+  "tagged_documents": 41,
+  "top": 20,
+  "facets": {
+    "theme": {"distinct": 9, "items": [{"value": "AI and mathematics", "count": 38}]},
+    "entity": {"distinct": 57, "items": [{"value": "Terence Tao", "count": 12}]},
+    "event": {"distinct": 1, "items": [{"value": "2026-09/E21", "count": 41, "name": "Fields Medallists' declaration"}]},
+    "month": {"distinct": 1, "items": [{"value": "2026-09", "count": 41}]},
+    "ai": {"true": 41, "false": 0}
+  }
+}
+```
+
+- Each document counts once per value. `tagged_documents` = documents with topic tags; the rest count only in `total_documents`.
+- `theme`, `entity`, `event`: count desc, then value; at most `--top` items (0 = all); `distinct` = values before the cut. `month`: every month, chronological. An event item's `name` is its most frequent `event_name`.
+- A value's displayed spelling is its most frequent one among the counted documents (ties: alphabetically first).
+
+## `scout topics themes|entities|events|months [--month YYYY-MM] [--in …] [--top 0] [--json]` — schema_version 1
+
+Every value of one field with its document count, over the tagged documents that have at least one indexed passage (the documents search can return), optionally in one layer month (`--month 2026-09` or `--month 2026`). Facade: `Engine::topics(&TopicsQuery { field, month, in, top })`. Exit 1 when no value is found; 2 for an unknown field or a bad month.
+
+```json
+{
+  "schema_version": 1,
+  "field": "event",
+  "month": "2026-09",
+  "corpora": ["highlights"],
+  "tagged_documents": 1180,
+  "distinct": 34,
+  "items": [{"value": "2026-09/E21", "count": 41, "name": "Fields Medallists' declaration"}]
+}
+```
+
+`field` is `theme`, `entity`, `event` or `month`; `items` are ordered as in `facets` (months chronological); `--top` 0 keeps all.
 
 ## `scout cite <passage-id> [--format markdown|plain] [--json]` — schema_version 1
 
@@ -510,6 +590,14 @@ What each normalisation stage changed, read from the source files (read-only; no
 ```
 
 `full` is true on a first build, `--force`, or an engine or registry-entry change. `elapsed_ms` is the one non-deterministic field.
+
+A corpus whose folder has a topic layer adds a `topics` object (see "Topic layer"):
+
+```json
+"topics": {"layer_path": "/abs/…/analysis/topics/current.jsonl", "items": 10118, "matched": 10102, "matched_by_key": 10102, "matched_by_path": 0, "unmatched": 16, "unmatched_sample": ["x:1874…"], "tagged_documents": 10102, "bad_lines": 0, "corrections": 0, "corrections_unmatched": 0, "corrections_bad_lines": 0, "reloaded": true}
+```
+
+`items` = distinct keys in the layer; `matched` = items joined to a document (`matched_by_key` + `matched_by_path`); `unmatched_sample` = up to 5 unmatched keys, sorted; `reloaded` is false when neither the layer files nor the documents changed and the stored copy was kept. The human output adds a line `topics: N items, M matched (K by key, P by path), U unmatched → T tagged documents`.
 
 ## `scout index status --json` — schema_version 1
 

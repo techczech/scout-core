@@ -661,6 +661,9 @@ pub fn print_build(r: &IndexBuildReport) {
                 v.elapsed_ms as f64 / 1000.0
             );
         }
+        if let Some(t) = &r.topics {
+            crate::topic_views::print_topic_report(t);
+        }
     }
 }
 

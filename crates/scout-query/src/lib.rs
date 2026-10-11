@@ -7,8 +7,9 @@
 //!
 //! Grammar: `OR` / `|`, `AND`, `-exclude`, `"phrase"`, `prefix*`,
 //! `/regex/flags`, and field tokens `au: ti: ty: tag: co: after: before: y:`
-//! (with their long forms and aliases), `in: lang: genre: source: zo: i:`
-//! and the type shortcuts (`tw:`, `bo:`, `art:` …).
+//! (with their long forms and aliases), `in: lang: genre: source: zo: i:`,
+//! the topic-layer fields `theme: entity: event: ai: month:` and the type
+//! shortcuts (`tw:`, `bo:`, `art:` …).
 //!
 //! [`parse_query`] adds what an engine needs beyond the TS output: the
 //! positive free text as an OR of AND-groups of typed terms (FTS5 precedence:
@@ -57,6 +58,16 @@ pub struct ParsedQuery {
     pub genre: Option<String>,
     /// `source:` as typed.
     pub source: Option<String>,
+    /// Topic layer (scout-corpus): `theme:` name, exact, case-insensitive.
+    pub theme: Option<String>,
+    /// `entity:` normalised name, exact, case-insensitive.
+    pub entity: Option<String>,
+    /// `event:` id such as `2026-09/E21`.
+    pub event: Option<String>,
+    /// `ai:` as typed (`true` / `false`).
+    pub ai: Option<String>,
+    /// `month:` the topic layer month, `YYYY-MM` or `YYYY`.
+    pub month: Option<String>,
 }
 
 /// A half-open date range: `start` inclusive, `end` exclusive (ISO dates).
@@ -132,7 +143,7 @@ const TYPE_SHORTCUTS: &[(&str, &str)] = &[
 const FILTER_TOKENS: &[&str] = &[
     "author", "au", "title", "ti", "type", "ty", "tag", "date", "d", "year", "y", "after", "since",
     "from", "before", "until", "to", "i", "zo", "source", "color", "colour", "co", "in", "lang",
-    "genre",
+    "genre", "theme", "entity", "event", "ai", "month",
 ];
 
 const OR_THRESHOLD: usize = 3;
@@ -206,6 +217,11 @@ fn set_field(p: &mut ParsedQuery, field: &str, value: String) {
         "in" => &mut p.in_,
         "lang" => &mut p.lang,
         "genre" => &mut p.genre,
+        "theme" => &mut p.theme,
+        "entity" => &mut p.entity,
+        "event" => &mut p.event,
+        "ai" => &mut p.ai,
+        "month" => &mut p.month,
         _ => return,
     };
     *slot = Some(value);

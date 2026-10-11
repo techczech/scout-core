@@ -9,7 +9,8 @@
 //!   default; `-x` excludes passages with a token starting `x`; `x*` is an
 //!   explicit prefix; `/regex/i` must match the passage's original text.
 //! - Document fields: `in: after: before: y: lang: genre: source: zo: ty:
-//!   au: ti:` ([`crate::filter::apply_query_fields`]). Passage fields:
+//!   au: ti:` and the topic layer's `theme: entity: event: ai: month:`
+//!   ([`crate::filter::apply_query_fields`], [`crate::topics`]). Passage fields:
 //!   `tag:` (a highlight's tags or a document's topics) and `co:` (a
 //!   highlight's colour).
 //! - A query with no positive term but with filters or a regex lists every
@@ -379,6 +380,9 @@ pub struct DocResult {
     pub passage_count: usize,
     pub hits: Vec<PassageHit>,
     pub citation: Citation,
+    /// The topic layer's tags for the document (absent when it has none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topics: Option<crate::topics::TopicInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -614,106 +618,7 @@ pub fn search_corpus(
         return Ok(res);
     }
     let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
-    let need_passage = plan.tag.is_some() || plan.color.is_some() || !plan.compiled.is_empty();
-    let cols =
-        "p.id, p.rel_path, p.line_start, p.tags, p.color, CASE WHEN ?2 THEN p.original ELSE '' END";
-    let mut rows: Vec<Row> = Vec::new();
-    let mut keep = |row: Row, tags: String, color: Option<String>, original: String| {
-        let Some(doc) = docs.get(&row.rel_path) else {
-            return;
-        };
-        if need_passage {
-            let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
-            if !plan.passage_ok(doc, &tags, color.as_deref(), &original) {
-                return;
-            }
-        }
-        rows.push(row);
-    };
-    if plan.has_positive() {
-        // Which passages hold each term, and which documents' fields do.
-        let in_pass: Vec<BTreeSet<i64>> = terms
-            .iter()
-            .map(|t| fts_rowids(conn, "passages_fts", t))
-            .collect::<Result<_>>()?;
-        let in_fields: Vec<BTreeSet<String>> = if has_table(conn, "fields_fts")? {
-            terms
-                .iter()
-                .map(|t| field_docs(conn, t))
-                .collect::<Result<_>>()?
-        } else {
-            vec![BTreeSet::new(); terms.len()]
-        };
-        let mut st = conn.prepare(&format!(
-            "SELECT {cols}, bm25(passages_fts) FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
-             WHERE passages_fts MATCH ?1"
-        ))?;
-        let mut q = st.query(params![plan.candidate_fts(), need_passage])?;
-        while let Some(r) = q.next()? {
-            let id: i64 = r.get(0)?;
-            let rel: String = r.get(1)?;
-            let holds = |i: usize| in_pass[i].contains(&id);
-            let supplied = |i: usize| in_fields[i].contains(&rel);
-            let Some(cover) = plan.coverage(&terms, holds, supplied) else {
-                continue;
-            };
-            let field_terms = (0..terms.len())
-                .filter(|&i| !holds(i) && supplied(i))
-                .collect();
-            keep(
-                Row {
-                    id,
-                    rel_path: rel,
-                    line_start: r.get(2)?,
-                    score: round6(-r.get::<_, f64>(6)?),
-                    cover,
-                    field_terms,
-                },
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-            );
-        }
-    } else {
-        // Filters or a regex alone: every passage that passes them.
-        let mut excluded: BTreeSet<i64> = BTreeSet::new();
-        if !plan.not.is_empty() {
-            let any = plan
-                .not
-                .iter()
-                .map(Term::fts)
-                .collect::<Vec<_>>()
-                .join(" OR ");
-            let mut st =
-                conn.prepare("SELECT rowid FROM passages_fts WHERE passages_fts MATCH ?1")?;
-            for id in st.query_map([any], |r| r.get::<_, i64>(0))? {
-                excluded.insert(id?);
-            }
-        }
-        let mut st = conn.prepare(&format!(
-            "SELECT {cols} FROM passages p WHERE ?1 = ?1 ORDER BY p.rel_path, p.line_start"
-        ))?;
-        let mut q = st.query(params![0, need_passage])?;
-        while let Some(r) = q.next()? {
-            let id: i64 = r.get(0)?;
-            if excluded.contains(&id) {
-                continue;
-            }
-            keep(
-                Row {
-                    id,
-                    rel_path: r.get(1)?,
-                    line_start: r.get(2)?,
-                    score: 0.0,
-                    cover: 1.0,
-                    field_terms: vec![],
-                },
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-            );
-        }
-    }
+    let rows = collect_rows(conn, &plan, &terms, &docs)?;
     res.total_passages = rows.len();
 
     // Group by document; order passages by coverage desc, score desc, line.
@@ -809,6 +714,136 @@ pub fn search_corpus(
     Ok(res)
 }
 
+/// Every passage row the plan selects from `docs` (the filtered
+/// documents), with its score and term coverage, unordered.
+fn collect_rows(
+    conn: &Connection,
+    plan: &Plan,
+    terms: &[Term],
+    docs: &BTreeMap<String, DocInfo>,
+) -> Result<Vec<Row>> {
+    let need_passage = plan.tag.is_some() || plan.color.is_some() || !plan.compiled.is_empty();
+    let cols =
+        "p.id, p.rel_path, p.line_start, p.tags, p.color, CASE WHEN ?2 THEN p.original ELSE '' END";
+    let mut rows: Vec<Row> = Vec::new();
+    let mut keep = |row: Row, tags: String, color: Option<String>, original: String| {
+        let Some(doc) = docs.get(&row.rel_path) else {
+            return;
+        };
+        if need_passage {
+            let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+            if !plan.passage_ok(doc, &tags, color.as_deref(), &original) {
+                return;
+            }
+        }
+        rows.push(row);
+    };
+    if plan.has_positive() {
+        // Which passages hold each term, and which documents' fields do.
+        let in_pass: Vec<BTreeSet<i64>> = terms
+            .iter()
+            .map(|t| fts_rowids(conn, "passages_fts", t))
+            .collect::<Result<_>>()?;
+        let in_fields: Vec<BTreeSet<String>> = if has_table(conn, "fields_fts")? {
+            terms
+                .iter()
+                .map(|t| field_docs(conn, t))
+                .collect::<Result<_>>()?
+        } else {
+            vec![BTreeSet::new(); terms.len()]
+        };
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols}, bm25(passages_fts) FROM passages_fts JOIN passages p ON p.id = passages_fts.rowid
+             WHERE passages_fts MATCH ?1"
+        ))?;
+        let mut q = st.query(params![plan.candidate_fts(), need_passage])?;
+        while let Some(r) = q.next()? {
+            let id: i64 = r.get(0)?;
+            let rel: String = r.get(1)?;
+            let holds = |i: usize| in_pass[i].contains(&id);
+            let supplied = |i: usize| in_fields[i].contains(&rel);
+            let Some(cover) = plan.coverage(terms, holds, supplied) else {
+                continue;
+            };
+            let field_terms = (0..terms.len())
+                .filter(|&i| !holds(i) && supplied(i))
+                .collect();
+            keep(
+                Row {
+                    id,
+                    rel_path: rel,
+                    line_start: r.get(2)?,
+                    score: round6(-r.get::<_, f64>(6)?),
+                    cover,
+                    field_terms,
+                },
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            );
+        }
+    } else {
+        // Filters or a regex alone: every passage that passes them.
+        let mut excluded: BTreeSet<i64> = BTreeSet::new();
+        if !plan.not.is_empty() {
+            let any = plan
+                .not
+                .iter()
+                .map(Term::fts)
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let mut st =
+                conn.prepare("SELECT rowid FROM passages_fts WHERE passages_fts MATCH ?1")?;
+            for id in st.query_map([any], |r| r.get::<_, i64>(0))? {
+                excluded.insert(id?);
+            }
+        }
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols} FROM passages p WHERE ?1 = ?1 ORDER BY p.rel_path, p.line_start"
+        ))?;
+        let mut q = st.query(params![0, need_passage])?;
+        while let Some(r) = q.next()? {
+            let id: i64 = r.get(0)?;
+            if excluded.contains(&id) {
+                continue;
+            }
+            keep(
+                Row {
+                    id,
+                    rel_path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    score: 0.0,
+                    cover: 1.0,
+                    field_terms: vec![],
+                },
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            );
+        }
+    }
+    Ok(rows)
+}
+
+/// The documents a query matches in one corpus: the full result set of
+/// [`search_corpus`] before `limit`, as `(key, metadata)` in key order.
+/// `scout facets` counts over these.
+pub fn matching_docs(conn: &Connection, query: &str) -> Result<(Plan, Vec<DocInfo>)> {
+    let plan = Plan::parse(query)?;
+    if !plan.has_positive() && !plan.has_selector() {
+        return Ok((plan, vec![]));
+    }
+    let terms = plan.terms();
+    let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
+    let rows = collect_rows(conn, &plan, &terms, &docs)?;
+    let keys: BTreeSet<&str> = rows.iter().map(|r| r.rel_path.as_str()).collect();
+    let out = keys
+        .into_iter()
+        .filter_map(|k| docs.get(k).cloned())
+        .collect();
+    Ok((plan, out))
+}
+
 /// A passage row as the index stores it, for building a hit.
 pub(crate) struct PassageRow<'a> {
     pub line_start: i64,
@@ -881,6 +916,7 @@ pub(crate) fn doc_result(
         passage_count,
         hits,
         citation,
+        topics: d.topic.clone(),
     }
 }
 

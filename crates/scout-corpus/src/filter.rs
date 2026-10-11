@@ -24,6 +24,10 @@ use std::collections::BTreeMap;
 ///   trailing plural `s` is ignored on both sides, so `ty:articles` (the
 ///   `@scout/query` shortcut form) matches `article`.
 /// - `author`, `title`: case-insensitive substring.
+/// - Topic layer ([`crate::topics`]): `theme`, `entity`, `event`: exact
+///   name or id, case-insensitive; `ai`: the item's `ai_related`; `month`:
+///   the layer month, `YYYY-MM` or `YYYY`. A document without topic tags
+///   fails every topic filter (`ai:false` included).
 ///
 /// A document without a parseable date fails every date filter; one
 /// without the field fails the field's filter.
@@ -47,6 +51,16 @@ pub struct DocFilter {
     pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub month: Option<String>,
 }
 
 /// One indexed document's metadata.
@@ -65,6 +79,8 @@ pub struct DocInfo {
     pub source: Option<String>,
     pub date_source: Option<String>,
     pub handle: Option<String>,
+    /// The topic layer's tags for this document, when it has any.
+    pub topic: Option<crate::topics::TopicInfo>,
 }
 
 impl DocInfo {
@@ -124,7 +140,21 @@ impl DocFilter {
                 }
             }
         }
+        if let Some(m) = &self.month {
+            if !crate::topics::valid_month(m) {
+                bail!("month:{m}: expected YYYY-MM or YYYY");
+            }
+        }
         Ok(())
+    }
+
+    /// Does the filter use a topic-layer field?
+    pub fn has_topic_terms(&self) -> bool {
+        self.theme.is_some()
+            || self.entity.is_some()
+            || self.event.is_some()
+            || self.ai.is_some()
+            || self.month.is_some()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -156,7 +186,13 @@ impl DocFilter {
         if !self.kind.is_empty() {
             t.push(format!("ty:{}", self.kind.join(",")));
         }
-        for (k, v) in [("au", &self.author), ("ti", &self.title)] {
+        for (k, v) in [
+            ("au", &self.author),
+            ("ti", &self.title),
+            ("theme", &self.theme),
+            ("entity", &self.entity),
+            ("event", &self.event),
+        ] {
             if let Some(v) = v {
                 if v.contains(char::is_whitespace) {
                     t.push(format!("{k}:\"{v}\""));
@@ -164,6 +200,12 @@ impl DocFilter {
                     t.push(format!("{k}:{v}"));
                 }
             }
+        }
+        if let Some(a) = self.ai {
+            t.push(format!("ai:{a}"));
+        }
+        if let Some(m) = &self.month {
+            t.push(format!("month:{m}"));
         }
         t.join(" ")
     }
@@ -199,6 +241,19 @@ impl DocFilter {
         }
         if let Some(y) = self.year {
             if d.year() != Some(y) {
+                return false;
+            }
+        }
+        if self.has_topic_terms() {
+            let Some(t) = &d.topic else {
+                return false;
+            };
+            if self.theme.as_deref().is_some_and(|v| !t.has_theme(v))
+                || self.entity.as_deref().is_some_and(|v| !t.has_entity(v))
+                || self.event.as_deref().is_some_and(|v| !t.has_event(v))
+                || self.ai.is_some_and(|v| t.ai_related != Some(v))
+                || self.month.as_deref().is_some_and(|v| !t.in_month(v))
+            {
                 return false;
             }
         }
@@ -251,7 +306,8 @@ fn list(v: &str) -> Vec<String> {
 }
 
 /// Apply the document-level fields of a parsed `@scout/query` query to a
-/// filter: `after: before: y: lang: genre: source: zo: ty: au: ti:`.
+/// filter: `after: before: y: lang: genre: source: zo: ty: au: ti:` and the
+/// topic-layer fields `theme: entity: event: ai: month:`.
 /// `y:2016` sets the year; `y:2010-2015` (and every other `y:` / `date:`
 /// form) becomes the `after` / `before` range of the grammar's `dateRange`.
 /// Returns the corpus ids of `in:`.
@@ -312,6 +368,13 @@ pub fn apply_query_fields(p: &scout_query::ParsedQuery, f: &mut DocFilter) -> Re
     }
     f.author = nonempty("au", &p.author)?;
     f.title = nonempty("ti", &p.title)?;
+    f.theme = nonempty("theme", &p.theme)?;
+    f.entity = nonempty("entity", &p.entity)?;
+    f.event = nonempty("event", &p.event)?;
+    f.ai = nonempty("ai", &p.ai)?
+        .map(|v| crate::topics::parse_ai(&v))
+        .transpose()?;
+    f.month = nonempty("month", &p.month)?;
     let corpora = match nonempty("in", &p.in_)? {
         Some(v) => list(&v),
         None => vec![],
@@ -332,7 +395,7 @@ impl SliceSpec {
         let q = scout_query::parse_query(spec);
         let p = &q.parsed;
         let fail = |why: &str| -> Result<SliceSpec> {
-            bail!("slice {spec:?}: {why} (use in: after: before: y: lang: genre: source: ty: au: ti: or a corpus id)")
+            bail!("slice {spec:?}: {why} (use in: after: before: y: lang: genre: source: ty: au: ti: theme: entity: event: ai: month: or a corpus id)")
         };
         if !p.regexes.is_empty() || !q.not.is_empty() {
             return fail("a slice takes no search terms");
@@ -379,11 +442,14 @@ pub fn load_docs(conn: &Connection) -> Result<BTreeMap<String, DocInfo>> {
             source: r.get(10)?,
             date_source: r.get(11)?,
             handle: r.get(12)?,
+            topic: None,
         })
     })?;
+    let mut topics = crate::topics::load(conn)?;
     let mut out = BTreeMap::new();
     for d in rows {
-        let d = d?;
+        let mut d = d?;
+        d.topic = topics.remove(&d.rel_path);
         out.insert(d.rel_path.clone(), d);
     }
     Ok(out)

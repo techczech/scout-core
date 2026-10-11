@@ -25,6 +25,8 @@ use crate::registry::{self, CorpusConfig, Preset, Registry};
 use crate::search::{self, CitedPassage, PassageId, SearchRequest, SearchResults};
 use crate::semantic::{self, store, Embedder, Freshness, SearchMode};
 use crate::similar::{self, SimilarRequest, SimilarResults};
+use crate::topics::FacetCounter;
+pub use crate::topics::{FacetItem, Facets, TopicField};
 use crate::verify::{self, VerifyResult};
 use crate::{search_all, Corpus, Slice};
 use anyhow::{anyhow, bail, Result};
@@ -317,6 +319,83 @@ pub struct IndexBuildQuery {
     pub semantic: bool,
 }
 
+/// `scout facets <query>`: topic-layer counts over a query's result set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FacetsQuery {
+    pub query: String,
+    /// Corpus ids; empty = the query's `in:`, else every indexed corpus.
+    #[serde(rename = "in")]
+    pub in_: Vec<String>,
+    /// Values kept per facet for themes, entities and events (0 = all).
+    pub top: usize,
+}
+
+impl Default for FacetsQuery {
+    fn default() -> Self {
+        FacetsQuery {
+            query: String::new(),
+            in_: vec![],
+            top: 20,
+        }
+    }
+}
+
+/// `scout topics themes|entities|events|months`: every value with its
+/// document count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TopicsQuery {
+    /// `themes`, `entities`, `events` or `months`.
+    pub field: String,
+    /// Only documents of this layer month (`YYYY-MM` or `YYYY`).
+    pub month: Option<String>,
+    #[serde(rename = "in")]
+    pub in_: Vec<String>,
+    /// Values kept (0 = all).
+    pub top: usize,
+}
+
+impl Default for TopicsQuery {
+    fn default() -> Self {
+        TopicsQuery {
+            field: "themes".into(),
+            month: None,
+            in_: vec![],
+            top: 0,
+        }
+    }
+}
+
+/// `facets --json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FacetsResults {
+    pub schema_version: u32,
+    pub query: String,
+    pub plan: search::Plan,
+    pub corpora: Vec<String>,
+    /// Documents in the result set (as `search`'s `total_documents`).
+    pub total_documents: usize,
+    /// Of those, documents with topic tags.
+    pub tagged_documents: usize,
+    pub top: usize,
+    pub facets: Facets,
+}
+
+/// `topics --json`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TopicsResults {
+    pub schema_version: u32,
+    pub field: TopicField,
+    pub month: Option<String>,
+    pub corpora: Vec<String>,
+    /// Documents with topic tags (in `month` when given).
+    pub tagged_documents: usize,
+    /// Distinct values before `top`.
+    pub distinct: usize,
+    pub items: Vec<FacetItem>,
+}
+
 /// What a long index build reports as it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildEvent {
@@ -411,6 +490,18 @@ pub struct InitDefaults {
     /// False when a registry existed and `force` was not given.
     pub wrote: bool,
     pub corpora: Vec<CorpusEntry>,
+}
+
+impl Outcome for FacetsResults {
+    fn has_results(&self) -> bool {
+        self.total_documents > 0
+    }
+}
+
+impl Outcome for TopicsResults {
+    fn has_results(&self) -> bool {
+        !self.items.is_empty()
+    }
 }
 
 impl Outcome for SearchResults {
@@ -770,6 +861,94 @@ impl Engine {
         let mut body = search::merge(&req.query, parts, req.limit)?;
         body.mode = used.map(String::from);
         Ok(body)
+    }
+
+    /// Topic-layer facets over the documents `search` would return for the
+    /// same query (the full-text and filter match, all of it, not `limit`).
+    pub fn facets(&self, q: &FacetsQuery) -> Result<Reply<FacetsResults>> {
+        if q.query.trim().is_empty() {
+            bail!("empty query");
+        }
+        let mut notes = vec![];
+        let named = search::query_corpora(&q.query)?;
+        let ids = if q.in_.is_empty() {
+            named.clone()
+        } else {
+            q.in_.clone()
+        };
+        let corpora = self.scope(&ids, &mut notes)?;
+        let mut counter = FacetCounter::default();
+        let mut used = Vec::new();
+        let mut plan = search::Plan::parse(&q.query)?;
+        for c in &corpora {
+            if !(named.is_empty() || named.iter().any(|n| n == c.id())) {
+                continue;
+            }
+            let conn = index::open_existing(&c.config, c.index_path())?;
+            let (p, docs) = search::matching_docs(&conn, &q.query)?;
+            plan = p;
+            for d in &docs {
+                counter.add(d);
+            }
+            used.push(c.id().to_string());
+        }
+        if used.is_empty() {
+            let have: Vec<&str> = corpora.iter().map(|c| c.id()).collect();
+            bail!(
+                "in:{} names none of the searched corpora ({})",
+                named.join(","),
+                have.join(", ")
+            );
+        }
+        Ok(Reply {
+            body: FacetsResults {
+                schema_version: crate::topics::SCHEMA_VERSION,
+                query: q.query.clone(),
+                plan,
+                corpora: used,
+                total_documents: counter.documents,
+                tagged_documents: counter.tagged,
+                top: q.top,
+                facets: counter.facets(q.top),
+            },
+            notes,
+        })
+    }
+
+    /// Every value of one topic field with its document count, over the
+    /// documents with at least one indexed passage (those search can
+    /// return), optionally in one layer month.
+    pub fn topics(&self, q: &TopicsQuery) -> Result<Reply<TopicsResults>> {
+        let field: TopicField = q.field.parse()?;
+        let filter = DocFilter {
+            month: q.month.clone(),
+            ..DocFilter::default()
+        };
+        filter.validate()?;
+        let mut notes = vec![];
+        let corpora = self.scope(&q.in_, &mut notes)?;
+        let mut counter = FacetCounter::default();
+        for c in &corpora {
+            let conn = index::open_existing(&c.config, c.index_path())?;
+            for d in crate::filter::load_docs(&conn)?.values() {
+                if d.topic.is_some() && d.tokens > 0 && filter.matches(d) {
+                    counter.add(d);
+                }
+            }
+        }
+        let facet = counter.facet(field, q.top);
+        Ok(Reply {
+            body: TopicsResults {
+                schema_version: crate::topics::SCHEMA_VERSION,
+                field,
+                month: q.month.clone(),
+                corpora: corpora.iter().map(|c| c.id().to_string()).collect(),
+                tagged_documents: counter.tagged,
+                distinct: facet.distinct,
+                items: facet.items,
+            },
+            notes,
+        })
     }
 
     pub fn kwic(&self, q: &KwicQuery) -> Result<Reply<KwicResults>> {

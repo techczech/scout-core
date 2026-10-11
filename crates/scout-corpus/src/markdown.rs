@@ -274,6 +274,9 @@ pub struct DocMeta {
     pub date_source: Option<String>,
     /// Tweets: the account handle, without `@`.
     pub handle: Option<String>,
+    /// Highlights: the frontmatter `source_id`; with `source` it gives the
+    /// topic layer key `<source_system>:<source_id>`.
+    pub source_id: Option<String>,
 }
 
 /// Does the file count as a document under `require_frontmatter`?

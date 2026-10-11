@@ -42,9 +42,18 @@ Model-made topic tags for archive works (AI items from 2025 on), so Dominik can 
 - discovery: model labels freely; one consolidation call proposes ~40-80 topics with definitions and an old-to-new mapping.
 - vocabulary (`--mode vocabulary --vocabulary vocabulary.json`): pick from the list; `new:` proposals feed the next vocabulary revision. `--batch` uses Message Batches (50% off) for the full run.
 
-## How scout reads it later
+## How scout reads it (implemented 2026-10-11)
 
-Scout joins `tags.jsonl` to works by `key` (works table `source_system` + `source_id`), not by `path`, so file renames do not break the layer. Where several runs exist, scout shows the newest run per key and displays run-id, model and prompt_version as provenance. Free-form labels resolve through the same run's `vocabulary.json.mapping`. A topic view = all keys with that topic, ordered by `date`.
+Scout reads ONE file, `analysis/topics/current.jsonl` (step 6 of the full run below), not the per-run `tags.jsonl` files: `current.jsonl` already holds the latest run per month with normalised entities, so run selection and vocabulary mapping stay in the tagger. v1 run folders are not read.
+
+- `scout index build highlights` copies the layer into the derived index (`crates/scout-corpus/src/topics.rs`). Join: `key` = the work's frontmatter `source_system:source_id`; fallback the line's `path` = the work's relative path. The build prints the join rate (items, matched by key / by path, unmatched with a sample of keys, tagged documents) and puts it in `index build --json` as `topics`.
+- Fields read per line: `key`, `path`, `date`, `month`, `ai_related`, `themes`, `entities`, `event`, `event_name`, `confidence`, `run_id`, `prompt_version`. `relevance` is not read. Lines that do not parse are skipped and counted (`bad_lines`), so a file mid-write never fails a build; a repeated key keeps its last line.
+- Month = `date` cut to `YYYY-MM`, else `month` when it is `YYYY-MM` (a quarterly briefing's month such as `2022-Q2` is not a month).
+- Event names come from `event_name` on the lines; `briefings/*-events.json` and `themes.json` are not read by scout.
+- Corrections: `analysis/topics/corrections.jsonl`, append-only, optional; written by a future ArchiveScout feature or by hand, never by scout or the tagger. One JSON object per line: `{"key": "x:…", "themes": [...], "entities": [...], "event": "2026-09/E21" | null, "event_name": "…", "ai_related": true, "by": "Dominik", "date": "2026-10-11"}`. Each correctable field present replaces the layer's value for that key; later lines win; `by` / `date` / other keys are provenance, kept in the file, not read. A correction for a key absent from `current.jsonl` is counted, not applied. A search result's `topics.corrected` lists the overridden fields.
+- Query: `theme:"AI and mathematics"`, `entity:"GPT-6 Astra"`, `event:2026-09/E21`, `ai:true|false`, `month:2026-09` (exact names, case-insensitive), combinable with text and every other field. `tag:` is unchanged (reader's Readwise tags only).
+- `scout facets <query>` counts themes, entities, events and months over a query's result set; `scout topics themes|entities|events|months [--month]` lists values with counts. Schemas: `docs/cli-json.md` ("Topic layer").
+- Changing `current.jsonl` or `corrections.jsonl` takes effect at the next `scout index build` (no full rebuild needed).
 
 ## Tests
 

@@ -37,6 +37,7 @@ pub mod semantic;
 pub mod similar;
 pub mod stopwords;
 pub mod tokenize;
+pub mod topics;
 pub mod tweets;
 pub mod verify;
 

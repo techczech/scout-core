@@ -57,7 +57,7 @@ The initial registry is written by `scout corpora init-defaults` with three entr
   - `search(query)`, `kwic(term, opts)`, `collocates(node, opts)`, `ngrams(opts)`, `profile(word, opts)`, `distribution(term, by)`, `verify_quote(text)`
 - **`crates/scout-query`** (new): a Rust port of the `@scout/query` grammar.
   - The TS package stays; both must pass ONE shared fixture file, `packages/scout-query/fixtures/grammar-cases.json`. Generate it from the TS tests first, then make Rust pass it.
-  - Grammar: `OR`, `AND`, `-x`, `"phrase"`, `prefix*`, `/regex/`, and the fields `au: ti: ty: tag: co: after: before: y:`, plus the new `in:<corpus>`, `lang:`, `genre:`.
+  - Grammar: `OR`, `AND`, `-x`, `"phrase"`, `prefix*`, `/regex/`, and the fields `au: ti: ty: tag: co: after: before: y:`, plus the new `in:<corpus>`, `lang:`, `genre:`, and (2026-10-11) the topic-layer fields `theme: entity: event: ai: month:` (see "Topic layer").
 - **`crates/scout-cli`** (new), binary `scout`.
 - **`scout-index`** and **`scout-archive`**: reuse them for FTS and highlight-archive reading. Do not break Highlight Scout (it depends on the tag v0.1.0; bump to a new tag, and do not move the old one).
 
@@ -114,6 +114,8 @@ scout dist <term> --by year|corpus|genre|lang [--json]
 scout verify-quote <text> [--in …] [--json]
 scout cite <passage-id> [--format markdown|plain]
 scout sync --status                       # reads Highlight Scout config: per-source last sync; read-only
+scout facets <query> [--in …] [--top 20] [--json]                       # topic-layer counts over a query's result set
+scout topics themes|entities|events|months [--month YYYY-MM] [--in …] [--top 0] [--json]
 ```
 
 - Human output is compact and aligned (J9 frame).
@@ -152,6 +154,21 @@ Measure and report the actuals; a missed target is a finding, not a blocker.
 | T5 | `scout sync --status`, `docs/cli-json.md`, skill + report recipe, published | T2, T4 | the skill is installed; one real report run end to end (Fable drives it with Dominik's question) with every quote verified |
 
 **Review:** new public interface and a cross-repo contract, so one review pass per ticket merge. Fable reviews directly (Opus build; no write path, since sources are read-only and indexes live in the app-data dir). Invariant 1 is checked by Fable's sweep on every ticket.
+
+## Topic layer (2026-10-11)
+
+Model-made topic tags beside a corpus (`docs/specs/2026-10-10-topic-tagging-layer.md`). Plumbing for the ArchiveScout topic features (proposal `archive-scout/docs/plans/2026-10-11-topic-layer-in-archivescout-proposal.md`); no UI here.
+
+- **Files (read-only, in the corpus folder):** `analysis/topics/current.jsonl` and the optional, append-only `analysis/topics/corrections.jsonl`. Invariant 1 holds: neither is ever written.
+- **Module:** `crates/scout-corpus/src/topics.rs`. `read_layer(root)` parses both files (corrections applied); `index::build` calls `topics::refresh`, which copies the layer into the index table `topic_docs (rel_path, key, matched_by, info JSON)` inside the build transaction; `filter::load_docs` attaches each document's tags (`DocInfo.topic`); `FacetCounter` counts.
+- **Join:** by key = the work's frontmatter `source_system:source_id` (stored as `documents.source_id`, ENGINE_VERSION `scout-corpus/7`), else the layer's `path` = document key. A key match is never displaced by a path match. The build report carries the join rate (`topics` in `index build --json`).
+- **Refresh:** re-join when the layer files' bytes (sha1 in index meta) or the documents changed; the layer is not in the fingerprint, so a new layer never forces a full rebuild. A missing layer file empties the table and reports nothing (not an error). Invariant 4 holds: a rebuild from scratch gives the same tags.
+- **Corrections:** per key, each field present among `themes`, `entities`, `event`, `event_name`, `ai_related` overrides; later lines win; unknown keys counted, not applied; a wrongly typed line skipped whole.
+- **Query fields** (in `DocFilter`, so search, slices and every analytics view share one definition): `theme:` / `entity:` / `event:` exact, case-insensitive; `ai:true|false`; `month:YYYY-MM|YYYY` on the layer month (the item's latest-highlight month). `y:` / `after:` / `before:` keep the document's own date: for a Zotero book the two differ (published 1980, read 2026-09). An untagged document fails every topic filter.
+- **`tag:` is unchanged.** It matches the reader's highlight tags and the writing's frontmatter `topics`, never topic-layer themes or entities: those are model labels with their own provenance, and mixing them would silently change existing `tag:` results.
+- **Facets:** over the full full-text/filter match of a query (not `--limit`, not the semantic-only part of hybrid). Values fold case like the filters, so a facet count = the document total of that query plus the field (tested). Months chronological; others count desc, value asc.
+- **Search results** carry the document's tags as `topics` (absent when untagged).
+- **Not here:** the briefings' `YYYY-MM-events.json` and `themes.json` are not read (the layer's `event_name` names events); entity aliases (`entity-aliases.json`) are not applied to query values.
 
 ## Keyness (T4)
 

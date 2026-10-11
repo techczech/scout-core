@@ -328,6 +328,7 @@ pub fn work(rel_path: &str, text: &str) -> Option<DocRecord> {
         source,
         date_source,
         handle: None,
+        source_id: get("source_id"),
     };
     Some(DocRecord {
         key: rel_path.to_string(),

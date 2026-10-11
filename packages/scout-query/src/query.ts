@@ -34,6 +34,8 @@ const FILTER_TOKENS = [
   "i", "zo", "source", "color", "colour", "co",
   // Corpus-engine fields (scout-corpus): corpus id, language, genre.
   "in", "lang", "genre",
+  // Topic-layer fields (scout-corpus): theme, entity, event, ai, month.
+  "theme", "entity", "event", "ai", "month",
   ...Object.keys(TYPE_SHORTCUTS),
 ];
 
@@ -66,10 +68,23 @@ export interface ParsedQuery {
   genre: string | null;
   /** `source:` value as typed (readwise, x, zotero); `zotero` is also set for zotero. */
   source: string | null;
+  /** `theme:` topic-layer theme name (exact, case-insensitive; scout-corpus). */
+  theme: string | null;
+  /** `entity:` topic-layer entity name (exact, case-insensitive). */
+  entity: string | null;
+  /** `event:` topic-layer event id, e.g. `2026-09/E21`. */
+  event: string | null;
+  /** `ai:` as typed (`true` / `false`). */
+  ai: string | null;
+  /** `month:` topic-layer month, `YYYY-MM` or `YYYY`. */
+  month: string | null;
 }
 
 export interface SearchQueryPayload
-  extends Omit<ParsedQuery, "date" | "in" | "lang" | "genre" | "source"> {
+  extends Omit<
+    ParsedQuery,
+    "date" | "in" | "lang" | "genre" | "source" | "theme" | "entity" | "event" | "ai" | "month"
+  > {
   /** Combinable work-type filter (OR across the list). */
   types: string[];
   source: string | null;
@@ -250,6 +265,7 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     author: null, title: null, type: null, tag: null, color: null,
     date: null, after: null, before: null, favorite: false, zotero: false, has_image: false,
     in: null, lang: null, genre: null, source: null,
+    theme: null, entity: null, event: null, ai: null, month: null,
   };
 
   let rest = raw.replace(REGEX_RE, (_m, source: string, flags: string) => {
