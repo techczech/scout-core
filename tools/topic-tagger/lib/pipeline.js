@@ -215,9 +215,9 @@ export function stageEnrich(env) {
 }
 
 // Build (or reload) the exact system blocks used for tagging and QA.
-async function tagPrompt(env, items, { count }) {
+export async function tagPrompt(env, items, { count, needEnrichment = true }) {
   const p = paths(env);
-  for (const f of [p.profile, p.themes, p.briefingJson, p.enrichment]) if (!existsSync(f)) throw new Error(`tagging needs ${f}`);
+  for (const f of [p.profile, p.themes, p.briefingJson, ...(needEnrichment ? [p.enrichment] : [])]) if (!existsSync(f)) throw new Error(`tagging needs ${f}`);
   const themes = readJson(p.themes).themes;
   const briefing = readJson(p.briefingJson);
   const tw = existsSync(p.tweetStream) ? condenseTweets(parseTweetStream(readFileSync(p.tweetStream, 'utf8')), { maxChars: env.tweetsChars }) : null;
@@ -236,7 +236,7 @@ async function tagPrompt(env, items, { count }) {
   return { ...fit, themes, briefing, sources: { tweet_stream: tw ? { path: p.tweetStream, tweets: tw.tweets, per_tweet_cap: tw.perTweetCap } : null, roundup: rd ? { path: rpath, items: rd.items, per_item_cap: rd.perItemCap } : null } };
 }
 
-const realCount = (client, model) => async (system, user) => (await client.messages.countTokens({ model, system, messages: [{ role: 'user', content: user || '.' }] })).input_tokens;
+export const realCount = (client, model) => async (system, user) => (await client.messages.countTokens({ model, system, messages: [{ role: 'user', content: user || '.' }] })).input_tokens;
 
 // sidOf must cover the whole month so thread hints resolve even when only a sample is packed.
 export function packForTagging(items, contexts, maxTokens, sidOf = new Map(items.map((i) => [i.key, i.sid]))) {
@@ -244,7 +244,7 @@ export function packForTagging(items, contexts, maxTokens, sidOf = new Map(items
   return packItems(rendered, { maxItems: 20, maxTokens, estimate: promptEstimate });
 }
 
-function estimateTagging(model, systemTokens, batches, outPerItem = 250, thinkingPerReq = 2500) {
+export function estimateTagging(model, systemTokens, batches, outPerItem = 250, thinkingPerReq = 2500) {
   const p = PRICES[model];
   let usd = systemTokens * p.in * p.cacheWrite / 1e6; // first write
   for (const b of batches) usd += (systemTokens * p.in * p.cacheRead + b.estTokens * p.in + (b.items.length * outPerItem + thinkingPerReq) * p.out) / 1e6;

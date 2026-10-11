@@ -141,6 +141,21 @@ export async function fullRun(base) {
 }
 
 /**
+ * One current.jsonl row from one tags.jsonl record (r carries .month). Shared by the merge and by tag-new.
+ * evNames: {"<briefingKey>/<eventId>": name}. Returns {row, mentioned}.
+ */
+export function buildCurrentRow(r, { runId, briefingKey, aliases, workIndex, evNames }) {
+  const ev = r.event ? `${briefingKey}/${r.event}` : null;
+  const typed = normaliseTyped(aliases, r.entities);
+  const related = r.related || [];
+  const mentioned = mentionedWorks(workIndex, [...typed, ...(r.entities || []).filter((e) => e && typeof e === 'object')], r.key);
+  const row = { key: r.key, path: r.path, date: r.date, month: r.month, type: r.type, ai_related: r.ai_related, themes: r.themes,
+    entities: typed.map((e) => e.name), entities_typed: typed, event: ev, event_name: ev ? evNames[ev] || null : null,
+    related, mentioned_works: mentioned.map((m) => m.key), confidence: r.confidence, run_id: runId, prompt_version: PROMPT_VERSION };
+  return { row, mentioned };
+}
+
+/**
  * Entity merge -> current.jsonl -> overview.html -> ledger, over `months` (each with run `<runPrefix>-<month>`).
  * briefingKeyOf(month): file stem of the briefing that month used (a quarter key for merged months).
  * costs(): {per[month]:{briefing,briefing_new,tagging,qa}, themes, ents, total} for the whole layer shown.
@@ -196,16 +211,11 @@ export async function mergeAndRender(base, { months, briefingKeyOf, costs, ledge
   const workIndex = base.workIndex || buildWorkIndex(A);
   const stats = { items_with_related: 0, related_links: 0, items_with_mentioned: 0, mentioned_links: 0, by_relation: {}, examples: [] };
   const current = all.map((r) => {
-    const runId = `${base.runPrefix}-${r.month}`;
-    const ev = r.event ? `${briefingKeyOf(r.month)}/${r.event}` : null;
-    const typed = normaliseTyped(aliases, r.entities);
-    const related = r.related || [];
-    const mentioned = mentionedWorks(workIndex, [...typed, ...(r.entities || []).filter((e) => e && typeof e === 'object')], r.key);
+    const { row, mentioned } = buildCurrentRow(r, { runId: `${base.runPrefix}-${r.month}`, briefingKey: briefingKeyOf(r.month), aliases, workIndex, evNames });
+    const related = row.related;
     if (related.length) { stats.items_with_related++; stats.related_links += related.length; for (const x of related) stats.by_relation[x.relation] = (stats.by_relation[x.relation] || 0) + 1; }
     if (mentioned.length) { stats.items_with_mentioned++; stats.mentioned_links += mentioned.length; if (stats.examples.length < 400) stats.examples.push({ key: r.key, month: r.month, via: mentioned.map((m) => `${m.via} -> ${m.key}`) }); }
-    return { key: r.key, path: r.path, date: r.date, month: r.month, type: r.type, ai_related: r.ai_related, themes: r.themes,
-      entities: typed.map((e) => e.name), entities_typed: typed, event: ev, event_name: ev ? evNames[ev] || null : null,
-      related, mentioned_works: mentioned.map((m) => m.key), confidence: r.confidence, run_id: runId, prompt_version: PROMPT_VERSION };
+    return row;
   }).sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
   writeFileSync(join(topics, 'current.jsonl'), current.map((x) => JSON.stringify(x)).join('\n') + '\n');
 
