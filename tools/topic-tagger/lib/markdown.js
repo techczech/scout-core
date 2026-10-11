@@ -1,8 +1,8 @@
-// Minimal markdown to HTML for the review page: headings, paragraphs, bullet lists, bold, code.
+// Minimal markdown to HTML for the review page: headings, paragraphs, bullet lists, bold, italics, code.
 // Escapes first, so nothing in the source can inject markup. Frontmatter is dropped.
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const inline = (s) => esc(s).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+const inline = (s) => esc(s).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, '$1<i>$2</i>').replace(/`([^`]+)`/g, '<code>$1</code>');
 
 export function mdToHtml(md) {
   const lines = String(md ?? '').replace(/^---\n[\s\S]*?\n---\n?/, '').split('\n');
