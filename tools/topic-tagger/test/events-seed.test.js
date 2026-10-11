@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { assignId, createExclusive, majorityThemes, parseRecord, periodMonth, periodSpan, planSeed, seedEvents, slugify, SLUG_MAX } from '../lib/events-seed.js';
+import { assignId, createExclusive, majorityThemes, periodMonth, periodSpan, planSeed, seedEvents, slugify, SLUG_MAX } from '../lib/events-seed.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'cli.js');
 const put = (root, rel, text) => { const p = join(root, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return p; };
@@ -18,6 +18,8 @@ const tree = (root) => {
   if (existsSync(root)) walk(root);
   return out;
 };
+// A record file read back for the assertions below: its frontmatter as plain YAML, and its body.
+const parseRecord = (text) => { const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text); return { frontmatter: parse(m[1]), body: text.slice(m[0].length) }; };
 const records = (dir) => Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort().map((id) => [id, parseRecord(readFileSync(join(dir, `${id}.md`), 'utf8'))]));
 
 const AWKWARD = 'He said: "it\'s #1" — naïve café, 100% [sic] & more';

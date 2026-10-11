@@ -331,8 +331,8 @@ pub struct FacetsQuery {
     /// Values kept per facet for themes, entities and events (0 = all).
     pub top: usize,
     /// Leave out of the event facet every event with fewer items than this
-    /// in the whole of the searched corpora (not in the result set); 1
-    /// keeps every event.
+    /// in the whole of its own corpus (not in the result set, and never
+    /// added up across corpora); 1 keeps every event.
     pub min_event_items: usize,
 }
 
@@ -895,6 +895,8 @@ impl Engine {
                 continue;
             }
             let conn = index::open_existing(&c.config, c.index_path())?;
+            // Events are per corpus: counted, named and sized within it.
+            counter.corpus(c.id());
             let (p, docs) = search::matching_docs(&conn, &q.query)?;
             plan = p;
             for d in &docs {
@@ -950,6 +952,7 @@ impl Engine {
         let mut counter = FacetCounter::default();
         for c in &corpora {
             let conn = index::open_existing(&c.config, c.index_path())?;
+            counter.corpus(c.id());
             for d in crate::filter::load_docs(&conn)?.values() {
                 if d.topic.is_some() && d.tokens > 0 && filter.matches(d) {
                     counter.add(d);

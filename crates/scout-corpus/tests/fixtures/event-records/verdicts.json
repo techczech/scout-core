@@ -1,0 +1,348 @@
+{
+ "about": "Event record files and the verdict the reader gives each. Run by crates/scout-corpus/tests/event_record_fixtures.rs (the Rust reader, events.rs) and tools/topic-tagger/test/event-record-fixtures.test.js (the seed stage, lib/event-record.js); both must agree with this file. verdict: accept (read as a record), reject (skipped with a warning; `why` is a phrase of that warning), ignored (not a record file). A case with `make` has no file in records/: the tests create it (pad: text then one byte repeated up to a size; repeat: prefix, a unit repeated, suffix; hex: these bytes; symlink: a link to another case; dir: a folder).",
+ "cases": [
+  {
+   "file": "valid-full.md",
+   "verdict": "accept",
+   "note": "every field; a `---` line in the body"
+  },
+  {
+   "file": "valid-minimal.md",
+   "verdict": "accept",
+   "note": "id alone; the name is the id"
+  },
+  {
+   "file": "valid-bom-crlf.md",
+   "verdict": "accept",
+   "note": "BOM and CRLF line ends"
+  },
+  {
+   "file": "2026.md",
+   "verdict": "accept",
+   "note": "every scalar is text: the id is \"2026\""
+  },
+  {
+   "file": "valid-nulls.md",
+   "verdict": "accept",
+   "note": "empty, ~ and null are no value, for single values and lists alike"
+  },
+  {
+   "file": "valid-quoted-null.md",
+   "verdict": "accept",
+   "note": "a quoted null is text; an unquoted one in a list is dropped"
+  },
+  {
+   "file": "valid-padded-id.md",
+   "verdict": "accept",
+   "note": "the id is trimmed before it is compared with the file name"
+  },
+  {
+   "file": "valid-other-keys.md",
+   "verdict": "accept",
+   "note": "keys that are not record fields are ignored, to three levels"
+  },
+  {
+   "file": "valid-fence-spaces.md",
+   "verdict": "accept",
+   "note": "whitespace after the closing ---"
+  },
+  {
+   "file": "valid-no-final-newline.md",
+   "verdict": "accept"
+  },
+  {
+   "file": "valid-block-scalar.md",
+   "verdict": "accept",
+   "note": "a block scalar is a single value"
+  },
+  {
+   "file": "valid-anchor.md",
+   "verdict": "accept",
+   "note": "an anchor nothing refers to"
+  },
+  {
+   "file": "valid-dangling-merge.md",
+   "verdict": "accept",
+   "note": "a merged_into that names no record is a warning; the record is read"
+  },
+  {
+   "file": "valid-contested-member.md",
+   "verdict": "accept",
+   "note": "a member two records claim (valid-full.md too) is a warning; both records are read"
+  },
+  {
+   "file": "double.md.md",
+   "verdict": "accept",
+   "note": "every trailing .md is cut from the file name"
+  },
+  {
+   "file": "twin  id.md",
+   "verdict": "accept",
+   "note": "first of two files whose ids are equal under the fold (two spaces)"
+  },
+  {
+   "file": "at-the-cap.md",
+   "verdict": "accept",
+   "make": {
+    "pad": {
+     "text": "---\nid: at-the-cap\n---\n",
+     "byte": "x",
+     "bytes": 1048576
+    }
+   },
+   "note": "exactly 1 MiB"
+  },
+  {
+   "file": "twin id.md",
+   "verdict": "reject",
+   "why": "repeated or empty id",
+   "note": "its id repeats twin  id.md under the fold"
+  },
+  {
+   "file": "no-frontmatter.md",
+   "verdict": "reject",
+   "why": "no frontmatter"
+  },
+  {
+   "file": "unclosed-frontmatter.md",
+   "verdict": "reject",
+   "why": "no frontmatter"
+  },
+  {
+   "file": "late-frontmatter.md",
+   "verdict": "reject",
+   "why": "no frontmatter",
+   "note": "the first line is not ---"
+  },
+  {
+   "file": "fence-with-space.md",
+   "verdict": "reject",
+   "why": "no frontmatter",
+   "note": "the opening line must be exactly ---"
+  },
+  {
+   "file": "empty-frontmatter.md",
+   "verdict": "reject",
+   "why": "frontmatter is not a mapping"
+  },
+  {
+   "file": "top-level-list.md",
+   "verdict": "reject",
+   "why": "frontmatter is not a mapping"
+  },
+  {
+   "file": "top-level-text.md",
+   "verdict": "reject",
+   "why": "frontmatter is not a mapping"
+  },
+  {
+   "file": "bad-yaml.md",
+   "verdict": "reject",
+   "why": "bad YAML"
+  },
+  {
+   "file": "bad-yaml-open-quote.md",
+   "verdict": "reject",
+   "why": "bad YAML"
+  },
+  {
+   "file": "no-id.md",
+   "verdict": "reject",
+   "why": "no id"
+  },
+  {
+   "file": "empty-id.md",
+   "verdict": "reject",
+   "why": "no id"
+  },
+  {
+   "file": "null-id.md",
+   "verdict": "reject",
+   "why": "no id"
+  },
+  {
+   "file": "other-name.md",
+   "verdict": "reject",
+   "why": "does not match the file name"
+  },
+  {
+   "file": "other-case.md",
+   "verdict": "reject",
+   "why": "does not match the file name",
+   "note": "the id is compared as written, not under the fold"
+  },
+  {
+   "file": "id-list.md",
+   "verdict": "reject",
+   "why": "id is not a single value"
+  },
+  {
+   "file": "name-list.md",
+   "verdict": "reject",
+   "why": "name is not a single value",
+   "note": "the review case: a valid id and members, a wrongly typed name"
+  },
+  {
+   "file": "name-mapping.md",
+   "verdict": "reject",
+   "why": "name is not a single value"
+  },
+  {
+   "file": "start-list.md",
+   "verdict": "reject",
+   "why": "start is not a single value"
+  },
+  {
+   "file": "end-list.md",
+   "verdict": "reject",
+   "why": "end is not a single value"
+  },
+  {
+   "file": "origin-list.md",
+   "verdict": "reject",
+   "why": "origin is not a single value"
+  },
+  {
+   "file": "edited-mapping.md",
+   "verdict": "reject",
+   "why": "edited is not a single value"
+  },
+  {
+   "file": "merged-into-list.md",
+   "verdict": "reject",
+   "why": "merged_into is not a single value"
+  },
+  {
+   "file": "members-text.md",
+   "verdict": "reject",
+   "why": "members is not a list"
+  },
+  {
+   "file": "members-nested.md",
+   "verdict": "reject",
+   "why": "members is not a list"
+  },
+  {
+   "file": "members-mapping.md",
+   "verdict": "reject",
+   "why": "members is not a list"
+  },
+  {
+   "file": "members-of-mappings.md",
+   "verdict": "reject",
+   "why": "members is not a list"
+  },
+  {
+   "file": "aliases-text.md",
+   "verdict": "reject",
+   "why": "aliases is not a list"
+  },
+  {
+   "file": "themes-text.md",
+   "verdict": "reject",
+   "why": "themes is not a list"
+  },
+  {
+   "file": "repeated-key.md",
+   "verdict": "reject",
+   "why": "appears twice"
+  },
+  {
+   "file": "yaml-alias.md",
+   "verdict": "reject",
+   "why": "aliases are not read"
+  },
+  {
+   "file": "yaml-alias-elsewhere.md",
+   "verdict": "reject",
+   "why": "aliases are not read",
+   "note": "an alias in a key that is not a record field"
+  },
+  {
+   "file": "complex-key.md",
+   "verdict": "reject",
+   "why": "not a plain name"
+  },
+  {
+   "file": "too-deep-lists.md",
+   "verdict": "reject",
+   "why": "nested deeper than 3 levels"
+  },
+  {
+   "file": "too-deep-mappings.md",
+   "verdict": "reject",
+   "why": "nested deeper than 3 levels"
+  },
+  {
+   "file": "too-deep-block.md",
+   "verdict": "reject",
+   "why": "nested deeper than 3 levels"
+  },
+  {
+   "file": "nested-100000-deep.md",
+   "verdict": "reject",
+   "why": "bad YAML",
+   "make": {
+    "repeat": {
+     "prefix": "---\nid: nested-100000-deep\nextra:\n  ",
+     "unit": "- ",
+     "count": 100000,
+     "suffix": "a\n---\n"
+    }
+   },
+   "note": "the two libraries word this differently"
+  },
+  {
+   "file": "not-utf8.md",
+   "verdict": "reject",
+   "why": "not valid UTF-8",
+   "make": {
+    "hex": "2d2d2d0a69643a206e6f742d757466380a6e616d653a20ff0a2d2d2d0a"
+   }
+  },
+  {
+   "file": "too-large.md",
+   "verdict": "reject",
+   "why": "larger than 1 MiB",
+   "make": {
+    "pad": {
+     "text": "---\nid: too-large\n---\n",
+     "byte": "x",
+     "bytes": 1048577
+    }
+   },
+   "note": "1 MiB and one byte"
+  },
+  {
+   "file": "link.md",
+   "verdict": "reject",
+   "why": "not a plain file",
+   "make": {
+    "symlink": "valid-minimal.md"
+   },
+   "note": "a link to a valid record"
+  },
+  {
+   "file": "folder.md",
+   "verdict": "reject",
+   "why": "not a plain file",
+   "make": {
+    "dir": true
+   }
+  },
+  {
+   "file": ".hidden.md",
+   "verdict": "ignored",
+   "note": "a name starting with . is not a record"
+  },
+  {
+   "file": "notes.txt",
+   "verdict": "ignored"
+  },
+  {
+   "file": "UPPER.MD",
+   "verdict": "ignored",
+   "note": "only a lower-case .md ending makes a record"
+  }
+ ]
+}

@@ -211,23 +211,20 @@ fn without_a_records_folder_events_are_monthly_as_before() {
     assert_eq!(hits(c, "event:2026-09/E21"), vec![1, 2]);
     assert_eq!(hits(c, "event:2026-10/E04"), vec![3]);
     assert!(hits(c, &format!("event:{FIELDS}")).is_empty());
-    // A plain item carries `event` only; the item with an `events` list
-    // carries it too (monthly ids, nothing to resolve them).
+    // Every item carries `event` only. The tag row's `events` list is not
+    // read without a records folder: work 3 is in its own event alone.
     let r = search(c, "event:2026-09/E21");
     let tags = r.results[0].topics.as_ref().unwrap();
     assert_eq!(tags.events, None);
     assert!(!serde_json::to_string(tags).unwrap().contains("\"events\""));
-    assert_eq!(hits(c, "event:2026-09/E02"), vec![3, 4]);
+    assert_eq!(hits(c, "event:2026-09/E02"), vec![4]);
     let r = search(c, "event:2026-10/E04");
-    assert_eq!(
-        r.results[0].topics.as_ref().unwrap().events.as_deref(),
-        Some(&["2026-10/E04".to_string(), "2026-09/E02".to_string()][..])
-    );
+    assert_eq!(r.results[0].topics.as_ref().unwrap().events, None);
     assert_eq!(
         event_facet(&fx, "proof", 1),
         vec![
-            ("2026-09/E02".into(), 2, Some("Gemini launch".into())),
             ("2026-09/E21".into(), 2, Some("Fields declaration".into())),
+            ("2026-09/E02".into(), 1, Some("Gemini launch".into())),
             (
                 "2026-10/E04".into(),
                 1,
@@ -237,7 +234,7 @@ fn without_a_records_folder_events_are_monthly_as_before() {
         ]
     );
     // The floor works on monthly events too.
-    assert_eq!(event_facet(&fx, "proof", 2).len(), 2);
+    assert_eq!(event_facet(&fx, "proof", 2).len(), 1);
     let l = engine(&fx).events(&EventsQuery::default()).unwrap().body;
     assert_eq!(l.distinct, 4);
     assert!(l.events.iter().all(|e| !e.record && e.members.is_empty()));
@@ -403,7 +400,8 @@ fn corrections_add_and_remove_items_and_the_later_line_wins() {
     );
     assert_eq!(snapshot(fx.src.path()), before);
 
-    // Without records the same corrections work on monthly ids.
+    // Without a records folder the same lines are not read: `event_add`
+    // and `event_remove` are unknown keys there, as before lasting events.
     let fx = fixture(false);
     write(
         fx.src.path(),
@@ -415,8 +413,8 @@ fn corrections_add_and_remove_items_and_the_later_line_wins() {
         .join("\n"),
     );
     fx.corpus.build_index(false).unwrap();
-    assert_eq!(hits(&fx.corpus, "event:2026-09/E02"), vec![3, 4, 6]);
-    assert_eq!(hits(&fx.corpus, "event:2026-09/E21"), vec![2]);
+    assert_eq!(hits(&fx.corpus, "event:2026-09/E02"), vec![4]);
+    assert_eq!(hits(&fx.corpus, "event:2026-09/E21"), vec![1, 2]);
 }
 
 #[test]

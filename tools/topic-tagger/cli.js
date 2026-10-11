@@ -6,7 +6,7 @@
 //   extend the layer to older months: cli.js extend --from-month 2022-01 --to-month 2024-12 --run-prefix 2026-10-11-final --ledger-name 2026-10-11-extend-2022-2024 --max-usd 40
 //   re-tag a range with the current prompt:  cli.js retag --from-month 2022-01 --to-month 2026-10 --run-prefix 2026-10-11-v3 --max-usd 25
 //   refresh named months (briefing, tags, QA redone; old run folder and briefing files kept as .superseded-<stamp>): cli.js refresh --months 2026-06,2026-07,2026-08 --run-prefix 2026-10-11-v3 --max-usd 5
-//   seed lasting events from the monthly ones (no model call; writes nothing without --apply; with it, only new record files in the out folder; prints its counts as one JSON line): cli.js events-seed --archive <path> [--out <dir>] [--apply]
+//   seed lasting events from the monthly ones (no model call; writes nothing without --apply; with it, only new record files in the out folder; prints its counts as one JSON line; an existing record that scout would skip stops the run before any write, exit 1, the file and the rule on stderr): cli.js events-seed --archive <path> [--out <dir>] [--apply]
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';

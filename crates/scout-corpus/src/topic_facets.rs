@@ -17,6 +17,11 @@ pub struct FacetItem {
     /// Events: the event's name (its record's, else the layer's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Events, and only when the counted documents come from more than one
+    /// corpus: the corpus the event belongs to. Events are per corpus, so
+    /// the same id in two corpora is two values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -106,6 +111,7 @@ impl ValueCounts {
                     value,
                     count: *count,
                     name: None,
+                    corpus: None,
                 }
             })
             .collect();
@@ -122,30 +128,73 @@ impl ValueCounts {
     }
 }
 
+/// The events of one corpus: an event id names an event only within its
+/// corpus (as `scout events` lists them), so nothing here is shared.
+#[derive(Debug, Default)]
+struct CorpusEvents {
+    /// The corpus id; empty for a counter never told its corpus.
+    corpus: String,
+    counts: ValueCounts,
+    /// Layer names by folded monthly id.
+    names: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Names from this corpus's event records, by folded id; they lead the
+    /// layer's names.
+    record_names: BTreeMap<String, String>,
+    /// Event sizes over the whole corpus, by folded id (see `event_floor`).
+    sizes: BTreeMap<String, usize>,
+}
+
 /// Counts documents per theme, entity, event and month. Feed it the
-/// documents of a result set (several corpora may feed one counter); each
-/// document counts once per value, so once in each of its events. Values
-/// match case-insensitively, as the query fields do, so a facet's count is
-/// the document total of the matching `theme:` / `entity:` / `event:` /
-/// `month:` query.
+/// documents of a result set; each document counts once per value, so once
+/// in each of its events. Values match case-insensitively, as the query
+/// fields do, so a facet's count is the document total of the matching
+/// `theme:` / `entity:` / `event:` / `month:` query.
+///
+/// Several corpora may feed one counter: call [`FacetCounter::corpus`]
+/// before feeding each one. Themes, entities and months are counted
+/// across the corpora. Events are not: an event belongs to its corpus, so
+/// the same id in two corpora gives two values, each counted, named and
+/// sized (the `event_floor`) within its own corpus, and each carrying
+/// `corpus`. With one corpus (or none named) no value carries `corpus`.
 #[derive(Debug, Default)]
 pub struct FacetCounter {
     pub documents: usize,
     pub tagged: usize,
     theme: ValueCounts,
     entity: ValueCounts,
-    event: ValueCounts,
     month: ValueCounts,
-    event_names: BTreeMap<String, BTreeMap<String, usize>>,
-    /// Names from event records, by folded id; they lead the layer's names.
-    record_names: BTreeMap<String, String>,
-    /// Event sizes over whole corpora, by folded id (see `event_floor`).
-    event_sizes: BTreeMap<String, usize>,
+    /// One entry per corpus fed, in feeding order.
+    events: Vec<CorpusEvents>,
+    /// The entry of the corpus being fed.
+    feeding: usize,
     min_event_items: usize,
     ai: AiCounts,
 }
 
 impl FacetCounter {
+    /// What follows (documents, records, sizes) belongs to corpus `id`.
+    /// Naming a corpus again goes back to it.
+    pub fn corpus(&mut self, id: &str) {
+        self.feeding = match self.events.iter().position(|e| e.corpus == id) {
+            Some(at) => at,
+            None => {
+                self.events.push(CorpusEvents {
+                    corpus: id.to_string(),
+                    ..CorpusEvents::default()
+                });
+                self.events.len() - 1
+            }
+        };
+    }
+
+    /// The current corpus's events (an unnamed one when none was named).
+    fn current(&mut self) -> &mut CorpusEvents {
+        if self.events.is_empty() {
+            self.events.push(CorpusEvents::default());
+        }
+        &mut self.events[self.feeding]
+    }
+
     pub fn add(&mut self, d: &DocInfo) {
         self.documents += 1;
         let Some(t) = &d.topic else {
@@ -154,14 +203,14 @@ impl FacetCounter {
         self.tagged += 1;
         self.theme.add_doc(&t.themes);
         self.entity.add_doc(&t.entities);
-        self.event.add_doc(t.event_ids());
         self.month.add_doc(t.month.iter());
+        let ev = self.current();
+        ev.counts.add_doc(t.event_ids());
         // The layer's name belongs to the tag row's own event id; it names
         // a facet value only where that id is the value (no record).
         if let (Some(e), Some(n)) = (&t.event, &t.event_name) {
             if t.has_event(e) {
-                *self
-                    .event_names
+                *ev.names
                     .entry(fold(e))
                     .or_default()
                     .entry(n.clone())
@@ -175,32 +224,32 @@ impl FacetCounter {
         }
     }
 
-    /// Name events from a corpus's records (their names win over the
-    /// layer's `event_name`).
+    /// Name the current corpus's events from its records (their names win
+    /// over the layer's `event_name`).
     pub fn add_event_records(&mut self, records: &BTreeMap<String, EventRecord>) {
+        let ev = self.current();
         for (k, r) in records {
-            self.record_names
-                .entry(k.clone())
-                .or_insert_with(|| r.name.clone());
+            ev.record_names.insert(k.clone(), r.name.clone());
         }
     }
 
     /// Leave out of the event facet every event with fewer than `min`
-    /// items. An event's size is its documents over the whole of the
-    /// corpora fed through [`FacetCounter::add_event_size`], not its count
+    /// items. An event's size is its documents over the whole of its own
+    /// corpus, fed through [`FacetCounter::add_event_size`], not its count
     /// in the result set. `min` 0 or 1 keeps every event.
     pub fn event_floor(&mut self, min: usize) {
         self.min_event_items = min;
     }
 
-    /// Count one document of a corpus towards its events' sizes.
+    /// Count one document of the current corpus towards its events' sizes.
     pub fn add_event_size(&mut self, d: &DocInfo) {
         if let Some(t) = &d.topic {
+            let ev = self.current();
             let mut seen = BTreeSet::new();
             for e in t.event_ids() {
                 let f = fold(e);
                 if !f.is_empty() && seen.insert(f.clone()) {
-                    *self.event_sizes.entry(f).or_default() += 1;
+                    *ev.sizes.entry(f).or_default() += 1;
                 }
             }
         }
@@ -208,18 +257,34 @@ impl FacetCounter {
 
     fn event_facet(&self, top: usize) -> Facet {
         let min = self.min_event_items;
-        let mut f = self.event.facet(top, false, |folded| {
-            min <= 1 || self.event_sizes.get(folded).copied().unwrap_or(0) >= min
-        });
-        for it in f.items.iter_mut() {
-            let key = fold(&it.value);
-            it.name = self.record_names.get(&key).cloned().or_else(|| {
-                let ns = self.event_names.get(&key)?;
-                let max = ns.values().max()?;
-                ns.iter().find(|(_, c)| *c == max).map(|(n, _)| n.clone())
+        let several = self.events.len() > 1;
+        let mut items = Vec::new();
+        for ev in &self.events {
+            let f = ev.counts.facet(0, false, |folded| {
+                min <= 1 || ev.sizes.get(folded).copied().unwrap_or(0) >= min
             });
+            for mut it in f.items {
+                let key = fold(&it.value);
+                it.name = ev.record_names.get(&key).cloned().or_else(|| {
+                    let ns = ev.names.get(&key)?;
+                    let max = ns.values().max()?;
+                    ns.iter().find(|(_, c)| *c == max).map(|(n, _)| n.clone())
+                });
+                it.corpus = several.then(|| ev.corpus.clone());
+                items.push(it);
+            }
         }
-        f
+        items.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.value.cmp(&b.value))
+                .then_with(|| a.corpus.cmp(&b.corpus))
+        });
+        let distinct = items.len();
+        if top > 0 {
+            items.truncate(top);
+        }
+        Facet { distinct, items }
     }
 
     /// All four facets; `top` cuts themes, entities and events (0 = all);

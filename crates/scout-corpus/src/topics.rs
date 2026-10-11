@@ -15,17 +15,21 @@
 //!   layer's value for that key (null clears `event`). Later lines win.
 //!   Other keys on the line (`by`, `date`, `note`) are provenance and are
 //!   not read. A correction for a key absent from the layer is counted, not
-//!   applied. `event_add` / `event_remove` (lists of event ids) put the
-//!   item in further events or take it out of one; see "Events" below.
-//! - Events: an item can be in several. Its events are the tag row's
-//!   `event`, the ids of its optional `events` list, plus `event_add` and
-//!   minus `event_remove` from the corrections, in line order (the later
-//!   line wins; within a line removals follow additions). Every id is
-//!   resolved through the corpus's event records ([`crate::events`]): a
-//!   monthly id becomes the lasting event that holds it. `TopicInfo::events`
-//!   carries the result when the corpus has a records folder, or the item
-//!   has an `events` list or an add/remove correction; otherwise it is
-//!   absent and the item's one event is `event`, as before lasting events.
+//!   applied. In a corpus with a records folder, `event_add` /
+//!   `event_remove` (lists of event ids) put the item in further events or
+//!   take it out of one; see "Events" below.
+//! - Events: everything in this note holds only for a corpus that has a
+//!   records folder (`analysis/events/`, [`crate::events`]). There an item
+//!   can be in several events: the tag row's `event`, the ids of its
+//!   optional `events` list, plus `event_add` and minus `event_remove` from
+//!   the corrections, in line order (the later line wins; within a line
+//!   removals follow additions). Every id is resolved through the records:
+//!   a monthly id becomes the lasting event that holds it, and
+//!   `TopicInfo::events` carries the result. Without the folder none of it
+//!   is read: a tag row's `events` and a correction's `event_add` /
+//!   `event_remove` are unknown keys (ignored whatever their type, as
+//!   before lasting events), `TopicInfo::events` is absent and the item's
+//!   one event is `event`.
 //! - Join: a layer item belongs to every indexed document whose frontmatter
 //!   `source_system` + `source_id` give its key; failing that, to the
 //!   document whose key (relative path) equals its `path`.
@@ -88,8 +92,8 @@ pub struct TopicInfo {
     pub event: Option<String>,
     pub event_name: Option<String>,
     /// Every event the item is in, as lasting ids where a record holds the
-    /// event (see the module notes). Absent: the item's one event is
-    /// `event`.
+    /// event (see the module notes). Present exactly when the corpus has a
+    /// records folder; absent, the item's one event is `event`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<String>>,
     pub ai_related: Option<bool>,
@@ -192,11 +196,18 @@ struct LayerLine {
     entities: Option<Vec<String>>,
     event: Option<String>,
     event_name: Option<String>,
-    /// Further events; anything but a list of strings is left unread.
-    events: Option<serde_json::Value>,
     confidence: Option<String>,
     run_id: Option<String>,
     prompt_version: Option<String>,
+}
+
+/// A tag row's further events, read from the line a second time and only
+/// in a corpus with a records folder, so that without one the key is as
+/// unknown to the reader as it was before lasting events. Anything but a
+/// list is left unread.
+#[derive(Deserialize)]
+struct ListedEvents {
+    events: Option<serde_json::Value>,
 }
 
 /// What a tag row and the corrections say about an item's events beyond
@@ -315,18 +326,20 @@ fn hex(h: Sha1) -> String {
 /// folder.
 const NO_HASH: &str = "none";
 
-/// The combined hash of the layer file, the corrections file and the event
-/// records, streamed. The records are hashed whether or not there is a
-/// layer file (the corrections are read only with one); [`NO_HASH`] when
-/// the corpus has neither.
+/// The combined hash of the event records, the layer file and the
+/// corrections file, streamed in that order (the order [`read_beside`]
+/// reads them in). The records are hashed whether or not there is a layer
+/// file (the corrections are read only with one); [`NO_HASH`] when the
+/// corpus has neither. Without a records folder the hash is that of the
+/// layer and corrections bytes alone, as before lasting events.
 fn layer_hash(root: &Path) -> Result<String> {
     let mut h = Sha1::new();
+    let records = crate::events::hash_into(root, &mut h)?;
     let layer = stream_lines(&root.join(LAYER_FILE), 0, &mut h, |_| {})?;
     if layer {
         h.update([0u8]);
         stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
     }
-    let records = crate::events::hash_into(root, &mut h)?;
     Ok(if layer || records {
         hex(h)
     } else {
@@ -351,6 +364,10 @@ pub fn read_layer(root: &Path) -> Result<Option<Layer>> {
 
 /// The layer and the event records, each read whether or not the other is
 /// there, plus the hash of exactly the bytes read.
+///
+/// The records are read first: whether the corpus has a records folder
+/// decides how the layer and the corrections are read (`lasting` below).
+/// Without one, nothing of lasting events is applied.
 fn read_beside(root: &Path) -> Result<Beside> {
     let mut out = Layer {
         layer_path: root.join(LAYER_FILE),
@@ -363,13 +380,15 @@ fn read_beside(root: &Path) -> Result<Beside> {
     };
     let mut members: BTreeMap<String, Membership> = BTreeMap::new();
     let mut h = Sha1::new();
+    let records = crate::events::read_hashed(root, &mut h)?;
+    let lasting = records.is_some();
     let found = stream_lines(
         &root.join(LAYER_FILE),
         MAX_LINE_BYTES,
         &mut h,
         |l| match l {
             Line::Text(t) => {
-                if !add_layer_line(&mut out.items, &mut members, t) {
+                if !add_layer_line(&mut out.items, &mut members, lasting, t) {
                     out.bad_lines += 1;
                 }
             }
@@ -379,14 +398,13 @@ fn read_beside(root: &Path) -> Result<Beside> {
     if !found {
         // No tags: the records are still read, hashed and (by `refresh`)
         // stored, so `scout events --min-items 0` lists them.
-        let records_alone = crate::events::read_hashed(root, &mut h)?;
-        let hash = match records_alone {
+        let hash = match records {
             Some(_) => hex(h),
             None => NO_HASH.into(),
         };
         return Ok(Beside {
             layer: None,
-            records_alone,
+            records_alone: records,
             hash,
         });
     }
@@ -397,7 +415,7 @@ fn read_beside(root: &Path) -> Result<Beside> {
         MAX_LINE_BYTES,
         &mut h,
         |l| match l {
-            Line::Text(t) => match apply_correction(&mut out.items, &mut members, t) {
+            Line::Text(t) => match apply_correction(&mut out.items, &mut members, lasting, t) {
                 Correction::Applied => applied += 1,
                 Correction::UnknownKey => unknown += 1,
                 Correction::Bad => bad += 1,
@@ -409,8 +427,10 @@ fn read_beside(root: &Path) -> Result<Beside> {
     out.corrections_unmatched = unknown;
     out.corrections_bad_lines = bad;
     fill_event_names(&mut out.items);
-    out.events = crate::events::read_hashed(root, &mut h)?;
-    resolve_events(&mut out.items, &members, out.events.as_ref());
+    out.events = records;
+    if let Some(set) = &out.events {
+        resolve_events(&mut out.items, &members, set);
+    }
     Ok(Beside {
         layer: Some(out),
         records_alone: None,
@@ -419,10 +439,12 @@ fn read_beside(root: &Path) -> Result<Beside> {
 }
 
 /// Parse one layer line into `items` (a repeated key replaces the earlier
-/// line); false when it does not parse or has no key.
+/// line); false when it does not parse or has no key. The row's `events`
+/// list is kept only when `lasting` (the corpus has a records folder).
 fn add_layer_line(
     items: &mut BTreeMap<String, LayerItem>,
     members: &mut BTreeMap<String, Membership>,
+    lasting: bool,
     line: &str,
 ) -> bool {
     let Ok(l) = serde_json::from_str::<LayerLine>(line) else {
@@ -434,7 +456,11 @@ fn add_layer_line(
     }
     // A repeated key replaces the earlier line, its events included.
     members.remove(&key);
-    if let Some(serde_json::Value::Array(list)) = &l.events {
+    let listed = lasting
+        .then(|| serde_json::from_str::<ListedEvents>(line).ok())
+        .flatten()
+        .and_then(|l| l.events);
+    if let Some(serde_json::Value::Array(list)) = listed {
         members.entry(key.clone()).or_default().listed = Some(
             list.iter()
                 .filter_map(|v| v.as_str().map(String::from))
@@ -471,9 +497,13 @@ enum Correction {
     Bad,
 }
 
+/// Apply one corrections line. `event_add` / `event_remove` are fields
+/// only when `lasting` (the corpus has a records folder); otherwise they
+/// are unknown keys like `by` or `note`: not read, not type-checked.
 fn apply_correction(
     items: &mut BTreeMap<String, LayerItem>,
     members: &mut BTreeMap<String, Membership>,
+    lasting: bool,
     line: &str,
 ) -> Correction {
     let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -509,8 +539,8 @@ fn apply_correction(
             "entities" => strings(v).map(|s| entities = Some(s)).is_some(),
             "event" => opt_str(v).map(|s| event = Some(s)).is_some(),
             "event_name" => opt_str(v).map(|s| event_name = Some(s)).is_some(),
-            "event_add" => strings(v).map(|s| add = Some(s)).is_some(),
-            "event_remove" => strings(v).map(|s| remove = Some(s)).is_some(),
+            "event_add" if lasting => strings(v).map(|s| add = Some(s)).is_some(),
+            "event_remove" if lasting => strings(v).map(|s| remove = Some(s)).is_some(),
             "ai_related" => match v {
                 serde_json::Value::Bool(b) => {
                     ai = Some(Some(*b));
@@ -602,24 +632,16 @@ fn fill_event_names(items: &mut BTreeMap<String, LayerItem>) {
     }
 }
 
-/// Work out every item's events (see the module notes). An item whose tag
-/// row and corrections say nothing beyond `event` keeps `events` absent
-/// unless the corpus has event records.
+/// Work out every item's events (see the module notes). Called only for a
+/// corpus with a records folder (`set`); every item then gets `events`.
 fn resolve_events(
     items: &mut BTreeMap<String, LayerItem>,
     members: &BTreeMap<String, Membership>,
-    set: Option<&EventSet>,
+    set: &EventSet,
 ) {
-    let resolve = |id: &str| -> String {
-        set.and_then(|s| s.resolve(id))
-            .unwrap_or(id.trim())
-            .to_string()
-    };
+    let resolve = |id: &str| -> String { set.resolve(id).unwrap_or(id.trim()).to_string() };
     for (key, it) in items.iter_mut() {
         let m = members.get(key);
-        if set.is_none() && m.is_none() {
-            continue;
-        }
         let t = &mut it.info;
         let first = t.event.as_deref().map(resolve);
         let listed = m.and_then(|m| m.listed.as_deref()).unwrap_or_default();

@@ -12,9 +12,15 @@ fn rows(items: &[FacetItem]) {
         .max()
         .unwrap_or(1);
     for i in items {
+        // An event of a query over several corpora names its corpus.
+        let corpus = i
+            .corpus
+            .as_deref()
+            .map(|c| format!("  [{c}]"))
+            .unwrap_or_default();
         match &i.name {
-            Some(n) => println!("  {:>w$}  {}  {}", i.count, i.value, n),
-            None => println!("  {:>w$}  {}", i.count, i.value),
+            Some(n) => println!("  {:>w$}  {}  {}{corpus}", i.count, i.value, n),
+            None => println!("  {:>w$}  {}{corpus}", i.count, i.value),
         }
     }
 }

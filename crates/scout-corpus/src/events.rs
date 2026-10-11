@@ -19,8 +19,10 @@
 //!   by pulling parser events one at a time ([`read_flat`]) and the pull
 //!   stops at the first value that nests too deep; merge chains are
 //!   walked in loops bounded by the number of records.
-//! - No folder: `read` gives `None` and the topic layer behaves as it did
-//!   before lasting events (monthly events only).
+//! - No folder: `read` gives `None` and the topic layer behaves exactly as
+//!   it did before lasting events: monthly events only, one per item; a
+//!   tag row's `events` list and the corrections' `event_add` /
+//!   `event_remove` are not read ([`crate::topics`]).
 //!
 //! The archive files are never written. [`store`] copies the records and
 //! the id table into the derived index at build time; queries read only
@@ -264,7 +266,9 @@ enum Entry {
 }
 
 /// Visit every `*.md` entry of the records folder in name order, feeding
-/// names and bytes to `hash`. `Ok(false)` when the folder is missing.
+/// names and bytes to `hash`, then one zero byte (no file name is empty,
+/// so what a caller hashes next cannot read as a further record).
+/// `Ok(false)` when the folder is missing; nothing is hashed then.
 fn scan(root: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Result<bool> {
     let dir = root.join(EVENTS_DIR);
     let rd = match std::fs::read_dir(&dir) {
@@ -315,6 +319,7 @@ fn scan(root: &Path, hash: &mut Sha1, mut each: impl FnMut(&str, Entry)) -> Resu
         }
         each(name, entry);
     }
+    hash.update([0u8]);
     Ok(true)
 }
 

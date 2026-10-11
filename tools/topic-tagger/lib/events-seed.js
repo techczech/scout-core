@@ -4,8 +4,10 @@
 // becomes one record file `<out>/<id>.md`.
 //
 // Reads (never writes): <archive>/analysis/context/briefings/<period>-events.json (names with `.superseded-`
-// are ignored; the folder is not walked) and <archive>/analysis/topics/current.jsonl (model tag rows;
-// corrections.jsonl is not applied here, the reader applies it at query time).
+// are ignored; the folder is not walked), <archive>/analysis/topics/current.jsonl (model tag rows;
+// corrections.jsonl is not applied here, the reader applies it at query time) and the records already in the out
+// folder. An existing record that scout's reader would skip (lib/event-record.js holds the reader's rules) stops
+// the run before anything is written.
 // Writes (only with apply): new record files, each created with O_CREAT|O_EXCL|O_NOFOLLOW directly inside the
 // out folder, and the out folder itself (with any missing folder above it) when it is missing. Nothing else: no temporary file, no log file, and
 // no existing file is ever opened for writing, renamed or removed. The run's counts go to the caller (the CLI
@@ -18,6 +20,7 @@ import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readd
 import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, stringify } from 'yaml';
+import { checkRecords, fold } from './event-record.js';
 
 export const SLUG_MAX = 60;
 export const THEMES_MAX = 5;
@@ -138,31 +141,25 @@ export function readTaggedItems(archiveRoot) {
   return byEvent;
 }
 
-/** Split a record file into frontmatter object and body; throws when it is not a record. */
-export function parseRecord(text) {
-  const t = text.replace(/^\ufeff/, '');
-  const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(t);
-  if (!m) throw new Error('no frontmatter');
-  const fm = parse(m[1]);
-  if (!fm || typeof fm !== 'object' || Array.isArray(fm)) throw new Error('frontmatter is not a mapping');
-  return { frontmatter: fm, body: t.slice(m[0].length) };
-}
-
-/** Records already in `outDir`: ids in use and the monthly ids they hold. Any unreadable record stops the run. */
+/**
+ * Records already in `outDir`: ids in use and the monthly ids they hold. Every record file is checked against the
+ * reader's whole contract (lib/event-record.js). One that the reader would skip stops the run, naming each such
+ * file and the rule it breaks: counting its members as held would leave those events without a usable record.
+ */
 export function readExistingRecords(outDir) {
   const ids = new Set();
   const members = new Map();
-  if (!existsSync(outDir)) return { ids, members };
-  for (const e of readdirSync(outDir, { withFileTypes: true })) {
-    if (!e.name.endsWith('.md') || e.name.startsWith('.')) continue;
-    const file = join(outDir, e.name);
-    const stem = e.name.slice(0, -3);
-    let fm;
-    try { ({ frontmatter: fm } = parseRecord(readFileSync(file, 'utf8'))); } catch (err) { throw new Error(`${file}: cannot read the record (${err.message}); fix or remove it before seeding`); }
-    if (fm.id !== stem) throw new Error(`${file}: id ${JSON.stringify(fm.id)} does not match the file name; fix it before seeding`);
-    if (fm.members != null && !(Array.isArray(fm.members) && fm.members.every((x) => typeof x === 'string'))) throw new Error(`${file}: members is not a list of ids; fix it before seeding`);
-    ids.add(stem.toLowerCase());
-    for (const mem of fm.members || []) members.set(mem.trim().toLowerCase(), stem);
+  const verdicts = checkRecords(outDir);
+  const refused = verdicts.filter((v) => !v.ok);
+  if (refused.length) {
+    const lines = refused.map((v) => `${join(outDir, v.file)}: cannot read the record (${v.why})`);
+    throw new Error(`${lines.join('\n')}\n${refused.length === 1 ? 'this record is' : `these ${refused.length} records are`} not read by scout; fix or remove before seeding (nothing was written)`);
+  }
+  for (const { file, record } of verdicts) {
+    // Both the id and the file's own name are in use (they differ only for a name like `x.md.md`).
+    ids.add(fold(record.id));
+    ids.add(file.slice(0, -3).toLowerCase());
+    for (const mem of record.members) members.set(fold(mem), record.id);
   }
   return { ids, members };
 }
@@ -189,7 +186,7 @@ export function planSeed({ archiveRoot, outDir }) {
   // Every briefing event, tagged or not, and every event id only the tag rows name.
   const all = [...new Set([...monthly.keys(), ...tagged.keys()])].sort(byMonthlyId);
   for (const member of all) {
-    if (existing.members.has(member.toLowerCase())) { alreadyMembers++; continue; }
+    if (existing.members.has(fold(member))) { alreadyMembers++; continue; }
     const items = tagged.get(member) || [];
     const [, period, number] = MONTHLY_ID_RE.exec(member);
     const brief = monthly.get(member);

@@ -93,8 +93,8 @@ enum Cmd {
         /// Values per facet for themes, entities and events (0 = all).
         #[arg(long, default_value_t = FacetsQuery::default().top)]
         top: usize,
-        /// Leave out events with fewer items than this in the whole of the
-        /// searched corpora (2 hides one-item events).
+        /// Leave out events with fewer items than this in the whole of their
+        /// own corpus (2 hides one-item events).
         #[arg(long, default_value_t = FacetsQuery::default().min_event_items)]
         min_event_items: usize,
         #[arg(long)]
