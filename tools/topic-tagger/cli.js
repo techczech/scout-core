@@ -5,6 +5,7 @@
 //   full run over many months:      cli.js full --from-month 2025-01 --to-month 2026-10 --run-prefix 2026-10-11-final --max-usd 45
 //   extend the layer to older months: cli.js extend --from-month 2022-01 --to-month 2024-12 --run-prefix 2026-10-11-final --ledger-name 2026-10-11-extend-2022-2024 --max-usd 40
 //   re-tag a range with the current prompt:  cli.js retag --from-month 2022-01 --to-month 2026-10 --run-prefix 2026-10-11-v3 --max-usd 25
+//   refresh named months (briefing, tags, QA redone; old run folder and briefing files kept as .superseded-<stamp>): cli.js refresh --months 2026-06,2026-07,2026-08 --run-prefix 2026-10-11-v3 --max-usd 5
 //   v1 (legacy free-form topics):   cli.js --from YYYY-MM-DD --to YYYY-MM-DD [...]
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
@@ -16,9 +17,10 @@ import * as v2 from './lib/pipeline.js';
 import { fullRun } from './lib/full-run.js';
 import { extendRun } from './lib/extend-run.js';
 import { retagRun } from './lib/retag-run.js';
+import { refreshRun } from './lib/refresh-run.js';
 
-const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend', 'retag'];
-const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend', 'retag']);
+const STAGES = ['profile-sources', 'profile-html', 'briefing', 'themes', 'enrich', 'tag', 'qa', 'review', 'all', 'full', 'extend', 'retag', 'refresh'];
+const PAID = new Set(['briefing', 'themes', 'tag', 'qa', 'all', 'full', 'extend', 'retag', 'refresh']);
 const log = (m) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
 const home = (p) => join(homedir(), p);
 
@@ -28,6 +30,7 @@ const { values: v, positionals } = parseArgs({
     archive: { type: 'string', default: home('gitrepos/01_reading-research/highlights-archive') },
     // v2
     month: { type: 'string' },
+    months: { type: 'string' },
     'from-month': { type: 'string' },
     'to-month': { type: 'string' },
     'run-prefix': { type: 'string' },
@@ -81,7 +84,7 @@ try {
 
 async function runV2(stage) {
   if (!STAGES.includes(stage)) { console.error(`unknown stage ${stage}; one of ${STAGES.join(', ')}`); process.exit(2); }
-  if (stage === 'retag' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : stage === 'extend' ? !(v['from-month'] && v['to-month'] && v['run-prefix'] && v['ledger-name']) : stage === 'full' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : !v.month) { console.error('v2 stages need --month YYYY-MM (full: --from-month --to-month --run-prefix)'); process.exit(2); }
+  if (stage === 'refresh' ? !(v.months && v['run-prefix']) : stage === 'retag' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : stage === 'extend' ? !(v['from-month'] && v['to-month'] && v['run-prefix'] && v['ledger-name']) : stage === 'full' ? !(v['from-month'] && v['to-month'] && v['run-prefix']) : !v.month) { console.error('v2 stages need --month YYYY-MM (full: --from-month --to-month --run-prefix; refresh: --months a,b --run-prefix)'); process.exit(2); }
   const env = {
     archiveRoot: v.archive, month: v.month,
     runId: v['run-id'] || `${new Date().toISOString().slice(0, 10)}-v2-${v.month}`,
@@ -92,6 +95,11 @@ async function runV2(stage) {
     maxUsd: Number(v['max-usd'] || 5), concurrency: Number(v.concurrency || 4), seed: Number(v.seed), force: v.force, dryRun: v['dry-run'],
     client: PAID.has(stage) ? new Anthropic({ maxRetries: 4 }) : null, log,
   };
+  if (stage === 'refresh') {
+    const r = await refreshRun({ ...env, months: v.months, runPrefix: v['run-prefix'], entityModel: v['entity-model'], monthConcurrency: Number(v['month-concurrency']), maxUsd: Number(v['max-usd'] || 5) });
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
   if (stage === 'retag') {
     const r = await retagRun({ ...env, fromMonth: v['from-month'], toMonth: v['to-month'], runPrefix: v['run-prefix'], entityModel: v['entity-model'], monthConcurrency: Number(v['month-concurrency']), maxUsd: Number(v['max-usd'] || 25) });
     console.log(JSON.stringify(r, null, 2));

@@ -290,10 +290,16 @@ pub fn work(rel_path: &str, text: &str) -> Option<DocRecord> {
 
     let url = public_link(&fm, &source_data);
     let source = get("source_system");
-    let published = source_data
-        .get("date")
-        .and_then(|d| d.as_str())
-        .and_then(zotero_date)
+    // Frontmatter `published_at` (full date, year-month or year) wins over
+    // the Zotero `source_data.date`; an unparseable value falls through.
+    let published = get("published_at")
+        .and_then(|d| zotero_date(&d))
+        .or_else(|| {
+            source_data
+                .get("date")
+                .and_then(|d| d.as_str())
+                .and_then(zotero_date)
+        })
         .or_else(|| {
             let id = if source.as_deref() == Some("x") {
                 get("source_id")
@@ -359,6 +365,36 @@ mod tests {
         );
         assert_eq!(snowflake_time("20"), None, "pre-snowflake ids have no time");
         assert_eq!(snowflake_time("rw_book_1"), None);
+    }
+
+    #[test]
+    fn published_at_frontmatter_leads_the_date_chain() {
+        let doc = |fm: &str| {
+            let d = work("w.md", &format!("---\n{fm}\n---\n\n> q\n---\n")).unwrap();
+            (d.meta.date, d.meta.date_source)
+        };
+        let published = |d: &str| (Some(d.to_string()), Some("published".to_string()));
+        let zot = "source_data: {\"date\":\"2016-05-31 May 31, 2016\"}";
+        assert_eq!(
+            doc(&format!("published_at: 2024-03-15\n{zot}")),
+            published("2024-03-15")
+        );
+        assert_eq!(doc("published_at: 2003-03"), published("2003-03"));
+        assert_eq!(doc("published_at: 1980"), published("1980"));
+        assert_eq!(
+            doc(&format!(
+                "source_system: x\nsource_id: 1939901126326764018\npublished_at: 2024-03-15"
+            )),
+            published("2024-03-15")
+        );
+        // garbage falls through to source_data.date, then to the old chain
+        assert_eq!(
+            doc(&format!("published_at: sometime\n{zot}")),
+            published("2016-05-31")
+        );
+        assert_eq!(doc("published_at: sometime"), (None, None));
+        // absent field: unchanged
+        assert_eq!(doc(zot), published("2016-05-31"));
     }
 
     #[test]
