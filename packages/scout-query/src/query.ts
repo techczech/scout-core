@@ -80,12 +80,32 @@ export interface ParsedQuery {
   ai: string | null;
   /** `month:` topic-layer month, `YYYY-MM` or `YYYY`. */
   month: string | null;
+  /** Every `theme:` value, in query order. These four fields may be repeated
+   * and every term counts: `theme:`, `entity:` and `event:` terms are ANDed,
+   * `month:` terms ORed (scout-corpus). The scalar fields above keep the LAST
+   * value, as every other field does. */
+  themes: string[];
+  /** Every `entity:` value, in query order. */
+  entities: string[];
+  /** Every `event:` value, in query order. */
+  events: string[];
+  /** Every `month:` value, in query order. */
+  months: string[];
 }
+
+/** The repeatable fields and the list each one fills. */
+const LISTS: Record<string, "themes" | "entities" | "events" | "months"> = {
+  theme: "themes",
+  entity: "entities",
+  event: "events",
+  month: "months",
+};
 
 export interface SearchQueryPayload
   extends Omit<
     ParsedQuery,
-    "date" | "in" | "lang" | "genre" | "source" | "theme" | "entity" | "event" | "ai" | "month"
+    | "date" | "in" | "lang" | "genre" | "source" | "theme" | "entity" | "event" | "ai" | "month"
+    | "themes" | "entities" | "events" | "months"
   > {
   /** Combinable work-type filter (OR across the list). */
   types: string[];
@@ -279,6 +299,7 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     date: null, after: null, before: null, favorite: false, zotero: false, has_image: false,
     in: null, lang: null, genre: null, source: null,
     theme: null, entity: null, event: null, ai: null, month: null,
+    themes: [], entities: [], events: [], months: [],
   };
 
   const freeTokens: Free[] = [];
@@ -299,6 +320,9 @@ export function parseSearch(raw: string, partial = false): ParsedQuery {
     const shortcutType = TYPE_SHORTCUTS[key];
     const field = shortcutType ? "type" : canonical(key);
     bag[field] = shortcutType || value;
+    // The repeatable fields keep every value; the scalar keeps the last.
+    const list = shortcutType ? undefined : LISTS[field];
+    if (list) parsed[list].push(value);
     if (shortcutType) shortcutText.push(value);
   }
   // A type shortcut's value is free text, after everything else

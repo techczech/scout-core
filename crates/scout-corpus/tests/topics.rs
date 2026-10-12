@@ -289,7 +289,7 @@ fn topic_fields_filter_search_and_combine_with_text() {
 fn slices_take_topic_fields() {
     let s =
         SliceSpec::parse("highlights theme:\"AI and mathematics\" ai:true month:2026-09").unwrap();
-    assert_eq!(s.filter.theme.as_deref(), Some("AI and mathematics"));
+    assert_eq!(s.filter.theme, ["AI and mathematics"]);
     assert_eq!(s.filter.ai, Some(true));
     assert_eq!(
         s.filter.spec(),
@@ -414,12 +414,20 @@ fn facet_counts_equal_the_matching_query_totals() {
         .body;
     assert_eq!(f.total_documents, 1);
     assert_eq!(f.facets.entity.items.len(), 2);
-    assert!(e
+    // An empty query was refused before engine 13; it counts every tagged
+    // document search can return, as `scout topics` does.
+    let all = e
         .facets(&FacetsQuery {
             query: "  ".into(),
             ..Default::default()
         })
-        .is_err());
+        .unwrap()
+        .body;
+    let tagged = e.topics(&TopicsQuery::default()).unwrap().body;
+    assert!(all.total_documents > 0);
+    assert_eq!(all.total_documents, tagged.tagged_documents);
+    assert_eq!(all.tagged_documents, tagged.tagged_documents);
+    assert_eq!(all.facets.theme.items, tagged.items);
 }
 
 #[test]

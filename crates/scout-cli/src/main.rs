@@ -82,6 +82,11 @@ enum Cmd {
         /// Full text only, even where vectors exist.
         #[arg(long)]
         fts: bool,
+        /// relevance, newest or oldest. A date order (the document's date;
+        /// undated last) is a full-text search, and with one the query may
+        /// be empty or only filters: every matching document is listed.
+        #[arg(long, default_value = "relevance")]
+        sort: String,
         #[arg(long)]
         json: bool,
     },
@@ -594,6 +599,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             semantic,
             hybrid,
             fts,
+            sort,
             json,
         } => {
             let mode = match (semantic, hybrid, fts) {
@@ -608,6 +614,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 limit,
                 passage,
                 mode,
+                sort: sort.parse()?,
             };
             out(engine.search(&q), json, |res| match cite {
                 Some(fmt) => {

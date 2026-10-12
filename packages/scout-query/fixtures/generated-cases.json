@@ -9,14 +9,14 @@
   {"input":".  /","partial":false,"expected":{"fts":"\".\" \"/\"","has_positive":true,"positive_terms":[".","/"]}},
   {"input":"\t/  event:_ -“ Au:' month::1\u000bevent:„/","partial":true,"expected":{"regexes":[{"source":"  event:_ -“ Au:' month::1\u000bevent:„","flags":""}]}},
   {"input":"9THEMEevent9","partial":false,"expected":{"fts":"\"9THEMEevent9\"","has_positive":true,"positive_terms":["9THEMEevent9"]}},
-  {"input":"  au:e 　\"  “ -“ /g entity: ","partial":false,"expected":{"fts":"(\"/g\") NOT \"“\"","has_positive":true,"positive_terms":["/g"],"negatives":["“"],"author":"e"}},
+  {"input":"  au:e 　\"  “ -“ /g entity: ","partial":false,"expected":{"fts":"(\"/g\") NOT \"“\"","has_positive":true,"positive_terms":["/g"],"negatives":["“"],"author":"e","entities":[""]}},
   {"input":" \"é/\fitag ́","partial":false,"expected":{"fts":"\"é/\" OR \"itag\" OR \"́\"","has_positive":true,"positive_terms":["é/","itag","́"]}},
-  {"input":"zo:\\the e é THEME:„ ai:/ ","partial":false,"expected":{"fts":"\"e\" \"é\"","has_positive":true,"positive_terms":["e","é"],"zotero":true,"theme":"„","ai":"/"}},
+  {"input":"zo:\\the e é THEME:„ ai:/ ","partial":false,"expected":{"fts":"\"e\" \"é\"","has_positive":true,"positive_terms":["e","é"],"zotero":true,"theme":"„","ai":"/","themes":["„"]}},
   {"input":" aua2026-09“tag/g\t„ entity:\"/g\t","partial":true,"expected":{"fts":"\"aua2026-09“tag/g\" OR \"entity:\" OR \"/g\"","has_positive":true,"positive_terms":["aua2026-09“tag/g","entity:","/g"]}},
-  {"input":"\nco:“\\ Au:\"/inand\u000bmonth:‘(month:","partial":false,"expected":{"fts":"\"/inand\"","has_positive":true,"positive_terms":["/inand"],"color":"\\ Au:"}},
+  {"input":"\nco:“\\ Au:\"/inand\u000bmonth:‘(month:","partial":false,"expected":{"fts":"\"/inand\"","has_positive":true,"positive_terms":["/inand"],"color":"\\ Au:","months":["‘(",""]}},
   {"input":" 　bo:„e’","partial":false,"expected":{"fts":"\"„e’\"","has_positive":true,"positive_terms":["„e’"],"type":"books"}},
   {"input":" au:\"\u000b„event ti:theme́","partial":false,"expected":{"fts":"\"event\" \"́\"","has_positive":true,"positive_terms":["event","́"],"author":"\u000b","title":"theme"}},
-  {"input":"|THEME'proof9and THEME:a Au Z in:„","partial":false,"expected":{"fts":"\"|THEME'proof9and\" OR \"Au\" OR \"Z\"","has_positive":true,"positive_terms":["|THEME'proof9and","Au","Z"],"in":"„","theme":"a"}},
+  {"input":"|THEME'proof9and THEME:a Au Z in:„","partial":false,"expected":{"fts":"\"|THEME'proof9and\" OR \"Au\" OR \"Z\"","has_positive":true,"positive_terms":["|THEME'proof9and","Au","Z"],"in":"„","theme":"a","themes":["a"]}},
   {"input":"month\t a source:OR\\„/”\tbo:\"prooftag'","partial":true,"expected":{"fts":"month* \"prooftag'\"","has_positive":true,"positive_terms":["month","prooftag'"],"type":"books","source":"OR\\„/”"}},
   {"input":"|zotero  after:ž 2026-09e. after:\"|bor","partial":false,"expected":{"fts":"\"|zotero\" \"2026-09e.\"","has_positive":true,"positive_terms":["|zotero","2026-09e."],"after":"\"|bor"}},
   {"input":"E21","partial":false,"expected":{"fts":"\"E21\"","has_positive":true,"positive_terms":["E21"]}},
@@ -32,21 +32,21 @@
   {"input":"“ THEME:“ \"","partial":false,"expected":{"fts":"\"THEME:\"","has_positive":true,"positive_terms":["THEME:"]}},
   {"input":"the „“é/ea","partial":false,"expected":{"fts":"\"é/ea\"","has_positive":true,"positive_terms":["é/ea"]}},
   {"input":" / bo:  au:2026-09́THEME’month ","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"author":"2026-09́THEME’month","type":"books"}},
-  {"input":"_ theme: / -“  ti:/I ž\nsource:' “","partial":true,"expected":{"fts":"(_* \"/\") NOT \"ti:/I ž\nsource:'\"","has_positive":true,"positive_terms":["_","/"],"negatives":["ti:/I ž\nsource:'"]}},
+  {"input":"_ theme: / -“  ti:/I ž\nsource:' “","partial":true,"expected":{"fts":"(_* \"/\") NOT \"ti:/I ž\nsource:'\"","has_positive":true,"positive_terms":["_","/"],"negatives":["ti:/I ž\nsource:'"],"themes":[""]}},
   {"input":")ž  ”","partial":false,"expected":{"fts":"\")ž\" \"”\"","has_positive":true,"positive_terms":[")ž","”"]}},
   {"input":"a „\\9 “ithesource‟ ","partial":false,"expected":{"fts":"\"\\9\" \"ithesource‟\"","has_positive":true,"positive_terms":["\\9","ithesource‟"]}},
   {"input":" / ai:“","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"ai":"“"}},
   {"input":" \" ai:,e \n//g \tti:”:","partial":false,"expected":{"fts":"\"ai:,e \n//g \tti:\" \":\"","has_positive":true,"positive_terms":["ai:,e \n//g \tti:",":"]}},
   {"input":"ANDAND  Au:“auorZ  THEME: in:Z“","partial":true,"expected":{"fts":"ANDAND*","has_positive":true,"positive_terms":["ANDAND"],"author":"auorZ  THEME: in:Z"}},
-  {"input":" month:Z- /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"month":"Z-"}},
+  {"input":" month:Z- /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"month":"Z-","months":["Z-"]}},
   {"input":"\rzo:/g\u000be Au:a “of1 i:“","partial":false,"expected":{"fts":"\"e\" \"of1 i:\"","has_positive":true,"positive_terms":["e","of1 i:"],"author":"a","zotero":true}},
   {"input":"/gevent 1 tw:\"\ttheme: month\"1 ","partial":false,"expected":{"fts":"\"/g\" OR \"event\" OR \"1\" OR \"1\" OR \"theme:\" OR \"month\"","has_positive":true,"positive_terms":["/g","event","1","1","theme:","month"],"type":"tweets"}},
   {"input":"   ai: ","partial":false,"expected":{}},
   {"input":" žmonth\"","partial":true,"expected":{"fts":"žmonth*","has_positive":true,"positive_terms":["žmonth"]}},
-  {"input":"i  entity:\"_event  after:\"E21or1 i: é","partial":false,"expected":{"fts":"\"E21or1\" \"é\"","has_positive":true,"positive_terms":["E21or1","é"],"has_image":true,"entity":"_event  after:"}},
-  {"input":"\u000bmonth:\" zo:  1au,  ","partial":false,"expected":{"fts":"\"1au,\"","has_positive":true,"positive_terms":["1au,"],"zotero":true,"month":"\""}},
+  {"input":"i  entity:\"_event  after:\"E21or1 i: é","partial":false,"expected":{"fts":"\"E21or1\" \"é\"","has_positive":true,"positive_terms":["E21or1","é"],"has_image":true,"entity":"_event  after:","entities":["_event  after:"]}},
+  {"input":"\u000bmonth:\" zo:  1au,  ","partial":false,"expected":{"fts":"\"1au,\"","has_positive":true,"positive_terms":["1au,"],"zotero":true,"month":"\"","months":["\""]}},
   {"input":"/(a\u000bafter:“ ","partial":false,"expected":{"fts":"\"/(a\"","has_positive":true,"positive_terms":["/(a"],"after":"“"}},
-  {"input":"athe  event:„ /i\r","partial":false,"expected":{"fts":"\"athe\" \"/i\"","has_positive":true,"positive_terms":["athe","/i"],"event":"„"}},
+  {"input":"athe  event:„ /i\r","partial":false,"expected":{"fts":"\"athe\" \"/i\"","has_positive":true,"positive_terms":["athe","/i"],"event":"„","events":["„"]}},
   {"input":", \" ” \"/g　 the i","partial":true,"expected":{"fts":"\",\" \"/g\"","has_positive":true,"positive_terms":[",","/g"]}},
   {"input":"a\"-  ","partial":false,"expected":{"fts":"\"a-\"","has_positive":true,"positive_terms":["a-"]}},
   {"input":"e source: \ny:“ytag /or \f-„","partial":false,"expected":{"fts":"\"e\"","has_positive":true,"positive_terms":["e"],"date":"ytag /or \f-"}},
@@ -54,14 +54,14 @@
   {"input":"Z\"\f9Z","partial":false,"expected":{"fts":"\"Z\" \"9Z\"","has_positive":true,"positive_terms":["Z","9Z"]}},
   {"input":"\r“\n","partial":true,"expected":{"fts":"\"“\"","has_positive":true,"positive_terms":["“"]}},
   {"input":"*|   “ THEME:„/ E21","partial":false,"expected":{"fts":"\"*|\" OR \"THEME:\" OR \"/\" OR \"E21\"","has_positive":true,"positive_terms":["*|","THEME:","/","E21"]}},
-  {"input":") theme:“\t month: y: zo","partial":false,"expected":{"fts":"\")\" \"zo\"","has_positive":true,"positive_terms":[")","zo"],"theme":"“"}},
-  {"input":"\r/\u000b THEMEor au:„ a1  theme:","partial":false,"expected":{"fts":"\"/\" OR \"THEMEor\" OR \"a1\"","has_positive":true,"positive_terms":["/","THEMEor","a1"],"author":"„"}},
+  {"input":") theme:“\t month: y: zo","partial":false,"expected":{"fts":"\")\" \"zo\"","has_positive":true,"positive_terms":[")","zo"],"theme":"“","themes":["“"],"months":[""]}},
+  {"input":"\r/\u000b THEMEor au:„ a1  theme:","partial":false,"expected":{"fts":"\"/\" OR \"THEMEor\" OR \"a1\"","has_positive":true,"positive_terms":["/","THEMEor","a1"],"author":"„","themes":[""]}},
   {"input":"1ž Au:   in ","partial":false,"expected":{"fts":"\"1ž\"","has_positive":true,"positive_terms":["1ž"]}},
-  {"input":":_\nmonth:”","partial":true,"expected":{"fts":"\":_\"","has_positive":true,"positive_terms":[":_"],"month":"”"}},
+  {"input":":_\nmonth:”","partial":true,"expected":{"fts":"\":_\"","has_positive":true,"positive_terms":[":_"],"month":"”","months":["”"]}},
   {"input":"ž","partial":false,"expected":{"fts":"\"ž\"","has_positive":true,"positive_terms":["ž"]}},
   {"input":"'Zy:tag'9","partial":false,"expected":{"fts":"\"'Z\"","has_positive":true,"positive_terms":["'Z"],"date":"tag'9"}},
-  {"input":"| - sourcein)/i　  month:Aú ","partial":false,"expected":{"fts":"\"-\" \"sourcein)/i\"","has_positive":true,"positive_terms":["-","sourcein)/i"],"month":"Aú"}},
-  {"input":" “ tag:\"b\ni: theme:andž/g  ","partial":false,"expected":{"fts":"\"tag:\" \"b\"","has_positive":true,"positive_terms":["tag:","b"],"has_image":true,"theme":"andž/g"}},
+  {"input":"| - sourcein)/i　  month:Aú ","partial":false,"expected":{"fts":"\"-\" \"sourcein)/i\"","has_positive":true,"positive_terms":["-","sourcein)/i"],"month":"Aú","months":["Aú"]}},
+  {"input":" “ tag:\"b\ni: theme:andž/g  ","partial":false,"expected":{"fts":"\"tag:\" \"b\"","has_positive":true,"positive_terms":["tag:","b"],"has_image":true,"theme":"andž/g","themes":["andž/g"]}},
   {"input":"_AND2026-09é /1\t -“ \"","partial":true,"expected":{"fts":"\"_AND2026-09é\" \"/1\"","has_positive":true,"positive_terms":["_AND2026-09é","/1"]}},
   {"input":" / ́‟ after:„ zo: | ai: OR","partial":false,"expected":{"fts":"\"/\" \"́‟\"","has_positive":true,"positive_terms":["/","́‟"],"after":"„","zotero":true}},
   {"input":"-zo’ Au: ","partial":false,"expected":{"negatives":["zo’"]}},
@@ -71,76 +71,76 @@
   {"input":"é tw:\"  theme:“Zi-","partial":false,"expected":{"fts":"\"é\" OR \"Zi-\" OR \"theme:\"","has_positive":true,"positive_terms":["é","Zi-","theme:"],"type":"tweets"}},
   {"input":" after:  THEME tw:„’","partial":false,"expected":{"fts":"\"THEME\" \"„’\"","has_positive":true,"positive_terms":["THEME","„’"],"type":"tweets"}},
   {"input":"\u000bai:","partial":false,"expected":{}},
-  {"input":"\r/ ‘E21bzoteroAu\fTHEME: in: ","partial":false,"expected":{"fts":"\"/\" \"‘E21bzoteroAu\"","has_positive":true,"positive_terms":["/","‘E21bzoteroAu"]}},
-  {"input":"eZ “\nevent:\tTHEME:’2026-09 i:","partial":true,"expected":{"fts":"eZ* \"“\"","has_positive":true,"positive_terms":["eZ","“"],"has_image":true,"theme":"’2026-09"}},
+  {"input":"\r/ ‘E21bzoteroAu\fTHEME: in: ","partial":false,"expected":{"fts":"\"/\" \"‘E21bzoteroAu\"","has_positive":true,"positive_terms":["/","‘E21bzoteroAu"],"themes":[""]}},
+  {"input":"eZ “\nevent:\tTHEME:’2026-09 i:","partial":true,"expected":{"fts":"eZ* \"“\"","has_positive":true,"positive_terms":["eZ","“"],"has_image":true,"theme":"’2026-09","themes":["’2026-09"],"events":[""]}},
   {"input":"Au1","partial":false,"expected":{"fts":"\"Au1\"","has_positive":true,"positive_terms":["Au1"]}},
   {"input":" //g eé\u000b i:iein","partial":false,"expected":{"fts":"\"//g\" \"eé\"","has_positive":true,"positive_terms":["//g","eé"],"has_image":true}},
   {"input":" /-́)Au:́e \"|e\nzo: THEME: -“","partial":false,"expected":{"fts":"\"/-́)Au:́e\" \"|e\nzo: THEME: -\"","has_positive":true,"positive_terms":["/-́)Au:́e","|e\nzo: THEME: -"]}},
-  {"input":" THEME:1andtheme“ /\\ ž ai:b_","partial":false,"expected":{"fts":"\"/\\\" \"ž\"","has_positive":true,"positive_terms":["/\\","ž"],"theme":"1andtheme“","ai":"b_"}},
-  {"input":"  event:\"  source:i(","partial":true,"expected":{"source":"i(","event":"\""}},
-  {"input":" 1 //i /I /\u000bmonth:  /","partial":false,"expected":{"fts":"\"1\" OR \"//i\" OR \"/\"","has_positive":true,"positive_terms":["1","//i","/"],"regexes":[{"source":"I ","flags":""}]}},
+  {"input":" THEME:1andtheme“ /\\ ž ai:b_","partial":false,"expected":{"fts":"\"/\\\" \"ž\"","has_positive":true,"positive_terms":["/\\","ž"],"theme":"1andtheme“","ai":"b_","themes":["1andtheme“"]}},
+  {"input":"  event:\"  source:i(","partial":true,"expected":{"source":"i(","event":"\"","events":["\""]}},
+  {"input":" 1 //i /I /\u000bmonth:  /","partial":false,"expected":{"fts":"\"1\" OR \"//i\" OR \"/\"","has_positive":true,"positive_terms":["1","//i","/"],"regexes":[{"source":"I ","flags":""}],"months":[""]}},
   {"input":"Ztheé é/I　Z 2026-09","partial":false,"expected":{"fts":"\"Ztheé\" OR \"é/I\" OR \"Z\" OR \"2026-09\"","has_positive":true,"positive_terms":["Ztheé","é/I","Z","2026-09"]}},
   {"input":"inbofmonth9","partial":false,"expected":{"fts":"\"inbofmonth9\"","has_positive":true,"positive_terms":["inbofmonth9"]}},
-  {"input":"Z\nco:/i \tmonth:“‟ proof/I .‘zo","partial":false,"expected":{"fts":"\"Z\" OR \"proof/I\" OR \".‘zo\"","has_positive":true,"positive_terms":["Z","proof/I",".‘zo"],"color":"/i"}},
-  {"input":" month:“　e \n /sourcezotero„- ","partial":true,"expected":{"fts":"\"-\"","has_positive":true,"positive_terms":["-"],"month":"　e \n /sourcezotero"}},
+  {"input":"Z\nco:/i \tmonth:“‟ proof/I .‘zo","partial":false,"expected":{"fts":"\"Z\" OR \"proof/I\" OR \".‘zo\"","has_positive":true,"positive_terms":["Z","proof/I",".‘zo"],"color":"/i","months":[""]}},
+  {"input":" month:“　e \n /sourcezotero„- ","partial":true,"expected":{"fts":"\"-\"","has_positive":true,"positive_terms":["-"],"month":"　e \n /sourcezotero","months":["　e \n /sourcezotero"]}},
   {"input":"/ *b\"é -\"ž“","partial":false,"expected":{"fts":"(\"/\" \"*bé\") NOT \"ž\"","has_positive":true,"positive_terms":["/","*bé"],"negatives":["ž"]}},
   {"input":" co:\"　\f\u000bai:\u000b/i ž\fi:\"zo ́event*","partial":false,"expected":{"fts":"\"zo\" \"́event*\"","has_positive":true,"positive_terms":["zo","́event*"],"color":"　\f\u000bai:\u000b/i ž\fi:"}},
   {"input":"\r/Z /)","partial":false,"expected":{"fts":"\"/Z\" \"/)\"","has_positive":true,"positive_terms":["/Z","/)"]}},
   {"input":"zotero/1-  source: *,éé","partial":false,"expected":{"fts":"\"zotero/1-\" \"*,éé\"","has_positive":true,"positive_terms":["zotero/1-","*,éé"]}},
   {"input":"‟ / ","partial":true,"expected":{"fts":"\"‟\" \"/\"","has_positive":true,"positive_terms":["‟","/"]}},
-  {"input":". event: ","partial":false,"expected":{"fts":"\".\"","has_positive":true,"positive_terms":["."]}},
+  {"input":". event: ","partial":false,"expected":{"fts":"\".\"","has_positive":true,"positive_terms":["."],"events":[""]}},
   {"input":" „Ztw \f","partial":false,"expected":{"fts":"\"„Ztw\"","has_positive":true,"positive_terms":["„Ztw"]}},
-  {"input":" -“tag:\f\t\\ „ month: ‘.\\i\ttag:9","partial":false,"expected":{"fts":"(\"‘.\\i\") NOT \"tag:\f\t\\\"","has_positive":true,"positive_terms":["‘.\\i"],"negatives":["tag:\f\t\\"],"tag":"9"}},
+  {"input":" -“tag:\f\t\\ „ month: ‘.\\i\ttag:9","partial":false,"expected":{"fts":"(\"‘.\\i\") NOT \"tag:\f\t\\\"","has_positive":true,"positive_terms":["‘.\\i"],"negatives":["tag:\f\t\\"],"tag":"9","months":[""]}},
   {"input":"_ y:“   ei „ tag:","partial":false,"expected":{"fts":"\"_\"","has_positive":true,"positive_terms":["_"],"date":"   ei "}},
   {"input":"i\u000btag:„eé zo:/I /i “) /zotero","partial":true,"expected":{"fts":"\")\" \"/zotero\"","has_positive":true,"positive_terms":[")","/zotero"],"tag":"eé zo:/I /i "}},
   {"input":"\nin:\"//g / -„ \"","partial":false,"expected":{"in":"//g / -"}},
-  {"input":"theme:1autw-/\n“a ai:9\u000by:","partial":false,"expected":{"fts":"\"“a\"","has_positive":true,"positive_terms":["“a"],"theme":"1autw-/","ai":"9"}},
+  {"input":"theme:1autw-/\n“a ai:9\u000by:","partial":false,"expected":{"fts":"\"“a\"","has_positive":true,"positive_terms":["“a"],"theme":"1autw-/","ai":"9","themes":["1autw-/"]}},
   {"input":"   ‘ after:  of /yproof|","partial":false,"expected":{"fts":"\"‘\" OR \"/\" OR \"yproof|\"","has_positive":true,"positive_terms":["‘","/","yproof|"]}},
   {"input":" ","partial":false,"expected":{}},
   {"input":"Ztag:\\ ","partial":true,"expected":{"fts":"\"Ztag:\\\"","has_positive":true,"positive_terms":["Ztag:\\"]}},
   {"input":" ","partial":false,"expected":{}},
-  {"input":"- -„  -\" THEME: the_","partial":false,"expected":{"fts":"(\"-\" \"the_\") NOT \"-\"","has_positive":true,"positive_terms":["-","the_"],"negatives":["-"]}},
-  {"input":"*ž„\nafter:zoterozo month:   -“éb\" ","partial":false,"expected":{"fts":"(\"*ž„\") NOT \"éb\"","has_positive":true,"positive_terms":["*ž„"],"negatives":["éb"],"after":"zoterozo"}},
-  {"input":" /  :   month:“E21‟ e’ ","partial":false,"expected":{"fts":"\"/\" OR \":\" OR \"e’\"","has_positive":true,"positive_terms":["/",":","e’"],"month":"E21"}},
+  {"input":"- -„  -\" THEME: the_","partial":false,"expected":{"fts":"(\"-\" \"the_\") NOT \"-\"","has_positive":true,"positive_terms":["-","the_"],"negatives":["-"],"themes":[""]}},
+  {"input":"*ž„\nafter:zoterozo month:   -“éb\" ","partial":false,"expected":{"fts":"(\"*ž„\") NOT \"éb\"","has_positive":true,"positive_terms":["*ž„"],"negatives":["éb"],"after":"zoterozo","months":[""]}},
+  {"input":" /  :   month:“E21‟ e’ ","partial":false,"expected":{"fts":"\"/\" OR \":\" OR \"e’\"","has_positive":true,"positive_terms":["/",":","e’"],"month":"E21","months":["E21"]}},
   {"input":"2026-09/ 　ti:","partial":true,"expected":{"fts":"\"2026-09/\"","has_positive":true,"positive_terms":["2026-09/"]}},
   {"input":" ‟ -\" ","partial":false,"expected":{"fts":"\"‟\"","has_positive":true,"positive_terms":["‟"]}},
-  {"input":" - 1 in ai:of THEME:month\\","partial":false,"expected":{"fts":"\"-\" \"1\"","has_positive":true,"positive_terms":["-","1"],"theme":"month\\","ai":"of"}},
-  {"input":" event:/g \t“and(","partial":false,"expected":{"fts":"\"“and(\"","has_positive":true,"positive_terms":["“and("],"event":"/g"}},
+  {"input":" - 1 in ai:of THEME:month\\","partial":false,"expected":{"fts":"\"-\" \"1\"","has_positive":true,"positive_terms":["-","1"],"theme":"month\\","ai":"of","themes":["month\\"]}},
+  {"input":" event:/g \t“and(","partial":false,"expected":{"fts":"\"“and(\"","has_positive":true,"positive_terms":["“and("],"event":"/g","events":["/g"]}},
   {"input":"aua9ž /tag\" ,","partial":false,"expected":{"fts":"\"aua9ž\" OR \"/tag\" OR \",\"","has_positive":true,"positive_terms":["aua9ž","/tag",","]}},
-  {"input":" au:\") theme:/i\fi entity:  1\f:a /","partial":true,"expected":{"fts":"1* OR \":a\" OR \"/\"","has_positive":true,"positive_terms":["1",":a","/"],"author":"\")","theme":"/i"}},
+  {"input":" au:\") theme:/i\fi entity:  1\f:a /","partial":true,"expected":{"fts":"1* OR \":a\" OR \"/\"","has_positive":true,"positive_terms":["1",":a","/"],"author":"\")","theme":"/i","themes":["/i"],"entities":[""]}},
   {"input":"\f/ORTHEME tw: i:","partial":false,"expected":{"fts":"\"/ORTHEME\"","has_positive":true,"positive_terms":["/ORTHEME"],"type":"tweets","has_image":true}},
-  {"input":" ́_  \t9 Au:/ THEME: ","partial":false,"expected":{"fts":"\"́_\" \"9\"","has_positive":true,"positive_terms":["́_","9"],"author":"/"}},
+  {"input":" ́_  \t9 Au:/ THEME: ","partial":false,"expected":{"fts":"\"́_\" \"9\"","has_positive":true,"positive_terms":["́_","9"],"author":"/","themes":[""]}},
   {"input":"taga: /\fTHEME:/ /i b'ee","partial":false,"expected":{"fts":"\"taga:\" OR \"/i\" OR \"b'ee\"","has_positive":true,"positive_terms":["taga:","/i","b'ee"],"regexes":[{"source":"\fTHEME:","flags":""}]}},
   {"input":"zoteroproofzo/ ","partial":false,"expected":{"fts":"\"zoteroproofzo/\"","has_positive":true,"positive_terms":["zoteroproofzo/"]}},
-  {"input":" e, i:\"/  ORsource) event:Z tag:","partial":true,"expected":{"fts":"\"e,\" \"ORsource)\"","has_positive":true,"positive_terms":["e,","ORsource)"],"has_image":true,"event":"Z"}},
-  {"input":" ti:   THEME: \"é ye","partial":false,"expected":{"fts":"\"é\" \"ye\"","has_positive":true,"positive_terms":["é","ye"]}},
+  {"input":" e, i:\"/  ORsource) event:Z tag:","partial":true,"expected":{"fts":"\"e,\" \"ORsource)\"","has_positive":true,"positive_terms":["e,","ORsource)"],"has_image":true,"event":"Z","events":["Z"]}},
+  {"input":" ti:   THEME: \"é ye","partial":false,"expected":{"fts":"\"é\" \"ye\"","has_positive":true,"positive_terms":["é","ye"],"themes":[""]}},
   {"input":"́source","partial":false,"expected":{"fts":"\"́source\"","has_positive":true,"positive_terms":["́source"]}},
   {"input":"(/I   „ ","partial":false,"expected":{"fts":"\"(/I\" \"„\"","has_positive":true,"positive_terms":["(/I","„"]}},
-  {"input":"Z THEME event: ","partial":false,"expected":{"fts":"\"Z\" \"THEME\"","has_positive":true,"positive_terms":["Z","THEME"]}},
+  {"input":"Z THEME event: ","partial":false,"expected":{"fts":"\"Z\" \"THEME\"","has_positive":true,"positive_terms":["Z","THEME"],"events":[""]}},
   {"input":"”2026-09 source:    *zotero‘ ","partial":true,"expected":{"fts":"\"”2026-09\" \"*zotero‘\"","has_positive":true,"positive_terms":["”2026-09","*zotero‘"]}},
   {"input":"/I　i\u000bafter:“: in:\" :1eventor‟","partial":false,"expected":{"fts":"\"/I\" \":1eventor‟\"","has_positive":true,"positive_terms":["/I",":1eventor‟"],"after":": in:"}},
   {"input":" (:anda.\"and /","partial":false,"expected":{"fts":"\"(:anda.and\" \"/\"","has_positive":true,"positive_terms":["(:anda.and","/"]}},
   {"input":"THEMEtag9/i ’́/g  éb-","partial":false,"expected":{"fts":"\"THEMEtag9/i\" OR \"’́/g\" OR \"éb-\"","has_positive":true,"positive_terms":["THEMEtag9/i","’́/g","éb-"]}},
   {"input":":- y:\"-9\rb \n","partial":false,"expected":{"fts":"\":-\" \"b\"","has_positive":true,"positive_terms":[":-","b"],"date":"\"-9"}},
-  {"input":"btheme Au: zoe9\ntheme:́aZ ","partial":true,"expected":{"fts":"btheme* zoe9*","has_positive":true,"positive_terms":["btheme","zoe9"],"theme":"́aZ"}},
-  {"input":" i: \ttheme:“Au* ai: Au:","partial":false,"expected":{"has_image":true,"theme":"“Au*"}},
-  {"input":" THEME:au ai:","partial":false,"expected":{"theme":"au"}},
-  {"input":" theme:„ézoteroé\\ž”ž","partial":false,"expected":{"fts":"\"ž\"","has_positive":true,"positive_terms":["ž"],"theme":"ézoteroé\\ž"}},
+  {"input":"btheme Au: zoe9\ntheme:́aZ ","partial":true,"expected":{"fts":"btheme* zoe9*","has_positive":true,"positive_terms":["btheme","zoe9"],"theme":"́aZ","themes":["́aZ"]}},
+  {"input":" i: \ttheme:“Au* ai: Au:","partial":false,"expected":{"has_image":true,"theme":"“Au*","themes":["“Au*"]}},
+  {"input":" THEME:au ai:","partial":false,"expected":{"theme":"au","themes":["au"]}},
+  {"input":" theme:„ézoteroé\\ž”ž","partial":false,"expected":{"fts":"\"ž\"","has_positive":true,"positive_terms":["ž"],"theme":"ézoteroé\\ž","themes":["ézoteroé\\ž"]}},
   {"input":"  tw","partial":false,"expected":{"fts":"\"tw\"","has_positive":true,"positive_terms":["tw"]}},
-  {"input":"\ftw:\\ theme:\u000b/i ž　ai:“Z ti:","partial":true,"expected":{"fts":"\"/i\" OR ž* OR \"\\\"","has_positive":true,"positive_terms":["/i","ž","\\"],"type":"tweets","ai":"“Z"}},
+  {"input":"\ftw:\\ theme:\u000b/i ž　ai:“Z ti:","partial":true,"expected":{"fts":"\"/i\" OR ž* OR \"\\\"","has_positive":true,"positive_terms":["/i","ž","\\"],"type":"tweets","ai":"“Z","themes":[""]}},
   {"input":"/g proof\\| ž    tag:9","partial":false,"expected":{"fts":"\"/g\" OR \"proof\\|\" OR \"ž\"","has_positive":true,"positive_terms":["/g","proof\\|","ž"],"tag":"9"}},
-  {"input":"Au THEME:́","partial":false,"expected":{"fts":"\"Au\"","has_positive":true,"positive_terms":["Au"],"theme":"́"}},
-  {"input":"  ai:1　  ai:thé\rzo: in:\nmonth:\"( au: bo:","partial":false,"expected":{"type":"books","zotero":true,"ai":"thé","month":"\"("}},
+  {"input":"Au THEME:́","partial":false,"expected":{"fts":"\"Au\"","has_positive":true,"positive_terms":["Au"],"theme":"́","themes":["́"]}},
+  {"input":"  ai:1　  ai:thé\rzo: in:\nmonth:\"( au: bo:","partial":false,"expected":{"type":"books","zotero":true,"ai":"thé","month":"\"(","months":["\"("]}},
   {"input":"-‟žproofproofthe  -„’","partial":false,"expected":{"negatives":["‟žproofproofthe","„’"]}},
-  {"input":"/i  entity:  event\\ “","partial":true,"expected":{"fts":"\"/i\" OR \"event\\\" OR \"“\"","has_positive":true,"positive_terms":["/i","event\\","“"]}},
+  {"input":"/i  entity:  event\\ “","partial":true,"expected":{"fts":"\"/i\" OR \"event\\\" OR \"“\"","has_positive":true,"positive_terms":["/i","event\\","“"],"entities":[""]}},
   {"input":"ž   Au:: 9source_  ","partial":false,"expected":{"fts":"\"ž\" \"9source_\"","has_positive":true,"positive_terms":["ž","9source_"],"author":":"}},
-  {"input":"9*b́ (  theme: éproofzotero","partial":false,"expected":{"fts":"\"9*b́\" OR \"(\" OR \"éproofzotero\"","has_positive":true,"positive_terms":["9*b́","(","éproofzotero"]}},
+  {"input":"9*b́ (  theme: éproofzotero","partial":false,"expected":{"fts":"\"9*b́\" OR \"(\" OR \"éproofzotero\"","has_positive":true,"positive_terms":["9*b́","(","éproofzotero"],"themes":[""]}},
   {"input":"a Au:“a\\\nAu:ANDa","partial":false,"expected":{"fts":"\"a\"","has_positive":true,"positive_terms":["a"],"author":"ANDa"}},
   {"input":"  esource au: ai:au '/g\tb'","partial":false,"expected":{"fts":"\"esource\" OR \"'/g\" OR \"b'\"","has_positive":true,"positive_terms":["esource","'/g","b'"],"ai":"au"}},
   {"input":" tag:1 / /  yZ ’","partial":true,"expected":{"fts":"yZ* \"’\"","has_positive":true,"positive_terms":["yZ","’"],"regexes":[{"source":" ","flags":""}],"tag":"1"}},
   {"input":"_/g Aub\f-“　’　  ","partial":false,"expected":{"fts":"(\"_/g\" OR \"Aub\" OR \"’\") NOT \"“\"","has_positive":true,"positive_terms":["_/g","Aub","’"],"negatives":["“"]}},
   {"input":"1ž é","partial":false,"expected":{"fts":"\"1ž\" \"é\"","has_positive":true,"positive_terms":["1ž","é"]}},
-  {"input":" \fentity:Z","partial":false,"expected":{"entity":"Z"}},
+  {"input":" \fentity:Z","partial":false,"expected":{"entity":"Z","entities":["Z"]}},
   {"input":" / \u000bau:_́  co:/I　","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"author":"_́","color":"/I"}},
   {"input":"au”/e ,_1 y\u000bau:","partial":true,"expected":{"fts":"\"au”/e\" OR \",_1\" OR y*","has_positive":true,"positive_terms":["au”/e",",_1","y"]}},
   {"input":" / „   Au: tw theme:au \u000bTHEME:„ tag:é","partial":false,"expected":{"fts":"\"/\" \"Au: tw theme:au \u000bTHEME:\"","has_positive":true,"positive_terms":["/","Au: tw theme:au \u000bTHEME:"],"tag":"é"}},
@@ -150,30 +150,30 @@
   {"input":"in\n\" /9 ti:source","partial":true,"expected":{"fts":"\"/9\"","has_positive":true,"positive_terms":["/9"],"title":"source"}},
   {"input":"event\f","partial":false,"expected":{"fts":"\"event\"","has_positive":true,"positive_terms":["event"]}},
   {"input":"_/g ","partial":false,"expected":{"fts":"\"_/g\"","has_positive":true,"positive_terms":["_/g"]}},
-  {"input":"   tw:é\f zo:tw“|tw/  entity:„ „","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"type":"tweets","zotero":true,"entity":" "}},
-  {"input":"\\:žtheme THEME:ž","partial":false,"expected":{"fts":"\"\\:žtheme\"","has_positive":true,"positive_terms":["\\:žtheme"],"theme":"ž"}},
+  {"input":"   tw:é\f zo:tw“|tw/  entity:„ „","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"type":"tweets","zotero":true,"entity":" ","entities":[" "]}},
+  {"input":"\\:žtheme THEME:ž","partial":false,"expected":{"fts":"\"\\:žtheme\"","has_positive":true,"positive_terms":["\\:žtheme"],"theme":"ž","themes":["ž"]}},
   {"input":" zo:/g\ntheme zo","partial":true,"expected":{"fts":"theme* zo*","has_positive":true,"positive_terms":["theme","zo"],"zotero":true}},
-  {"input":"zo month:yzotero'\\\fco:„e\f tag: and","partial":false,"expected":{"fts":"\"zo\"","has_positive":true,"positive_terms":["zo"],"color":"„e","month":"yzotero'\\"}},
+  {"input":"zo month:yzotero'\\\fco:„e\f tag: and","partial":false,"expected":{"fts":"\"zo\"","has_positive":true,"positive_terms":["zo"],"color":"„e","month":"yzotero'\\","months":["yzotero'\\"]}},
   {"input":":b i: / /  tw:'ž","partial":false,"expected":{"fts":"\":b\" \"'ž\"","has_positive":true,"positive_terms":[":b","'ž"],"regexes":[{"source":" ","flags":""}],"type":"tweets","has_image":true}},
   {"input":"zoteroproof'“OR ‘1 \ti:“ -“  ti:“","partial":false,"expected":{"fts":"\"zoteroproof'“OR\" \"‘1\"","has_positive":true,"positive_terms":["zoteroproof'“OR","‘1"],"title":"“","has_image":true}},
-  {"input":" month: “orE21\n\".  month:","partial":false,"expected":{"fts":"\"orE21\" \".\"","has_positive":true,"positive_terms":["orE21","."]}},
-  {"input":"zo THEME:„ ai: \ti:\"_ source:/I | co:\r/ ","partial":true,"expected":{"fts":"zo* _* OR \"/\"","has_positive":true,"positive_terms":["zo","_","/"],"source":"/I","theme":" ai: \ti:"}},
-  {"input":"‘OR1/g\r”\fmonth:-'é:","partial":false,"expected":{"fts":"\"‘OR1/g\" \"”\"","has_positive":true,"positive_terms":["‘OR1/g","”"],"month":"-'é:"}},
-  {"input":"b e\rthe  y:’Zsource THEME:*tag:“","partial":false,"expected":{"fts":"\"b\" \"e\"","has_positive":true,"positive_terms":["b","e"],"tag":"“","date":"’Zsource","theme":"*"}},
-  {"input":" /Z,/ ithezotero/g  co: entity:month/\te","partial":false,"expected":{"fts":"\"ithezotero/g\" \"e\"","has_positive":true,"positive_terms":["ithezotero/g","e"],"regexes":[{"source":"Z,","flags":""}],"entity":"month/"}},
+  {"input":" month: “orE21\n\".  month:","partial":false,"expected":{"fts":"\"orE21\" \".\"","has_positive":true,"positive_terms":["orE21","."],"months":["",""]}},
+  {"input":"zo THEME:„ ai: \ti:\"_ source:/I | co:\r/ ","partial":true,"expected":{"fts":"zo* _* OR \"/\"","has_positive":true,"positive_terms":["zo","_","/"],"source":"/I","theme":" ai: \ti:","themes":[" ai: \ti:"]}},
+  {"input":"‘OR1/g\r”\fmonth:-'é:","partial":false,"expected":{"fts":"\"‘OR1/g\" \"”\"","has_positive":true,"positive_terms":["‘OR1/g","”"],"month":"-'é:","months":["-'é:"]}},
+  {"input":"b e\rthe  y:’Zsource THEME:*tag:“","partial":false,"expected":{"fts":"\"b\" \"e\"","has_positive":true,"positive_terms":["b","e"],"tag":"“","date":"’Zsource","theme":"*","themes":["*"]}},
+  {"input":" /Z,/ ithezotero/g  co: entity:month/\te","partial":false,"expected":{"fts":"\"ithezotero/g\" \"e\"","has_positive":true,"positive_terms":["ithezotero/g","e"],"regexes":[{"source":"Z,","flags":""}],"entity":"month/","entities":["month/"]}},
   {"input":"_ éb\u000bai:Z)́/g\u000btw9Z9","partial":false,"expected":{"fts":"\"_\" OR \"éb\" OR \"tw9Z9\"","has_positive":true,"positive_terms":["_","éb","tw9Z9"],"ai":"Z)́/g"}},
-  {"input":"zotero ́ entity: zo:au","partial":true,"expected":{"fts":"zotero* \"́\"","has_positive":true,"positive_terms":["zotero","́"],"zotero":true}},
+  {"input":"zotero ́ entity: zo:au","partial":true,"expected":{"fts":"zotero* \"́\"","has_positive":true,"positive_terms":["zotero","́"],"zotero":true,"entities":[""]}},
   {"input":" zo: \f   tag: :  　Au:","partial":false,"expected":{"fts":"\":\"","has_positive":true,"positive_terms":[":"],"zotero":true}},
-  {"input":"  '/Z after:„bof\u000bentity: \\","partial":false,"expected":{"fts":"\"'/\" OR \"Z\" OR \"\\\"","has_positive":true,"positive_terms":["'/","Z","\\"],"after":"„bof"}},
+  {"input":"  '/Z after:„bof\u000bentity: \\","partial":false,"expected":{"fts":"\"'/\" OR \"Z\" OR \"\\\"","has_positive":true,"positive_terms":["'/","Z","\\"],"after":"„bof","entities":[""]}},
   {"input":"/‟ ti:ž́“/i\ŕ9\u000bau:'/","partial":false,"expected":{"fts":"\"́9\" \"/\"","has_positive":true,"positive_terms":["́9","/"],"regexes":[{"source":"‟ ti:ž́“","flags":"i"}],"author":"'"}},
-  {"input":"  ai: émonth:ebE21 source: ","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"month":"ebE21"}},
-  {"input":" /\u000bmonth:auTHEME","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"month":"auTHEME"}},
+  {"input":"  ai: émonth:ebE21 source: ","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"month":"ebE21","months":["ebE21"]}},
+  {"input":" /\u000bmonth:auTHEME","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"month":"auTHEME","months":["auTHEME"]}},
   {"input":"/i \u000b","partial":false,"expected":{"fts":"\"/i\"","has_positive":true,"positive_terms":["/i"]}},
   {"input":" source:AND  _or\fzo  /e","partial":false,"expected":{"fts":"\"_or\" OR \"zo\" OR \"/e\"","has_positive":true,"positive_terms":["_or","zo","/e"],"source":"AND"}},
-  {"input":"Z THEME:  after:“","partial":false,"expected":{"fts":"\"Z\"","has_positive":true,"positive_terms":["Z"],"after":"“"}},
-  {"input":"i“tag\u000bevent:\\ source: month: month91|.","partial":false,"expected":{"fts":"\"i“tag\" \"month91|.\"","has_positive":true,"positive_terms":["i“tag","month91|."],"event":"\\"}},
+  {"input":"Z THEME:  after:“","partial":false,"expected":{"fts":"\"Z\"","has_positive":true,"positive_terms":["Z"],"after":"“","themes":[""]}},
+  {"input":"i“tag\u000bevent:\\ source: month: month91|.","partial":false,"expected":{"fts":"\"i“tag\" \"month91|.\"","has_positive":true,"positive_terms":["i“tag","month91|."],"event":"\\","events":["\\"],"months":[""]}},
   {"input":" ti:the proof -„in　/\\y -“  tag:“ „","partial":true,"expected":{"fts":"(proof*) NOT \"in　/\\y -\"","has_positive":true,"positive_terms":["proof"],"negatives":["in　/\\y -"],"title":"the","tag":" "}},
-  {"input":"/ a\rentity: and ORE21 au:“of\f\"","partial":false,"expected":{"fts":"\"/\" \"ORE21\"","has_positive":true,"positive_terms":["/","ORE21"],"author":"of\f"}},
+  {"input":"/ a\rentity: and ORE21 au:“of\f\"","partial":false,"expected":{"fts":"\"/\" \"ORE21\"","has_positive":true,"positive_terms":["/","ORE21"],"author":"of\f","entities":[""]}},
   {"input":"\"_’/ proof\rbo:  co: a","partial":false,"expected":{"fts":"\"_’/\" \"proof\"","has_positive":true,"positive_terms":["_’/","proof"],"type":"books"}},
   {"input":"\"sourcež","partial":false,"expected":{"fts":"\"sourcež\"","has_positive":true,"positive_terms":["sourcež"]}},
   {"input":" /  bzotero \t/ bo:“'/ or ","partial":false,"expected":{"fts":"\"“'/\"","has_positive":true,"positive_terms":["“'/"],"regexes":[{"source":"  bzotero \t","flags":""}],"type":"books"}},
@@ -181,16 +181,16 @@
   {"input":"month/I theand)\"\rti:proof bo:”9","partial":false,"expected":{"fts":"\"month/I\" OR \"theand)\" OR \"”9\"","has_positive":true,"positive_terms":["month/I","theand)","”9"],"title":"proof","type":"books"}},
   {"input":":é/I\f/I   ","partial":false,"expected":{"fts":"\":é/I\" \"/I\"","has_positive":true,"positive_terms":[":é/I","/I"]}},
   {"input":" themeb /","partial":false,"expected":{"fts":"\"themeb\" \"/\"","has_positive":true,"positive_terms":["themeb","/"]}},
-  {"input":" -“ 9b ofeTHEME: source\tevent:\rZ ","partial":false,"expected":{"fts":"(\"9b\" OR \"ofe\" OR \"source\" OR \"Z\") NOT \"“\"","has_positive":true,"positive_terms":["9b","ofe","source","Z"],"negatives":["“"]}},
+  {"input":" -“ 9b ofeTHEME: source\tevent:\rZ ","partial":false,"expected":{"fts":"(\"9b\" OR \"ofe\" OR \"source\" OR \"Z\") NOT \"“\"","has_positive":true,"positive_terms":["9b","ofe","source","Z"],"negatives":["“"],"themes":[""],"events":[""]}},
   {"input":" //i \\1  i:orzo","partial":true,"expected":{"fts":"\"//i\" \"\\1\"","has_positive":true,"positive_terms":["//i","\\1"],"has_image":true}},
-  {"input":",\rtheme:(tw \\ ’ZANDAué","partial":false,"expected":{"fts":"\",\" OR \"\\\" OR \"’ZANDAué\"","has_positive":true,"positive_terms":[",","\\","’ZANDAué"],"theme":"(tw"}},
+  {"input":",\rtheme:(tw \\ ’ZANDAué","partial":false,"expected":{"fts":"\",\" OR \"\\\" OR \"’ZANDAué\"","has_positive":true,"positive_terms":[",","\\","’ZANDAué"],"theme":"(tw","themes":["(tw"]}},
   {"input":"/ ,\f/‘source /  \u000b in:E21","partial":false,"expected":{"fts":"\"/\" \",\"","has_positive":true,"positive_terms":["/",","],"regexes":[{"source":"‘source ","flags":""}],"in":"E21"}},
-  {"input":"/ /I \ttheme:\ttag:/　entity:“b /\"ORthe/I","partial":false,"expected":{"fts":"\"/\" \"ORthe/I\"","has_positive":true,"positive_terms":["/","ORthe/I"],"regexes":[{"source":"I \ttheme:\ttag:","flags":""}],"entity":"b /"}},
+  {"input":"/ /I \ttheme:\ttag:/　entity:“b /\"ORthe/I","partial":false,"expected":{"fts":"\"/\" \"ORthe/I\"","has_positive":true,"positive_terms":["/","ORthe/I"],"regexes":[{"source":"I \ttheme:\ttag:","flags":""}],"entity":"b /","entities":["b /"]}},
   {"input":"́\\i","partial":false,"expected":{"fts":"\"́\\i\"","has_positive":true,"positive_terms":["́\\i"]}},
   {"input":" ( zotero\"\"au:\"b\\\rentity:\"/g proof","partial":true,"expected":{"fts":"\"(\" OR zotero* OR \"/g\" OR proof*","has_positive":true,"positive_terms":["(","zotero","/g","proof"],"author":"b\\\rentity:"}},
   {"input":"theme /a:/zotero “19ofinmonth  /","partial":false,"expected":{"fts":"\"theme\" OR \"“19ofinmonth\" OR \"/\"","has_positive":true,"positive_terms":["theme","“19ofinmonth","/"],"regexes":[{"source":"a:","flags":"zotero"}]}},
   {"input":"1\ftw:\t“ i:or /|  /by  ai:Z","partial":false,"expected":{"fts":"\"1\" \"“\"","has_positive":true,"positive_terms":["1","“"],"regexes":[{"source":"|  ","flags":"by"}],"type":"tweets","has_image":true,"ai":"Z"}},
-  {"input":" \"au\n_ i: “' event: ai: /\nau:„au","partial":false,"expected":{"fts":"\"au\n_ i:\" OR \"'\" OR \"/\"","has_positive":true,"positive_terms":["au\n_ i:","'","/"],"author":"„au"}},
+  {"input":" \"au\n_ i: “' event: ai: /\nau:„au","partial":false,"expected":{"fts":"\"au\n_ i:\" OR \"'\" OR \"/\"","has_positive":true,"positive_terms":["au\n_ i:","'","/"],"author":"„au","events":[""]}},
   {"input":" '   /I au zoterotagž\rsource:-","partial":false,"expected":{"fts":"\"'\" OR \"/I\" OR \"au\" OR \"zoterotagž\"","has_positive":true,"positive_terms":["'","/I","au","zoterotagž"],"source":"-"}},
   {"input":"a _ \"","partial":true,"expected":{"fts":"_*","has_positive":true,"positive_terms":["_"]}},
   {"input":"i é/ORmonthtw 9","partial":false,"expected":{"fts":"\"é/ORmonthtw\" \"9\"","has_positive":true,"positive_terms":["é/ORmonthtw","9"]}},
@@ -203,22 +203,22 @@
   {"input":"_Zžzoteroé zotero","partial":false,"expected":{"fts":"\"_Zžzoteroé\" \"zotero\"","has_positive":true,"positive_terms":["_Zžzoteroé","zotero"]}},
   {"input":"aproof   zo:","partial":false,"expected":{"fts":"\"aproof\"","has_positive":true,"positive_terms":["aproof"],"zotero":true}},
   {"input":"/aAu:\" ","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"author":"\""}},
-  {"input":"\\the/I THEME\tevent:bo:/\n/\u000b/","partial":false,"expected":{"fts":"\"\\the/I\" OR \"THEME\" OR \"/\"","has_positive":true,"positive_terms":["\\the/I","THEME","/"],"regexes":[{"source":"\u000b","flags":""}],"type":"books"}},
-  {"input":"́/  ’\r\fAu: THEME: Au:-\r-\"tagsource","partial":false,"expected":{"fts":"(\"́/\" \"’\") NOT \"tagsource\"","has_positive":true,"positive_terms":["́/","’"],"negatives":["tagsource"],"author":"-"}},
+  {"input":"\\the/I THEME\tevent:bo:/\n/\u000b/","partial":false,"expected":{"fts":"\"\\the/I\" OR \"THEME\" OR \"/\"","has_positive":true,"positive_terms":["\\the/I","THEME","/"],"regexes":[{"source":"\u000b","flags":""}],"type":"books","events":[""]}},
+  {"input":"́/  ’\r\fAu: THEME: Au:-\r-\"tagsource","partial":false,"expected":{"fts":"(\"́/\" \"’\") NOT \"tagsource\"","has_positive":true,"positive_terms":["́/","’"],"negatives":["tagsource"],"author":"-","themes":[""]}},
   {"input":"́éa 9Z  / tw: after:„ „","partial":false,"expected":{"fts":"\"́éa\" OR \"9Z\" OR \"/\"","has_positive":true,"positive_terms":["́éa","9Z","/"],"type":"tweets","after":" "}},
   {"input":"ež/ theme2026-09é\"tw: -\" //I","partial":false,"expected":{"fts":"\"ež/\" OR \"theme2026-09étw:\" OR \"//I\"","has_positive":true,"positive_terms":["ež/","theme2026-09étw:","//I"]}},
   {"input":"Z- „ 　after:  9 /I\n,","partial":true,"expected":{"fts":"\"Z-\" OR \"„\" OR 9* OR \"/I\" OR \",\"","has_positive":true,"positive_terms":["Z-","„","9","/I",","]}},
   {"input":"aOR au:“ ","partial":false,"expected":{"fts":"\"aOR\"","has_positive":true,"positive_terms":["aOR"],"author":"“"}},
-  {"input":"　in: co:é　ti:-\" theme:au \"b","partial":false,"expected":{"fts":"\"b\"","has_positive":true,"positive_terms":["b"],"title":"-\"","color":"é","theme":"au"}},
+  {"input":"　in: co:é　ti:-\" theme:au \"b","partial":false,"expected":{"fts":"\"b\"","has_positive":true,"positive_terms":["b"],"title":"-\"","color":"é","theme":"au","themes":["au"]}},
   {"input":" theme month- ai:„sourcei source: THEME:\"","partial":false,"expected":{"fts":"\"theme\" \"month-\"","has_positive":true,"positive_terms":["theme","month-"],"ai":"sourcei source: THEME:"}},
   {"input":"”and   : ","partial":false,"expected":{"fts":"\"”\" \":\"","has_positive":true,"positive_terms":["”",":"]}},
-  {"input":"’ event:\"e /| co:","partial":true,"expected":{"fts":"\"’\" \"/|\"","has_positive":true,"positive_terms":["’","/|"],"event":"\"e"}},
+  {"input":"’ event:\"e /| co:","partial":true,"expected":{"fts":"\"’\" \"/|\"","has_positive":true,"positive_terms":["’","/|"],"event":"\"e","events":["\"e"]}},
   {"input":" tag:\f9 \"‟’ -„\\tag: /","partial":false,"expected":{"fts":"(\"9\" OR \"’\" OR \"/\") NOT \"„\\\"","has_positive":true,"positive_terms":["9","’","/"],"negatives":["„\\"]}},
   {"input":"   au:“source ","partial":false,"expected":{"author":"“source"}},
-  {"input":"zoteroandAu a‟9 the tag: žmonth\rentity:„","partial":false,"expected":{"fts":"\"zoteroandAu\" OR \"a‟9\" OR \"žmonth\"","has_positive":true,"positive_terms":["zoteroandAu","a‟9","žmonth"],"entity":"„"}},
-  {"input":"  THEME entity: -“/  -„","partial":false,"expected":{"fts":"(\"THEME\") NOT \"/  -\"","has_positive":true,"positive_terms":["THEME"],"negatives":["/  -"]}},
+  {"input":"zoteroandAu a‟9 the tag: žmonth\rentity:„","partial":false,"expected":{"fts":"\"zoteroandAu\" OR \"a‟9\" OR \"žmonth\"","has_positive":true,"positive_terms":["zoteroandAu","a‟9","žmonth"],"entity":"„","entities":["„"]}},
+  {"input":"  THEME entity: -“/  -„","partial":false,"expected":{"fts":"(\"THEME\") NOT \"/  -\"","has_positive":true,"positive_terms":["THEME"],"negatives":["/  -"],"entities":[""]}},
   {"input":"(\"OR.‟tw\n „2026-09ž* ","partial":true,"expected":{"fts":"\"(OR.‟tw\" \"„2026-09ž*\"","has_positive":true,"positive_terms":["(OR.‟tw","„2026-09ž*"]}},
-  {"input":"e THEME:(́\ny: zoteroi žé\\ |","partial":false,"expected":{"fts":"\"e\" \"zoteroi\" \"žé\\\"","has_positive":true,"positive_terms":["e","zoteroi","žé\\"],"theme":"(́"}},
+  {"input":"e THEME:(́\ny: zoteroi žé\\ |","partial":false,"expected":{"fts":"\"e\" \"zoteroi\" \"žé\\\"","has_positive":true,"positive_terms":["e","zoteroi","žé\\"],"theme":"(́","themes":["(́"]}},
   {"input":" -„, ai: Z ","partial":false,"expected":{"fts":"(\"Z\") NOT \"„,\"","has_positive":true,"positive_terms":["Z"],"negatives":["„,"]}},
   {"input":" /i\f\u000b“ Au:","partial":false,"expected":{"fts":"\"/i\" \"“\"","has_positive":true,"positive_terms":["/i","“"]}},
   {"input":"zo žtheme:bproof ","partial":false,"expected":{"fts":"\"zo\" \"žtheme:bproof\"","has_positive":true,"positive_terms":["zo","žtheme:bproof"]}},
@@ -228,21 +228,21 @@
   {"input":" /I  ","partial":false,"expected":{"fts":"\"/I\"","has_positive":true,"positive_terms":["/I"]}},
   {"input":" ža*   ž|_\\au\\","partial":false,"expected":{"fts":"ža* \"ž|_\\au\\\"","has_positive":true,"positive_terms":["ža","ž|_\\au\\"]}},
   {"input":"\u000bZ- .","partial":true,"expected":{"fts":"\"Z-\" \".\"","has_positive":true,"positive_terms":["Z-","."]}},
-  {"input":"_ \u000b/or THEME: au:(\n\t ","partial":false,"expected":{"fts":"\"_\" \"/or\"","has_positive":true,"positive_terms":["_","/or"],"author":"("}},
-  {"input":"‟\\  event:“","partial":false,"expected":{"fts":"\"‟\\\"","has_positive":true,"positive_terms":["‟\\"],"event":"“"}},
+  {"input":"_ \u000b/or THEME: au:(\n\t ","partial":false,"expected":{"fts":"\"_\" \"/or\"","has_positive":true,"positive_terms":["_","/or"],"author":"(","themes":[""]}},
+  {"input":"‟\\  event:“","partial":false,"expected":{"fts":"\"‟\\\"","has_positive":true,"positive_terms":["‟\\"],"event":"“","events":["“"]}},
   {"input":" -“\"\n“\\AND ti::‟  event-","partial":false,"expected":{"fts":"\"\\AND ti::\" \"event-\"","has_positive":true,"positive_terms":["\\AND ti::","event-"]}},
   {"input":") ofthe‟ž /zo after:source ","partial":false,"expected":{"fts":"\")\" OR \"ofthe‟ž\" OR \"/zo\"","has_positive":true,"positive_terms":[")","ofthe‟ž","/zo"],"after":"source"}},
   {"input":"  source /    \\(́ \u000b/","partial":true,"expected":{"fts":"source*","has_positive":true,"positive_terms":["source"],"regexes":[{"source":"    \\(́ \u000b","flags":""}]}},
   {"input":" ti:*","partial":false,"expected":{"title":"*"}},
   {"input":"1AND\" ež‟and *1 ","partial":false,"expected":{"fts":"\"1AND\" OR \"ež‟and\" OR \"*1\"","has_positive":true,"positive_terms":["1AND","ež‟and","*1"]}},
-  {"input":"Au y:/g  zo:\"proof: event:-  after:","partial":false,"expected":{"fts":"\"Au\"","has_positive":true,"positive_terms":["Au"],"date":"/g","zotero":true,"event":"-"}},
-  {"input":" theme:i","partial":false,"expected":{"theme":"i"}},
+  {"input":"Au y:/g  zo:\"proof: event:-  after:","partial":false,"expected":{"fts":"\"Au\"","has_positive":true,"positive_terms":["Au"],"date":"/g","zotero":true,"event":"-","events":["-"]}},
+  {"input":" theme:i","partial":false,"expected":{"theme":"i","themes":["i"]}},
   {"input":" “’","partial":true,"expected":{"fts":"\"“’\"","has_positive":true,"positive_terms":["“’"]}},
-  {"input":" ,́”  theme:/ _9\"--","partial":false,"expected":{"fts":"\",́”\" \"_9--\"","has_positive":true,"positive_terms":[",́”","_9--"],"theme":"/"}},
+  {"input":" ,́”  theme:/ _9\"--","partial":false,"expected":{"fts":"\",́”\" \"_9--\"","has_positive":true,"positive_terms":[",́”","_9--"],"theme":"/","themes":["/"]}},
   {"input":"- tag:/ 1  a","partial":false,"expected":{"fts":"\"-\" \"1\"","has_positive":true,"positive_terms":["-","1"],"tag":"/"}},
   {"input":"in/‟OR:a","partial":false,"expected":{"fts":"\"in/‟OR:a\"","has_positive":true,"positive_terms":["in/‟OR:a"]}},
   {"input":"é/i　 in: ž /i *|","partial":false,"expected":{"fts":"\"é/i\" OR \"ž\" OR \"/i\" OR \"*|\"","has_positive":true,"positive_terms":["é/i","ž","/i","*|"]}},
-  {"input":" i:\" theme:aú in: \t/","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"has_image":true,"theme":"aú"}},
+  {"input":" i:\" theme:aú in: \t/","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"has_image":true,"theme":"aú","themes":["aú"]}},
   {"input":"e\tco:́ AND co:\" source:“/\r bo: after:’tag","partial":false,"expected":{"fts":"\"e\" \"/\"","has_positive":true,"positive_terms":["e","/"],"type":"books","color":" source:","after":"’tag"}},
   {"input":" ORž_\r/","partial":false,"expected":{"fts":"\"ORž_\" \"/\"","has_positive":true,"positive_terms":["ORž_","/"]}},
   {"input":"and　-„THEME after:\"ya'or ","partial":false,"expected":{"fts":"(\"ya'or\") NOT \"THEME after:\"","has_positive":true,"positive_terms":["ya'or"],"negatives":["THEME after:"]}},
@@ -254,9 +254,9 @@
   {"input":"9 é ai:event ti: after:” é\fau:„ tw:E21","partial":false,"expected":{"fts":"\"9\" OR \"é\" OR \"é\" OR \"E21\"","has_positive":true,"positive_terms":["9","é","é","E21"],"author":"„","type":"tweets","after":"”","ai":"event"}},
   {"input":" in:","partial":true,"expected":{}},
   {"input":"2026-09thea","partial":false,"expected":{"fts":"\"2026-09thea\"","has_positive":true,"positive_terms":["2026-09thea"]}},
-  {"input":" month:\"\ni:\f \"  tw:„","partial":false,"expected":{"fts":"\"„\"","has_positive":true,"positive_terms":["„"],"type":"tweets","month":"\ni:\f "}},
+  {"input":" month:\"\ni:\f \"  tw:„","partial":false,"expected":{"fts":"\"„\"","has_positive":true,"positive_terms":["„"],"type":"tweets","month":"\ni:\f ","months":["\ni:\f "]}},
   {"input":"\fai:tw\f//g  á1/9source co:","partial":false,"expected":{"fts":"\"//g\" \"á1/9source\"","has_positive":true,"positive_terms":["//g","á1/9source"],"ai":"tw"}},
-  {"input":" -„” theme: AND|i / / ","partial":false,"expected":{"fts":"\"AND|i\"","has_positive":true,"positive_terms":["AND|i"],"regexes":[{"source":" ","flags":""}]}},
+  {"input":" -„” theme: AND|i / / ","partial":false,"expected":{"fts":"\"AND|i\"","has_positive":true,"positive_terms":["AND|i"],"regexes":[{"source":" ","flags":""}],"themes":[""]}},
   {"input":"-","partial":true,"expected":{"fts":"\"-\"","has_positive":true,"positive_terms":["-"]}},
   {"input":"_","partial":false,"expected":{"fts":"\"_\"","has_positive":true,"positive_terms":["_"]}},
   {"input":"/I ","partial":false,"expected":{"fts":"\"/I\"","has_positive":true,"positive_terms":["/I"]}},
@@ -266,31 +266,31 @@
   {"input":"themeZ| y:","partial":false,"expected":{"fts":"\"themeZ|\"","has_positive":true,"positive_terms":["themeZ|"]}},
   {"input":"ANDtag\\or  source:\" ","partial":false,"expected":{"fts":"\"ANDtag\\or\"","has_positive":true,"positive_terms":["ANDtag\\or"],"source":"\""}},
   {"input":"b/I\nzotero/i","partial":false,"expected":{"fts":"\"b/I\" \"zotero/i\"","has_positive":true,"positive_terms":["b/I","zotero/i"]}},
-  {"input":" month:","partial":false,"expected":{}},
+  {"input":" month:","partial":false,"expected":{"months":[""]}},
   {"input":" \fti:„yorsourceAu\u000by:\r, ","partial":true,"expected":{"fts":"\",\"","has_positive":true,"positive_terms":[","],"title":"„yorsourceAu"}},
   {"input":"  zotero  /”","partial":false,"expected":{"fts":"\"zotero\" \"/”\"","has_positive":true,"positive_terms":["zotero","/”"]}},
   {"input":"  after:„2026-09\\\n/\"tag -„|’‟/","partial":false,"expected":{"fts":"(\"tag\" \"/\") NOT \"|’\"","has_positive":true,"positive_terms":["tag","/"],"negatives":["|’"],"after":"2026-09\\\n/"}},
   {"input":" /‟E21 in tag:„ande","partial":false,"expected":{"fts":"\"/‟E21\"","has_positive":true,"positive_terms":["/‟E21"],"tag":"„ande"}},
-  {"input":"  event:/  tag:)month|1 ofand","partial":false,"expected":{"fts":"\"ofand\"","has_positive":true,"positive_terms":["ofand"],"tag":")month|1","event":"/"}},
+  {"input":"  event:/  tag:)month|1 ofand","partial":false,"expected":{"fts":"\"ofand\"","has_positive":true,"positive_terms":["ofand"],"tag":")month|1","event":"/","events":["/"]}},
   {"input":"　inevent(THEMEAu:/g / ","partial":true,"expected":{"fts":"\"inevent(THEME\" \"/\"","has_positive":true,"positive_terms":["inevent(THEME","/"],"author":"/g"}},
   {"input":" /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":"/inortw\fin:“\u000b/intw\u000b","partial":false,"expected":{"regexes":[{"source":"inortw\fin:“\u000b","flags":"intw"}]}},
   {"input":"\rzoterozotero:\u000b\"in　“_ tag:a  zo:„\"","partial":false,"expected":{"fts":"\"zoterozotero:\" OR \"in\" OR \"_\"","has_positive":true,"positive_terms":["zoterozotero:","in","_"],"tag":"a","zotero":true}},
   {"input":" -„ ","partial":false,"expected":{"negatives":["„"]}},
-  {"input":" -„žin\na bo:zotero andin event:","partial":true,"expected":{"fts":"(andin* zotero*) NOT \"„žin\"","has_positive":true,"positive_terms":["andin","zotero"],"negatives":["„žin"],"type":"books"}},
+  {"input":" -„žin\na bo:zotero andin event:","partial":true,"expected":{"fts":"(andin* zotero*) NOT \"„žin\"","has_positive":true,"positive_terms":["andin","zotero"],"negatives":["„žin"],"type":"books","events":[""]}},
   {"input":"9‘”2026-09 „Zau/","partial":false,"expected":{"fts":"\"9‘”2026-09\" \"„Zau/\"","has_positive":true,"positive_terms":["9‘”2026-09","„Zau/"]}},
-  {"input":"and,  /e:* andevent  / theme:","partial":false,"expected":{"fts":"\"and,\"","has_positive":true,"positive_terms":["and,"],"regexes":[{"source":"e:* andevent  ","flags":""}]}},
-  {"input":"\rtheme:of2026-09_9' 9Z  THEME:étag ","partial":false,"expected":{"fts":"\"9Z\"","has_positive":true,"positive_terms":["9Z"],"theme":"étag"}},
-  {"input":"(\ty:\"in',andyž theme:  ","partial":false,"expected":{"fts":"\"(\"","has_positive":true,"positive_terms":["("],"date":"\"in',andyž"}},
+  {"input":"and,  /e:* andevent  / theme:","partial":false,"expected":{"fts":"\"and,\"","has_positive":true,"positive_terms":["and,"],"regexes":[{"source":"e:* andevent  ","flags":""}],"themes":[""]}},
+  {"input":"\rtheme:of2026-09_9' 9Z  THEME:étag ","partial":false,"expected":{"fts":"\"9Z\"","has_positive":true,"positive_terms":["9Z"],"theme":"étag","themes":["of2026-09_9'","étag"]}},
+  {"input":"(\ty:\"in',andyž theme:  ","partial":false,"expected":{"fts":"\"(\"","has_positive":true,"positive_terms":["("],"date":"\"in',andyž","themes":[""]}},
   {"input":"(: au:\\ co:„ \"source","partial":true,"expected":{"fts":"\"(:\" source*","has_positive":true,"positive_terms":["(:","source"],"author":"\\","color":" "}},
   {"input":" i:„and/I\n au:́(/y tag:“ ","partial":false,"expected":{"has_image":true}},
   {"input":"a  1b  after:Au b after:","partial":false,"expected":{"fts":"\"1b\" \"b\"","has_positive":true,"positive_terms":["1b","b"]}},
-  {"input":" Aub/́the ti:zo entity:“ ai:Au\n/  co:","partial":false,"expected":{"fts":"\"Aub/́the\" \"/\"","has_positive":true,"positive_terms":["Aub/́the","/"],"title":"zo","entity":"“","ai":"Au"}},
+  {"input":" Aub/́the ti:zo entity:“ ai:Au\n/  co:","partial":false,"expected":{"fts":"\"Aub/́the\" \"/\"","has_positive":true,"positive_terms":["Aub/́the","/"],"title":"zo","entity":"“","ai":"Au","entities":["“"]}},
   {"input":"THEME( / \\Z","partial":false,"expected":{"fts":"\"THEME(\" OR \"/\" OR \"\\Z\"","has_positive":true,"positive_terms":["THEME(","/","\\Z"]}},
   {"input":" -“of\u000bž.","partial":true,"expected":{"fts":"(\"ž.\") NOT \"“of\"","has_positive":true,"positive_terms":["ž."],"negatives":["“of"]}},
   {"input":" /\fco: * ) a\fafter:\"_proofAu „proof","partial":false,"expected":{"fts":"\"/\" OR \"*\" OR \")\" OR \"proof\"","has_positive":true,"positive_terms":["/","*",")","proof"],"after":"_proofAu "}},
   {"input":"(Z\t“\t/  i:‟ tag:\" -„zo/   ","partial":false,"expected":{"fts":"\"(Z\" OR \"/  i:\" OR \"zo/\"","has_positive":true,"positive_terms":["(Z","/  i:","zo/"],"tag":" -"}},
-  {"input":"/\fevent: .„91 éa source:zotero”","partial":false,"expected":{"fts":"\"/\" OR \".„91\" OR \"éa\"","has_positive":true,"positive_terms":["/",".„91","éa"],"zotero":true,"source":"zotero”"}},
+  {"input":"/\fevent: .„91 éa source:zotero”","partial":false,"expected":{"fts":"\"/\" OR \".„91\" OR \"éa\"","has_positive":true,"positive_terms":["/",".„91","éa"],"zotero":true,"source":"zotero”","events":[""]}},
   {"input":"„\nbo:and é","partial":false,"expected":{"fts":"\"„\" \"é\"","has_positive":true,"positive_terms":["„","é"],"type":"books"}},
   {"input":"/I\fZ\r//\n/ „ bo:“","partial":true,"expected":{"fts":"\"/I\" OR Z* OR \"//\" OR \"/\" OR \"bo:\"","has_positive":true,"positive_terms":["/I","Z","//","/","bo:"]}},
   {"input":"   Au: of/I \ntag:-aoŕ,","partial":false,"expected":{"fts":"\"of/I\"","has_positive":true,"positive_terms":["of/I"],"tag":"-aoŕ,"}},
@@ -298,23 +298,23 @@
   {"input":"\\2026-09zotero/2026-09 tag:","partial":false,"expected":{"fts":"\"\\2026-09zotero/2026-09\"","has_positive":true,"positive_terms":["\\2026-09zotero/2026-09"]}},
   {"input":" i: “the9 source:OR  source:a","partial":false,"expected":{"fts":"\"“the9\"","has_positive":true,"positive_terms":["“the9"],"has_image":true,"source":"a"}},
   {"input":". au:\"é　eventin/i  e","partial":true,"expected":{"fts":"\".\" OR \"eventin/i\" OR e*","has_positive":true,"positive_terms":[".","eventin/i","e"],"author":"\"é"}},
-  {"input":" month:","partial":false,"expected":{}},
+  {"input":" month:","partial":false,"expected":{"months":[""]}},
   {"input":" -“monthZproof’ /eventANDOR","partial":false,"expected":{"fts":"(\"/eventANDOR\") NOT \"“monthZproof’\"","has_positive":true,"positive_terms":["/eventANDOR"],"negatives":["“monthZproof’"]}},
-  {"input":"  -„ / entity:„ tw: event::\r ,́","partial":false,"expected":{"fts":"(\",́\") NOT \"/ entity:\"","has_positive":true,"positive_terms":[",́"],"negatives":["/ entity:"],"type":"tweets","event":":"}},
+  {"input":"  -„ / entity:„ tw: event::\r ,́","partial":false,"expected":{"fts":"(\",́\") NOT \"/ entity:\"","has_positive":true,"positive_terms":[",́"],"negatives":["/ entity:"],"type":"tweets","event":":","events":[":"]}},
   {"input":"\u000b/\u000b\" ","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":" tag:„-","partial":true,"expected":{"tag":"„-"}},
   {"input":"e","partial":false,"expected":{"fts":"\"e\"","has_positive":true,"positive_terms":["e"]}},
   {"input":"e9\u000by:of\"( source:b /","partial":false,"expected":{"fts":"\"e9\" \"/\"","has_positive":true,"positive_terms":["e9","/"],"date":"of\"(","source":"b"}},
   {"input":" zo:   zo","partial":false,"expected":{"fts":"\"zo\"","has_positive":true,"positive_terms":["zo"],"zotero":true}},
-  {"input":" entity:“  é Au:9 /","partial":false,"expected":{"fts":"\"é\" \"/\"","has_positive":true,"positive_terms":["é","/"],"author":"9","entity":"“"}},
+  {"input":" entity:“  é Au:9 /","partial":false,"expected":{"fts":"\"é\" \"/\"","has_positive":true,"positive_terms":["é","/"],"author":"9","entity":"“","entities":["“"]}},
   {"input":" 2026-09 9\\:i","partial":true,"expected":{"fts":"\"2026-09\" \"9\\:i\"","has_positive":true,"positive_terms":["2026-09","9\\:i"]}},
-  {"input":"1i\nTHEME: co: month:“ “ event:’ ","partial":false,"expected":{"fts":"\"1i\"","has_positive":true,"positive_terms":["1i"],"event":"’","month":" "}},
+  {"input":"1i\nTHEME: co: month:“ “ event:’ ","partial":false,"expected":{"fts":"\"1i\"","has_positive":true,"positive_terms":["1i"],"event":"’","month":" ","themes":[""],"events":["’"],"months":[" "]}},
   {"input":"Z\f-„/\t   /  / 　y","partial":false,"expected":{"fts":"(\"Z\" \"y\") NOT \"„/\"","has_positive":true,"positive_terms":["Z","y"],"negatives":["„/"],"regexes":[{"source":"  ","flags":""}]}},
   {"input":"Zzotw\fai:","partial":false,"expected":{"fts":"\"Zzotw\"","has_positive":true,"positive_terms":["Zzotw"]}},
-  {"input":" ai:“ /zotero_eau “: tagsource \rentity:","partial":false,"expected":{"fts":"\":\" \"tagsource\"","has_positive":true,"positive_terms":[":","tagsource"],"ai":" /zotero_eau "}},
+  {"input":" ai:“ /zotero_eau “: tagsource \rentity:","partial":false,"expected":{"fts":"\":\" \"tagsource\"","has_positive":true,"positive_terms":[":","tagsource"],"ai":" /zotero_eau ","entities":[""]}},
   {"input":"\tco:","partial":true,"expected":{}},
   {"input":"9proof\fin:\"zoteroZ9 month:“\fAu: *:́","partial":false,"expected":{"fts":"\"9proof\" \"*:́\"","has_positive":true,"positive_terms":["9proof","*:́"],"in":"zoteroZ9 month:"}},
-  {"input":"ž : in:“*Z\\ theme:","partial":false,"expected":{"fts":"\"ž\" \":\"","has_positive":true,"positive_terms":["ž",":"],"in":"“*Z\\"}},
+  {"input":"ž : in:“*Z\\ theme:","partial":false,"expected":{"fts":"\"ž\" \":\"","has_positive":true,"positive_terms":["ž",":"],"in":"“*Z\\","themes":[""]}},
   {"input":"/I /'Z tag: “ai:/g 9","partial":false,"expected":{"fts":"\"/I\" \"9\"","has_positive":true,"positive_terms":["/I","9"],"regexes":[{"source":"'Z tag: “ai:","flags":"g"}]}},
   {"input":"’event/i „ y: ","partial":false,"expected":{"fts":"\"’event/i\" \"„\"","has_positive":true,"positive_terms":["’event/i","„"]}},
   {"input":"’  /‘ ","partial":true,"expected":{"fts":"\"’\" \"/‘\"","has_positive":true,"positive_terms":["’","/‘"]}},
@@ -325,122 +325,122 @@
   {"input":": ti:ž  tag","partial":true,"expected":{"fts":"\":\" tag*","has_positive":true,"positive_terms":[":","tag"],"title":"ž"}},
   {"input":"  ́a/I  E21Z\rž","partial":false,"expected":{"fts":"\"́a/I\" OR \"E21Z\" OR \"ž\"","has_positive":true,"positive_terms":["́a/I","E21Z","ž"]}},
   {"input":" ti: ai:“ 9Z　ti:„ \u000b","partial":false,"expected":{"ai":" 9Z　ti:"}},
-  {"input":" Au:/i  month:\"/i\r/ zo:'/\rAu:„THEME/i -\rbo:„","partial":false,"expected":{"fts":"\"THEME/i\" OR \"-\" OR \"„\"","has_positive":true,"positive_terms":["THEME/i","-","„"],"author":"/i","type":"books","month":"/i\r/ zo:'/\rAu:"}},
+  {"input":" Au:/i  month:\"/i\r/ zo:'/\rAu:„THEME/i -\rbo:„","partial":false,"expected":{"fts":"\"THEME/i\" OR \"-\" OR \"„\"","has_positive":true,"positive_terms":["THEME/i","-","„"],"author":"/i","type":"books","month":"/i\r/ zo:'/\rAu:","months":["/i\r/ zo:'/\rAu:"]}},
   {"input":" ’ au: co:","partial":false,"expected":{"fts":"\"’\"","has_positive":true,"positive_terms":["’"]}},
-  {"input":"a in:„/I  proof ́zotero \tmonth:","partial":true,"expected":{"fts":"proof* \"́zotero\"","has_positive":true,"positive_terms":["proof","́zotero"],"in":"„/I"}},
-  {"input":"’ after:  -\"e entity: ","partial":false,"expected":{"fts":"(\"’\") NOT \"e\"","has_positive":true,"positive_terms":["’"],"negatives":["e"]}},
+  {"input":"a in:„/I  proof ́zotero \tmonth:","partial":true,"expected":{"fts":"proof* \"́zotero\"","has_positive":true,"positive_terms":["proof","́zotero"],"in":"„/I","months":[""]}},
+  {"input":"’ after:  -\"e entity: ","partial":false,"expected":{"fts":"(\"’\") NOT \"e\"","has_positive":true,"positive_terms":["’"],"negatives":["e"],"entities":[""]}},
   {"input":"\t/g 9 ž ","partial":false,"expected":{"fts":"\"/g\" OR \"9\" OR \"ž\"","has_positive":true,"positive_terms":["/g","9","ž"]}},
   {"input":"' source: Au:*","partial":false,"expected":{"fts":"\"'\"","has_positive":true,"positive_terms":["'"],"author":"*"}},
-  {"input":" month: 2026-09:/g 9)a‘/ ","partial":false,"expected":{"fts":"\"2026-09:/g\" \"9)a‘/\"","has_positive":true,"positive_terms":["2026-09:/g","9)a‘/"]}},
+  {"input":" month: 2026-09:/g 9)a‘/ ","partial":false,"expected":{"fts":"\"2026-09:/g\" \"9)a‘/\"","has_positive":true,"positive_terms":["2026-09:/g","9)a‘/"],"months":[""]}},
   {"input":" ","partial":true,"expected":{}},
   {"input":"bZ/  Au:","partial":false,"expected":{"fts":"\"bZ/\"","has_positive":true,"positive_terms":["bZ/"]}},
   {"input":" ai:\" tag:„　-“*/\f au:iproof‟\" ","partial":false,"expected":{"negatives":["*/\f au:iproof"],"ai":" tag:"}},
   {"input":"- *(:","partial":false,"expected":{"fts":"\"-\" \"*(:\"","has_positive":true,"positive_terms":["-","*(:"]}},
   {"input":"THEME\rbo:a / b ti:“  -_:","partial":false,"expected":{"fts":"(\"THEME\" OR \"/\" OR \"b\") NOT \"_:\"","has_positive":true,"positive_terms":["THEME","/","b"],"negatives":["_:"],"title":"“","type":"books"}},
   {"input":"\u000by:","partial":true,"expected":{}},
-  {"input":" ” /i  1 entity: -„","partial":false,"expected":{"fts":"(\"”\" OR \"/i\" OR \"1\") NOT \"„\"","has_positive":true,"positive_terms":["”","/i","1"],"negatives":["„"]}},
+  {"input":" ” /i  1 entity: -„","partial":false,"expected":{"fts":"(\"”\" OR \"/i\" OR \"1\") NOT \"„\"","has_positive":true,"positive_terms":["”","/i","1"],"negatives":["„"],"entities":[""]}},
   {"input":"bée　-„19 ","partial":false,"expected":{"fts":"(\"bée\") NOT \"„19\"","has_positive":true,"positive_terms":["bée"],"negatives":["„19"]}},
   {"input":"/g\n month:eventE21„/ „/I\f9or","partial":false,"expected":{"fts":"\"„/I\" \"9or\"","has_positive":true,"positive_terms":["„/I","9or"],"regexes":[{"source":"g\n month:eventE21„","flags":""}]}},
-  {"input":" month:éethe  bo:„“","partial":false,"expected":{"type":"books","month":"éethe"}},
+  {"input":" month:éethe  bo:„“","partial":false,"expected":{"type":"books","month":"éethe","months":["éethe"]}},
   {"input":" Au:\"","partial":true,"expected":{"author":"\""}},
   {"input":" au:„ae\nafter:9b","partial":false,"expected":{"author":"„ae","after":"9b"}},
   {"input":"/_9zoi","partial":false,"expected":{"fts":"\"/_9zoi\"","has_positive":true,"positive_terms":["/_9zoi"]}},
   {"input":"|1 -„and„source ti:i\\|themezo y:","partial":false,"expected":{"fts":"(\"|1\" \"source\") NOT \"and\"","has_positive":true,"positive_terms":["|1","source"],"negatives":["and"],"title":"i\\|themezo"}},
   {"input":"\" \" zo:1|i-","partial":false,"expected":{"zotero":true}},
-  {"input":" i:\"'　yZ month:","partial":true,"expected":{"fts":"yZ*","has_positive":true,"positive_terms":["yZ"],"has_image":true}},
+  {"input":" i:\"'　yZ month:","partial":true,"expected":{"fts":"yZ*","has_positive":true,"positive_terms":["yZ"],"has_image":true,"months":[""]}},
   {"input":"-1","partial":false,"expected":{"negatives":["1"]}},
   {"input":" é ","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"]}},
-  {"input":"  entity:“/g ofa/g  bo:/g /i |","partial":false,"expected":{"fts":"\"ofa/g\" \"/i\" OR \"/g\"","has_positive":true,"positive_terms":["ofa/g","/i","/g"],"type":"books","entity":"“/g"}},
+  {"input":"  entity:“/g ofa/g  bo:/g /i |","partial":false,"expected":{"fts":"\"ofa/g\" \"/i\" OR \"/g\"","has_positive":true,"positive_terms":["ofa/g","/i","/g"],"type":"books","entity":"“/g","entities":["“/g"]}},
   {"input":"　” /eventtheme y","partial":false,"expected":{"fts":"\"”\" OR \"/eventtheme\" OR \"y\"","has_positive":true,"positive_terms":["”","/eventtheme","y"]}},
   {"input":"AND \" -\"inZ　/b","partial":true,"expected":{"fts":"\"-\" inZ* \"/b\"","has_positive":true,"positive_terms":["-","inZ","/b"]}},
-  {"input":"\tmonth:\"THEMÉtwor","partial":false,"expected":{"month":"\"THEMÉtwor"}},
+  {"input":"\tmonth:\"THEMÉtwor","partial":false,"expected":{"month":"\"THEMÉtwor","months":["\"THEMÉtwor"]}},
   {"input":"žAND\\au","partial":false,"expected":{"fts":"\"žAND\\au\"","has_positive":true,"positive_terms":["žAND\\au"]}},
   {"input":"9/I\f9month ti:\"iin\n-„ :  /9","partial":false,"expected":{"fts":"\"9/I\" OR \"9month\" OR \":\" OR \"/9\"","has_positive":true,"positive_terms":["9/I","9month",":","/9"],"title":"iin\n-"}},
   {"input":" / co:atagž E21  co:","partial":false,"expected":{"fts":"\"/\" \"E21\"","has_positive":true,"positive_terms":["/","E21"]}},
   {"input":"au,/I\fa \" /g in.ZeAu:„and au:","partial":true,"expected":{"fts":"\"au,/I\" \"/g in.ZeAu:\"","has_positive":true,"positive_terms":["au,/I","/g in.ZeAu:"]}},
   {"input":"-　é‟","partial":false,"expected":{"fts":"\"-\" \"é‟\"","has_positive":true,"positive_terms":["-","é‟"]}},
-  {"input":"‟ THEME: /\" E21month source: after:THEME\nevent:","partial":false,"expected":{"fts":"\"‟\" OR \"/\" OR \"E21month\"","has_positive":true,"positive_terms":["‟","/","E21month"],"after":"THEME"}},
+  {"input":"‟ THEME: /\" E21month source: after:THEME\nevent:","partial":false,"expected":{"fts":"\"‟\" OR \"/\" OR \"E21month\"","has_positive":true,"positive_terms":["‟","/","E21month"],"after":"THEME","themes":[""],"events":[""]}},
   {"input":"bZ ","partial":false,"expected":{"fts":"\"bZ\"","has_positive":true,"positive_terms":["bZ"]}},
   {"input":" tag:","partial":false,"expected":{}},
-  {"input":"\revent:ébí\nco:zo:\f/ „ /E21","partial":true,"expected":{"fts":"\"/\" OR \"„\" OR \"/E21\"","has_positive":true,"positive_terms":["/","„","/E21"],"zotero":true,"event":"ébí"}},
+  {"input":"\revent:ébí\nco:zo:\f/ „ /E21","partial":true,"expected":{"fts":"\"/\" OR \"„\" OR \"/E21\"","has_positive":true,"positive_terms":["/","„","/E21"],"zotero":true,"event":"ébí","events":["ébí"]}},
   {"input":"tag  \tin:\"　Ztheand’ tw: ","partial":false,"expected":{"fts":"\"tag\" \"Ztheand’\"","has_positive":true,"positive_terms":["tag","Ztheand’"],"type":"tweets","in":"\""}},
   {"input":"́ -„)month1bi/  ai:\f  month*","partial":false,"expected":{"fts":"(\"́\" month*) NOT \"„)month1bi/\"","has_positive":true,"positive_terms":["́","month"],"negatives":["„)month1bi/"]}},
   {"input":"Z ai: \tau:\"/I b","partial":false,"expected":{"fts":"\"Z\" \"b\"","has_positive":true,"positive_terms":["Z","b"],"author":"\"/I"}},
-  {"input":"AND event:\n\"́́́and","partial":false,"expected":{"fts":"\"́́́and\"","has_positive":true,"positive_terms":["́́́and"]}},
+  {"input":"AND event:\n\"́́́and","partial":false,"expected":{"fts":"\"́́́and\"","has_positive":true,"positive_terms":["́́́and"],"events":[""]}},
   {"input":" i:b \fai:\"","partial":true,"expected":{"has_image":true,"ai":"\""}},
   {"input":"\t\nai:„ (","partial":false,"expected":{"fts":"\"(\"","has_positive":true,"positive_terms":["("],"ai":"„"}},
   {"input":"_‘: and","partial":false,"expected":{"fts":"\"_‘:\"","has_positive":true,"positive_terms":["_‘:"]}},
-  {"input":"\ftag:“ y:\"\rTHEME:\ttheme:„　\"\r-“é","partial":false,"expected":{"negatives":["“é"],"tag":" y:","theme":"　"}},
+  {"input":"\ftag:“ y:\"\rTHEME:\ttheme:„　\"\r-“é","partial":false,"expected":{"negatives":["“é"],"tag":" y:","theme":"　","themes":["","　"]}},
   {"input":"*1 sourcesourcetag ","partial":false,"expected":{"fts":"\"*1\" \"sourcesourcetag\"","has_positive":true,"positive_terms":["*1","sourcesourcetag"]}},
   {"input":"\fbo:„“ au:“_étag“or","partial":true,"expected":{"author":"_étag","type":"books"}},
   {"input":",  ","partial":false,"expected":{"fts":"\",\"","has_positive":true,"positive_terms":[","]}},
   {"input":"_auZproof‟ /i\n/i","partial":false,"expected":{"fts":"\"_auZproof‟\"","has_positive":true,"positive_terms":["_auZproof‟"],"regexes":[{"source":"i\n","flags":"i"}]}},
   {"input":"_","partial":false,"expected":{"fts":"\"_\"","has_positive":true,"positive_terms":["_"]}},
   {"input":"_","partial":false,"expected":{"fts":"\"_\"","has_positive":true,"positive_terms":["_"]}},
-  {"input":" /2026-09 after: /\rTHEME:andTHEME","partial":true,"expected":{"regexes":[{"source":"2026-09 after: ","flags":""}],"theme":"andTHEME"}},
+  {"input":" /2026-09 after: /\rTHEME:andTHEME","partial":true,"expected":{"regexes":[{"source":"2026-09 after: ","flags":""}],"theme":"andTHEME","themes":["andTHEME"]}},
   {"input":"E21\u000bti:/ |'\\AND́”ž","partial":false,"expected":{"fts":"\"E21\" \"|'\\AND́”ž\"","has_positive":true,"positive_terms":["E21","|'\\AND́”ž"],"title":"/"}},
   {"input":"\f","partial":false,"expected":{}},
-  {"input":"é i: after:.  entity:\"","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"after":".","has_image":true,"entity":"\""}},
+  {"input":"é i: after:.  entity:\"","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"],"after":".","has_image":true,"entity":"\"","entities":["\""]}},
   {"input":"in/g  / ORtheme /\tco: ai:b y:1 zo:","partial":false,"expected":{"fts":"\"in/g\"","has_positive":true,"positive_terms":["in/g"],"regexes":[{"source":" ORtheme ","flags":""}],"date":"1","zotero":true,"ai":"b"}},
   {"input":" Au:","partial":true,"expected":{}},
-  {"input":"theme: co: ti:yzo'9  9a\tbo:“","partial":false,"expected":{"fts":"\"9a\" \"“\"","has_positive":true,"positive_terms":["9a","“"],"title":"yzo'9","type":"books"}},
+  {"input":"theme: co: ti:yzo'9  9a\tbo:“","partial":false,"expected":{"fts":"\"9a\" \"“\"","has_positive":true,"positive_terms":["9a","“"],"title":"yzo'9","type":"books","themes":[""]}},
   {"input":"/i e / bo: //g   ","partial":false,"expected":{"fts":"\"//g\"","has_positive":true,"positive_terms":["//g"],"regexes":[{"source":"i e ","flags":""}],"type":"books"}},
   {"input":"a . /’THEME　THEME:  \"ée/\r „","partial":false,"expected":{"fts":"\".\" \"„\"","has_positive":true,"positive_terms":[".","„"],"regexes":[{"source":"’THEME　THEME:  \"ée","flags":""}]}},
   {"input":"ž /\rti:„y ","partial":false,"expected":{"fts":"\"ž\" \"/\"","has_positive":true,"positive_terms":["ž","/"],"title":"„y"}},
   {"input":" zo:\u000bi: \"‘ž","partial":true,"expected":{"fts":"\"‘ž\"","has_positive":true,"positive_terms":["‘ž"],"zotero":true,"has_image":true}},
-  {"input":"‟ month: -“","partial":false,"expected":{"fts":"(\"‟\") NOT \"“\"","has_positive":true,"positive_terms":["‟"],"negatives":["“"]}},
-  {"input":"  after:yb event:proofandmonth tag:: E21„","partial":false,"expected":{"fts":"\"E21„\"","has_positive":true,"positive_terms":["E21„"],"tag":":","after":"yb","event":"proofandmonth"}},
-  {"input":"\t/\\au)of9 month:","partial":false,"expected":{"fts":"\"/\\au)of9\"","has_positive":true,"positive_terms":["/\\au)of9"]}},
+  {"input":"‟ month: -“","partial":false,"expected":{"fts":"(\"‟\") NOT \"“\"","has_positive":true,"positive_terms":["‟"],"negatives":["“"],"months":[""]}},
+  {"input":"  after:yb event:proofandmonth tag:: E21„","partial":false,"expected":{"fts":"\"E21„\"","has_positive":true,"positive_terms":["E21„"],"tag":":","after":"yb","event":"proofandmonth","events":["proofandmonth"]}},
+  {"input":"\t/\\au)of9 month:","partial":false,"expected":{"fts":"\"/\\au)of9\"","has_positive":true,"positive_terms":["/\\au)of9"],"months":[""]}},
   {"input":"/ a\nAu:b\fi:„/i \\”\u000b","partial":false,"expected":{"fts":"\"\\”\"","has_positive":true,"positive_terms":["\\”"],"regexes":[{"source":" a\nAu:b\fi:„","flags":"i"}]}},
   {"input":"sourceb‘'/g ","partial":true,"expected":{"fts":"\"sourceb‘'/g\"","has_positive":true,"positive_terms":["sourceb‘'/g"]}},
   {"input":"/I  /i  ","partial":false,"expected":{"regexes":[{"source":"I  ","flags":"i"}]}},
   {"input":"9 ai:„/g  b","partial":false,"expected":{"fts":"\"9\" \"b\"","has_positive":true,"positive_terms":["9","b"],"ai":"„/g"}},
   {"input":") \"'‘\r// /","partial":false,"expected":{"fts":"\")\" OR \"'‘\" OR \"//\" OR \"/\"","has_positive":true,"positive_terms":[")","'‘","//","/"]}},
-  {"input":"\rentity:ž '\" theme: /́ theme","partial":false,"expected":{"fts":"\"'\" OR \"/́\" OR \"theme\"","has_positive":true,"positive_terms":["'","/́","theme"],"entity":"ž"}},
+  {"input":"\rentity:ž '\" theme: /́ theme","partial":false,"expected":{"fts":"\"'\" OR \"/́\" OR \"theme\"","has_positive":true,"positive_terms":["'","/́","theme"],"entity":"ž","themes":[""],"entities":["ž"]}},
   {"input":"band OR tw:month i:2026-09 after:„ofžAu","partial":true,"expected":{"fts":"band* OR month*","has_positive":true,"positive_terms":["band","month"],"type":"tweets","after":"„ofžAu","has_image":true}},
-  {"input":"a event:\nbo:\fti:\"AND /9́‘ -“  )","partial":false,"expected":{"fts":"\")\"","has_positive":true,"positive_terms":[")"],"title":"AND /9́‘ -","type":"books"}},
+  {"input":"a event:\nbo:\fti:\"AND /9́‘ -“  )","partial":false,"expected":{"fts":"\")\"","has_positive":true,"positive_terms":[")"],"title":"AND /9́‘ -","type":"books","events":[""]}},
   {"input":")\nti:\"zoterothe,ž   /i proofmonth","partial":false,"expected":{"fts":"\")\" OR \"/i\" OR \"proofmonth\"","has_positive":true,"positive_terms":[")","/i","proofmonth"],"title":"\"zoterothe,ž"}},
-  {"input":":e THEME “event́'and entity: ai:","partial":false,"expected":{"fts":"\":e\" OR \"THEME\" OR \"“event́'and\"","has_positive":true,"positive_terms":[":e","THEME","“event́'and"]}},
-  {"input":"OR event:“'and -„ ) \r","partial":false,"expected":{"fts":"\")\"","has_positive":true,"positive_terms":[")"],"event":"'and -"}},
+  {"input":":e THEME “event́'and entity: ai:","partial":false,"expected":{"fts":"\":e\" OR \"THEME\" OR \"“event́'and\"","has_positive":true,"positive_terms":[":e","THEME","“event́'and"],"entities":[""]}},
+  {"input":"OR event:“'and -„ ) \r","partial":false,"expected":{"fts":"\")\"","has_positive":true,"positive_terms":[")"],"event":"'and -","events":["'and -"]}},
   {"input":"zo_/i  y:  in: ","partial":true,"expected":{"fts":"\"zo_/i\"","has_positive":true,"positive_terms":["zo_/i"]}},
   {"input":"‟ /\\ inproof　 ai:thei","partial":false,"expected":{"fts":"\"‟\" OR \"/\\\" OR \"inproof\"","has_positive":true,"positive_terms":["‟","/\\","inproof"],"ai":"thei"}},
   {"input":" i: /a","partial":false,"expected":{"fts":"\"/a\"","has_positive":true,"positive_terms":["/a"],"has_image":true}},
   {"input":"  Aui9","partial":false,"expected":{"fts":"\"Aui9\"","has_positive":true,"positive_terms":["Aui9"]}},
-  {"input":" zo:i_b/　_aua tag:\t9/, event:\"","partial":false,"expected":{"fts":"\"_aua\" \"9/,\"","has_positive":true,"positive_terms":["_aua","9/,"],"zotero":true,"event":"\""}},
+  {"input":" zo:i_b/　_aua tag:\t9/, event:\"","partial":false,"expected":{"fts":"\"_aua\" \"9/,\"","has_positive":true,"positive_terms":["_aua","9/,"],"zotero":true,"event":"\"","events":["\""]}},
   {"input":"ANDmonth1","partial":true,"expected":{"fts":"ANDmonth1*","has_positive":true,"positive_terms":["ANDmonth1"]}},
   {"input":" THEMEtw","partial":false,"expected":{"fts":"\"THEMEtw\"","has_positive":true,"positive_terms":["THEMEtw"]}},
   {"input":"„","partial":false,"expected":{"fts":"\"„\"","has_positive":true,"positive_terms":["„"]}},
   {"input":"and \nin:a/i :","partial":false,"expected":{"fts":"\":\"","has_positive":true,"positive_terms":[":"],"in":"a/i"}},
   {"input":" ai:)1OR9tag","partial":false,"expected":{"ai":")1OR9tag"}},
   {"input":"a:- in žtw   ","partial":true,"expected":{"fts":"\"a:-\" žtw*","has_positive":true,"positive_terms":["a:-","žtw"]}},
-  {"input":" tag: bo: entity:  source1\ń \"/i\ri/g \r“","partial":false,"expected":{"fts":"\"source1\" OR \"́\" OR \"/i\ri/g\"","has_positive":true,"positive_terms":["source1","́","/i\ri/g"],"type":"books"}},
-  {"input":" THEME:\"‟:\":","partial":false,"expected":{"fts":"\"::\"","has_positive":true,"positive_terms":["::"]}},
+  {"input":" tag: bo: entity:  source1\ń \"/i\ri/g \r“","partial":false,"expected":{"fts":"\"source1\" OR \"́\" OR \"/i\ri/g\"","has_positive":true,"positive_terms":["source1","́","/i\ri/g"],"type":"books","entities":[""]}},
+  {"input":" THEME:\"‟:\":","partial":false,"expected":{"fts":"\"::\"","has_positive":true,"positive_terms":["::"],"themes":[""]}},
   {"input":"THEME","partial":false,"expected":{"fts":"\"THEME\"","has_positive":true,"positive_terms":["THEME"]}},
-  {"input":"/i\u000b \ntw:„ theme:́month","partial":false,"expected":{"fts":"\"/i\" \"„\"","has_positive":true,"positive_terms":["/i","„"],"type":"tweets","theme":"́month"}},
+  {"input":"/i\u000b \ntw:„ theme:́month","partial":false,"expected":{"fts":"\"/i\" \"„\"","has_positive":true,"positive_terms":["/i","„"],"type":"tweets","theme":"́month","themes":["́month"]}},
   {"input":"taga\r/","partial":true,"expected":{"fts":"taga* \"/\"","has_positive":true,"positive_terms":["taga","/"]}},
   {"input":"/Z /e tag:“ zo:“\"'","partial":false,"expected":{"fts":"\"'\"","has_positive":true,"positive_terms":["'"],"regexes":[{"source":"Z ","flags":"e"}],"tag":" zo:"}},
   {"input":"\\ y:AND in:\"　/E211 zo:„","partial":false,"expected":{"fts":"\"\\\"","has_positive":true,"positive_terms":["\\"],"date":"AND","in":"　/E211 zo:"}},
   {"input":"theme9\u000bsource:„ *","partial":false,"expected":{"fts":"\"theme9\" \"*\"","has_positive":true,"positive_terms":["theme9","*"],"source":"„"}},
   {"input":" „-./\t  / ","partial":false,"expected":{"fts":"\"„-./\" \"/\"","has_positive":true,"positive_terms":["„-./","/"]}},
-  {"input":" entity:9  ","partial":true,"expected":{"entity":"9"}},
+  {"input":" entity:9  ","partial":true,"expected":{"entity":"9","entities":["9"]}},
   {"input":"zoteroAu b1btw‘2026-09","partial":false,"expected":{"fts":"\"zoteroAu\" \"b1btw‘2026-09\"","has_positive":true,"positive_terms":["zoteroAu","b1btw‘2026-09"]}},
-  {"input":"_　“ /I  “ month: co:au„","partial":false,"expected":{"fts":"\"_\" \"/I\"","has_positive":true,"positive_terms":["_","/I"],"color":"au„"}},
+  {"input":"_　“ /I  “ month: co:au„","partial":false,"expected":{"fts":"\"_\" \"/I\"","has_positive":true,"positive_terms":["_","/I"],"color":"au„","months":[""]}},
   {"input":" ","partial":false,"expected":{}},
   {"input":"a","partial":false,"expected":{"fts":"\"a\"","has_positive":true,"positive_terms":["a"]}},
-  {"input":": -\"\rbo:\"_ zo: tagb tag:“ source:„ -\"in Au:\rtheme:","partial":true,"expected":{"fts":"(\":\" OR _* OR tagb*) NOT \"bo:\" NOT \"in\"","has_positive":true,"positive_terms":[":","_","tagb"],"negatives":["bo:","in"],"tag":" source:","zotero":true}},
+  {"input":": -\"\rbo:\"_ zo: tagb tag:“ source:„ -\"in Au:\rtheme:","partial":true,"expected":{"fts":"(\":\" OR _* OR tagb*) NOT \"bo:\" NOT \"in\"","has_positive":true,"positive_terms":[":","_","tagb"],"negatives":["bo:","in"],"tag":" source:","zotero":true,"themes":[""]}},
   {"input":" tw-2026-09“ Au:","partial":false,"expected":{"fts":"\"tw-2026-09“\"","has_positive":true,"positive_terms":["tw-2026-09“"]}},
   {"input":" .of“étw / ","partial":false,"expected":{"fts":"\".of“étw\" \"/\"","has_positive":true,"positive_terms":[".of“étw","/"]}},
   {"input":"Z","partial":false,"expected":{"fts":"\"Z\"","has_positive":true,"positive_terms":["Z"]}},
-  {"input":"éZ entity:　/e“‟a.\u000b-\"\tsource:-' source:“","partial":false,"expected":{"fts":"(\"éZ\" \"/e“‟a.\") NOT \"source:-' source:\"","has_positive":true,"positive_terms":["éZ","/e“‟a."],"negatives":["source:-' source:"]}},
+  {"input":"éZ entity:　/e“‟a.\u000b-\"\tsource:-' source:“","partial":false,"expected":{"fts":"(\"éZ\" \"/e“‟a.\") NOT \"source:-' source:\"","has_positive":true,"positive_terms":["éZ","/e“‟a."],"negatives":["source:-' source:"],"entities":[""]}},
   {"input":" ti: y: ","partial":true,"expected":{}},
   {"input":"\rAu:“the\" -„month","partial":false,"expected":{"negatives":["„month"],"author":"the"}},
   {"input":" ","partial":false,"expected":{}},
   {"input":"and ","partial":false,"expected":{}},
   {"input":")9 _é/i","partial":false,"expected":{"fts":"\")9\" OR \"_é\" OR \"/i\"","has_positive":true,"positive_terms":[")9","_é","/i"]}},
   {"input":"themesourcea y:„ THEME　\"e","partial":true,"expected":{"fts":"themesourcea* e*","has_positive":true,"positive_terms":["themesourcea","e"],"date":" THEME　"}},
-  {"input":"  THEME:“\"iintwa -“ AND ","partial":false,"expected":{"fts":"(\"iintwa\") NOT \"“\"","has_positive":true,"positive_terms":["iintwa"],"negatives":["“"]}},
+  {"input":"  THEME:“\"iintwa -“ AND ","partial":false,"expected":{"fts":"(\"iintwa\") NOT \"“\"","has_positive":true,"positive_terms":["iintwa"],"negatives":["“"],"themes":[""]}},
   {"input":"/ „' ,2026-09","partial":false,"expected":{"fts":"\"/\" OR \"„'\" OR \",2026-09\"","has_positive":true,"positive_terms":["/","„'",",2026-09"]}},
-  {"input":" ,1 é/I  entity:ea source:„","partial":false,"expected":{"fts":"\",1\" \"é/I\"","has_positive":true,"positive_terms":[",1","é/I"],"source":"„","entity":"ea"}},
+  {"input":" ,1 é/I  entity:ea source:„","partial":false,"expected":{"fts":"\",1\" \"é/I\"","has_positive":true,"positive_terms":[",1","é/I"],"source":"„","entity":"ea","entities":["ea"]}},
   {"input":"  ","partial":false,"expected":{}},
   {"input":": ai:“ theme in:  ","partial":true,"expected":{"fts":"\":\" theme*","has_positive":true,"positive_terms":[":","theme"],"ai":"“"}},
   {"input":" ","partial":false,"expected":{}},
@@ -449,73 +449,73 @@
   {"input":" „the/g  zo:„’((9tw  ","partial":false,"expected":{"fts":"\"the/g  zo:\" \"’((9tw\"","has_positive":true,"positive_terms":["the/g  zo:","’((9tw"]}},
   {"input":"\\ , ”","partial":true,"expected":{"fts":"\"\\\" OR \",\" OR \"”\"","has_positive":true,"positive_terms":["\\",",","”"]}},
   {"input":"\" \\event. tag:\"é92026-09 tag:\rti:","partial":false,"expected":{"fts":"\"\\event. tag:\" \"é92026-09\"","has_positive":true,"positive_terms":["\\event. tag:","é92026-09"]}},
-  {"input":"aZ: \ntheme:　\rzoevent","partial":false,"expected":{"fts":"\"aZ:\" \"zoevent\"","has_positive":true,"positive_terms":["aZ:","zoevent"]}},
+  {"input":"aZ: \ntheme:　\rzoevent","partial":false,"expected":{"fts":"\"aZ:\" \"zoevent\"","has_positive":true,"positive_terms":["aZ:","zoevent"],"themes":[""]}},
   {"input":" co:","partial":false,"expected":{}},
-  {"input":" \revent:b_  \nentity:ezoof","partial":false,"expected":{"entity":"ezoof","event":"b_"}},
-  {"input":" THEME:“ aZ  　zo","partial":true,"expected":{"fts":"aZ* zo*","has_positive":true,"positive_terms":["aZ","zo"],"theme":"“"}},
+  {"input":" \revent:b_  \nentity:ezoof","partial":false,"expected":{"entity":"ezoof","event":"b_","entities":["ezoof"],"events":["b_"]}},
+  {"input":" THEME:“ aZ  　zo","partial":true,"expected":{"fts":"aZ* zo*","has_positive":true,"positive_terms":["aZ","zo"],"theme":"“","themes":["“"]}},
   {"input":"\tAu:_:á‟","partial":false,"expected":{"author":"_:á‟"}},
   {"input":"éZ   \rproof i: Au:\"”  ","partial":false,"expected":{"fts":"\"éZ\" \"proof\"","has_positive":true,"positive_terms":["éZ","proof"],"has_image":true}},
   {"input":"Z //g\u000bb tagANDZ","partial":false,"expected":{"fts":"\"Z\" OR \"//g\" OR \"b\" OR \"tagANDZ\"","has_positive":true,"positive_terms":["Z","//g","b","tagANDZ"]}},
-  {"input":"of i:proof/ \fmonth:","partial":false,"expected":{"fts":"\"of\"","has_positive":true,"positive_terms":["of"],"has_image":true}},
-  {"input":"  month:of source:","partial":true,"expected":{"month":"of"}},
+  {"input":"of i:proof/ \fmonth:","partial":false,"expected":{"fts":"\"of\"","has_positive":true,"positive_terms":["of"],"has_image":true,"months":[""]}},
+  {"input":"  month:of source:","partial":true,"expected":{"month":"of","months":["of"]}},
   {"input":" bo: /inproof ai:\"","partial":false,"expected":{"fts":"\"/inproof\"","has_positive":true,"positive_terms":["/inproof"],"type":"books","ai":"\""}},
   {"input":"é  ","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"]}},
   {"input":"\n/","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":"source","partial":false,"expected":{"fts":"\"source\"","has_positive":true,"positive_terms":["source"]}},
   {"input":"1/  ","partial":true,"expected":{"fts":"\"1/\"","has_positive":true,"positive_terms":["1/"]}},
-  {"input":"( month: )zotero\r1 after:/\u000b","partial":false,"expected":{"fts":"\"(\" OR \")zotero\" OR \"1\"","has_positive":true,"positive_terms":["(",")zotero","1"],"after":"/"}},
+  {"input":"( month: )zotero\r1 after:/\u000b","partial":false,"expected":{"fts":"\"(\" OR \")zotero\" OR \"1\"","has_positive":true,"positive_terms":["(",")zotero","1"],"after":"/","months":[""]}},
   {"input":" ai:\n„/g\nea ","partial":false,"expected":{"fts":"\"„/g\" \"ea\"","has_positive":true,"positive_terms":["„/g","ea"]}},
   {"input":"́ tw:\"́b ai:, source: after:\"/I  ‟*2026-09","partial":false,"expected":{"fts":"\"́\" OR \"/I\" OR \"‟*2026-09\" OR \"́b\" OR \"ai:,\" OR \"source:\" OR \"after:\"","has_positive":true,"positive_terms":["́","/I","‟*2026-09","́b","ai:,","source:","after:"],"type":"tweets"}},
   {"input":"„AND after: tw:“inZ","partial":false,"expected":{"fts":"\"AND after: tw:\" \"inZ\"","has_positive":true,"positive_terms":["AND after: tw:","inZ"]}},
   {"input":" -“ - Au:AND/I  tw:“","partial":true,"expected":{"negatives":["- Au:AND/I  tw:"]}},
-  {"input":"of tw:orbž9 /\"AND\"9 entity: ","partial":false,"expected":{"fts":"\"/AND9\" \"orbž9\"","has_positive":true,"positive_terms":["/AND9","orbž9"],"type":"tweets"}},
+  {"input":"of tw:orbž9 /\"AND\"9 entity: ","partial":false,"expected":{"fts":"\"/AND9\" \"orbž9\"","has_positive":true,"positive_terms":["/AND9","orbž9"],"type":"tweets","entities":[""]}},
   {"input":"source ž ","partial":false,"expected":{"fts":"\"source\" \"ž\"","has_positive":true,"positive_terms":["source","ž"]}},
-  {"input":"\fau:- event:-„\t//”Z\"","partial":false,"expected":{"fts":"(\"Z\") NOT \"//\"","has_positive":true,"positive_terms":["Z"],"negatives":["//"],"author":"-"}},
-  {"input":" event:\fevent:  ai:„  　\" THEME:*„","partial":false,"expected":{"theme":"*„","ai":"  　"}},
+  {"input":"\fau:- event:-„\t//”Z\"","partial":false,"expected":{"fts":"(\"Z\") NOT \"//\"","has_positive":true,"positive_terms":["Z"],"negatives":["//"],"author":"-","events":[""]}},
+  {"input":" event:\fevent:  ai:„  　\" THEME:*„","partial":false,"expected":{"theme":"*„","ai":"  　","themes":["*„"],"events":["",""]}},
   {"input":"- zo:ai:Au","partial":true,"expected":{"fts":"\"-\"","has_positive":true,"positive_terms":["-"],"zotero":true,"ai":"Au"}},
   {"input":"\fAu:“/ :‘\\   ai: ( \"„","partial":false,"expected":{"fts":"\"„\"","has_positive":true,"positive_terms":["„"],"author":"/ :‘\\   ai: ( "}},
   {"input":"_ i:„́\f/ y:","partial":false,"expected":{"fts":"\"_\" \"/\"","has_positive":true,"positive_terms":["_","/"],"has_image":true}},
-  {"input":"  co:\"“ / “/I\n) \u000bTHEME: tag:","partial":false,"expected":{"fts":"\"/\" OR \"“/I\" OR \")\"","has_positive":true,"positive_terms":["/","“/I",")"]}},
-  {"input":" event: E21 in: / co:\"e y:“","partial":false,"expected":{"fts":"\"E21\" \"/\"","has_positive":true,"positive_terms":["E21","/"],"color":"e y:"}},
+  {"input":"  co:\"“ / “/I\n) \u000bTHEME: tag:","partial":false,"expected":{"fts":"\"/\" OR \"“/I\" OR \")\"","has_positive":true,"positive_terms":["/","“/I",")"],"themes":[""]}},
+  {"input":" event: E21 in: / co:\"e y:“","partial":false,"expected":{"fts":"\"E21\" \"/\"","has_positive":true,"positive_terms":["E21","/"],"color":"e y:","events":[""]}},
   {"input":" /","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":"THEME'","partial":false,"expected":{"fts":"\"THEME'\"","has_positive":true,"positive_terms":["THEME'"]}},
   {"input":"　ž ai:/I  co:„tag","partial":false,"expected":{"fts":"\"ž\"","has_positive":true,"positive_terms":["ž"],"color":"„tag","ai":"/I"}},
   {"input":" 2026-09aTHEME-ti:ž","partial":false,"expected":{"fts":"\"2026-09aTHEME-\"","has_positive":true,"positive_terms":["2026-09aTHEME-"],"title":"ž"}},
-  {"input":"‘\t́ entity:　”  \"1zo  proof","partial":false,"expected":{"fts":"\"‘\" OR \"́\" OR \"”\" OR \"1zo\" OR \"proof\"","has_positive":true,"positive_terms":["‘","́","”","1zo","proof"]}},
-  {"input":", theme:/g _/I ","partial":true,"expected":{"fts":"\",\" \"_/I\"","has_positive":true,"positive_terms":[",","_/I"],"theme":"/g"}},
+  {"input":"‘\t́ entity:　”  \"1zo  proof","partial":false,"expected":{"fts":"\"‘\" OR \"́\" OR \"”\" OR \"1zo\" OR \"proof\"","has_positive":true,"positive_terms":["‘","́","”","1zo","proof"],"entities":[""]}},
+  {"input":", theme:/g _/I ","partial":true,"expected":{"fts":"\",\" \"_/I\"","has_positive":true,"positive_terms":[",","_/I"],"theme":"/g","themes":["/g"]}},
   {"input":"Z\rco:“ 9/i \f-“","partial":false,"expected":{"fts":"\"Z\"","has_positive":true,"positive_terms":["Z"],"color":" 9/i \f-"}},
   {"input":" au:_ zo:  au:“ein-\" \u000bsource:“","partial":false,"expected":{"author":"ein-","zotero":true,"source":"“"}},
   {"input":" ”of Au:\u000by:","partial":false,"expected":{"fts":"\"”of\"","has_positive":true,"positive_terms":["”of"]}},
   {"input":"́eventeand_  „","partial":false,"expected":{"fts":"\"́eventeand_\" \"„\"","has_positive":true,"positive_terms":["́eventeand_","„"]}},
-  {"input":"\\e event:„\u000bbo:\"zotero\\\t//  ","partial":true,"expected":{"fts":"\"\\e\" OR \"zotero\\\" OR \"//\"","has_positive":true,"positive_terms":["\\e","zotero\\","//"],"event":"\u000bbo:"}},
-  {"input":" ezo „́:\u000bsource: entity:-","partial":false,"expected":{"fts":"\"ezo\" \"„́:\"","has_positive":true,"positive_terms":["ezo","„́:"],"entity":"-"}},
+  {"input":"\\e event:„\u000bbo:\"zotero\\\t//  ","partial":true,"expected":{"fts":"\"\\e\" OR \"zotero\\\" OR \"//\"","has_positive":true,"positive_terms":["\\e","zotero\\","//"],"event":"\u000bbo:","events":["\u000bbo:"]}},
+  {"input":" ezo „́:\u000bsource: entity:-","partial":false,"expected":{"fts":"\"ezo\" \"„́:\"","has_positive":true,"positive_terms":["ezo","„́:"],"entity":"-","entities":["-"]}},
   {"input":"- é  „ co:","partial":false,"expected":{"fts":"\"-\" OR \"é\" OR \"„\"","has_positive":true,"positive_terms":["-","é","„"]}},
   {"input":":́  ","partial":false,"expected":{"fts":"\":́\"","has_positive":true,"positive_terms":[":́"]}},
   {"input":"tagof“ \tAu:\"","partial":false,"expected":{"fts":"\"tagof“\"","has_positive":true,"positive_terms":["tagof“"],"author":"\""}},
   {"input":"\f“\"  or: a","partial":true,"expected":{"fts":"\"or:\"","has_positive":true,"positive_terms":["or:"]}},
   {"input":"  ti:„ ti:\ttag:\"  ’","partial":false,"expected":{"fts":"\"’\"","has_positive":true,"positive_terms":["’"],"title":" ti:\ttag:"}},
-  {"input":"OR -\"theme//\\or event:","partial":false,"expected":{"fts":"(\"//\\or\") NOT \"theme\"","has_positive":true,"positive_terms":["//\\or"],"negatives":["theme"]}},
+  {"input":"OR -\"theme//\\or event:","partial":false,"expected":{"fts":"(\"//\\or\") NOT \"theme\"","has_positive":true,"positive_terms":["//\\or"],"negatives":["theme"],"events":[""]}},
   {"input":"zo/I  ti:i'","partial":false,"expected":{"fts":"\"zo/I\"","has_positive":true,"positive_terms":["zo/I"],"title":"i'"}},
-  {"input":"　source_ \tTHEME:ORe‘ y:,","partial":false,"expected":{"fts":"\"source_\"","has_positive":true,"positive_terms":["source_"],"date":",","theme":"ORe‘"}},
+  {"input":"　source_ \tTHEME:ORe‘ y:,","partial":false,"expected":{"fts":"\"source_\"","has_positive":true,"positive_terms":["source_"],"date":",","theme":"ORe‘","themes":["ORe‘"]}},
   {"input":"1é\"a　 -„","partial":true,"expected":{"fts":"(1éa*) NOT \"„\"","has_positive":true,"positive_terms":["1éa"],"negatives":["„"]}},
-  {"input":"theme  theme:|é  “ *b „E21‘","partial":false,"expected":{"fts":"\"theme\" OR \"*b\" OR \"E21‘\"","has_positive":true,"positive_terms":["theme","*b","E21‘"],"theme":"|é"}},
-  {"input":" theme:)zo co: zo:the i:'e","partial":false,"expected":{"zotero":true,"has_image":true,"theme":")zo"}},
-  {"input":"  THEME:OR month: month:„","partial":false,"expected":{"theme":"OR","month":"„"}},
+  {"input":"theme  theme:|é  “ *b „E21‘","partial":false,"expected":{"fts":"\"theme\" OR \"*b\" OR \"E21‘\"","has_positive":true,"positive_terms":["theme","*b","E21‘"],"theme":"|é","themes":["|é"]}},
+  {"input":" theme:)zo co: zo:the i:'e","partial":false,"expected":{"zotero":true,"has_image":true,"theme":")zo","themes":[")zo"]}},
+  {"input":"  THEME:OR month: month:„","partial":false,"expected":{"theme":"OR","month":"„","themes":["OR"],"months":["","„"]}},
   {"input":" 2026-09","partial":false,"expected":{"fts":"\"2026-09\"","has_positive":true,"positive_terms":["2026-09"]}},
   {"input":" monthproof 1b 9( bo:\"9","partial":true,"expected":{"fts":"monthproof* OR 1b* OR \"9(\" OR 9*","has_positive":true,"positive_terms":["monthproof","1b","9(","9"],"type":"books"}},
   {"input":"é/1 source: b yž9\"-","partial":false,"expected":{"fts":"\"é/1\" OR \"b\" OR \"yž9-\"","has_positive":true,"positive_terms":["é/1","b","yž9-"]}},
-  {"input":"E21/\n\rentity:„ theme: i: Au bo:/b","partial":false,"expected":{"fts":"\"E21/\" OR \"Au\" OR \"/b\"","has_positive":true,"positive_terms":["E21/","Au","/b"],"type":"books","has_image":true,"entity":"„"}},
+  {"input":"E21/\n\rentity:„ theme: i: Au bo:/b","partial":false,"expected":{"fts":"\"E21/\" OR \"Au\" OR \"/b\"","has_positive":true,"positive_terms":["E21/","Au","/b"],"type":"books","has_image":true,"entity":"„","themes":[""],"entities":["„"]}},
   {"input":" tw:","partial":false,"expected":{"type":"tweets"}},
   {"input":",́žE21‘ ́\nin:_the :","partial":false,"expected":{"fts":"\",́žE21‘\" OR \"́\" OR \":\"","has_positive":true,"positive_terms":[",́žE21‘","́",":"],"in":"_the"}},
   {"input":"/themeE21ý ","partial":true,"expected":{"fts":"\"/themeE21ý\"","has_positive":true,"positive_terms":["/themeE21ý"]}},
-  {"input":"\f\"” co::   ž/  event:","partial":false,"expected":{"fts":"\"ž/\"","has_positive":true,"positive_terms":["ž/"],"color":":"}},
+  {"input":"\f\"” co::   ž/  event:","partial":false,"expected":{"fts":"\"ž/\"","has_positive":true,"positive_terms":["ž/"],"color":":","events":[""]}},
   {"input":" b ","partial":false,"expected":{"fts":"\"b\"","has_positive":true,"positive_terms":["b"]}},
-  {"input":"b- „‟ month:́‘„“\rin:/ ","partial":false,"expected":{"fts":"\"b-\"","has_positive":true,"positive_terms":["b-"],"in":"/","month":"́‘„“"}},
-  {"input":"'/  \" THEME:\rZZzoterotheme","partial":false,"expected":{"fts":"\"'/\" \"ZZzoterotheme\"","has_positive":true,"positive_terms":["'/","ZZzoterotheme"]}},
+  {"input":"b- „‟ month:́‘„“\rin:/ ","partial":false,"expected":{"fts":"\"b-\"","has_positive":true,"positive_terms":["b-"],"in":"/","month":"́‘„“","months":["́‘„“"]}},
+  {"input":"'/  \" THEME:\rZZzoterotheme","partial":false,"expected":{"fts":"\"'/\" \"ZZzoterotheme\"","has_positive":true,"positive_terms":["'/","ZZzoterotheme"],"themes":[""]}},
   {"input":"‟ Z 1 2026-09 in:„9\rtw: \"","partial":true,"expected":{"fts":"\"‟\" OR Z* OR 1* OR \"2026-09\"","has_positive":true,"positive_terms":["‟","Z","1","2026-09"],"in":"9\rtw: "}},
   {"input":"/zo:the","partial":false,"expected":{"fts":"\"/zo:the\"","has_positive":true,"positive_terms":["/zo:the"]}},
   {"input":"2026-09month","partial":false,"expected":{"fts":"\"2026-09month\"","has_positive":true,"positive_terms":["2026-09month"]}},
-  {"input":"1  THEME: ti: tw after:in　/ / source:„ -","partial":false,"expected":{"fts":"\"1\" OR \"tw\" OR \"-\"","has_positive":true,"positive_terms":["1","tw","-"],"regexes":[{"source":" ","flags":""}],"after":"in","source":"„"}},
+  {"input":"1  THEME: ti: tw after:in　/ / source:„ -","partial":false,"expected":{"fts":"\"1\" OR \"tw\" OR \"-\"","has_positive":true,"positive_terms":["1","tw","-"],"regexes":[{"source":" ","flags":""}],"after":"in","source":"„","themes":[""]}},
   {"input":"/.́THEMEa /g '","partial":false,"expected":{"fts":"\"'\"","has_positive":true,"positive_terms":["'"],"regexes":[{"source":".́THEMEa ","flags":"g"}]}},
   {"input":"a after:/in:/ .,\n/: ","partial":true,"expected":{"fts":"\".,\" \"/:\"","has_positive":true,"positive_terms":[".,","/:"],"after":"/","in":"/"}},
   {"input":"* co:„\u000bmonth:“","partial":false,"expected":{"fts":"\"*\"","has_positive":true,"positive_terms":["*"],"color":"\u000bmonth:"}},
@@ -525,21 +525,21 @@
   {"input":"yAu.  source:\"\t / 9and","partial":true,"expected":{"fts":"\"yAu.\" OR \"/\" OR 9and*","has_positive":true,"positive_terms":["yAu.","/","9and"],"source":"\""}},
   {"input":".  | -„","partial":false,"expected":{"fts":"(\".\") NOT \"„\"","has_positive":true,"positive_terms":["."],"negatives":["„"]}},
   {"input":"　/zo\u000bbo:\" the\" Au:„/' i","partial":false,"expected":{"fts":"\"/zo\"","has_positive":true,"positive_terms":["/zo"],"author":"„/'","type":"books"}},
-  {"input":"| event:é","partial":false,"expected":{"event":"é"}},
-  {"input":"-́b\nau:„\ftheme:","partial":false,"expected":{"negatives":["́b"],"author":"„"}},
+  {"input":"| event:é","partial":false,"expected":{"event":"é","events":["é"]}},
+  {"input":"-́b\nau:„\ftheme:","partial":false,"expected":{"negatives":["́b"],"author":"„","themes":[""]}},
   {"input":"  tag:.ž","partial":true,"expected":{"tag":".ž"}},
   {"input":"\"éor„e-the Au:_b","partial":false,"expected":{"fts":"\"éor\" \"e-the\"","has_positive":true,"positive_terms":["éor","e-the"],"author":"_b"}},
   {"input":"“‟ in:\"*: „. ‟","partial":false,"expected":{"fts":"\".\" \"‟\"","has_positive":true,"positive_terms":[".","‟"],"in":"*: "}},
   {"input":" -„event-/i ","partial":false,"expected":{"negatives":["„event-/i"]}},
-  {"input":"in\fTHEME:　month:\r/","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
+  {"input":"in\fTHEME:　month:\r/","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"themes":[""],"months":[""]}},
   {"input":"\tafter:\u000b /e","partial":true,"expected":{"fts":"\"/e\"","has_positive":true,"positive_terms":["/e"]}},
   {"input":"é tag: ","partial":false,"expected":{"fts":"\"é\"","has_positive":true,"positive_terms":["é"]}},
   {"input":"month\"/proof\tbo:\"|","partial":false,"expected":{"fts":"\"month/proof\" \"|\"","has_positive":true,"positive_terms":["month/proof","|"],"type":"books"}},
   {"input":" in:E21","partial":false,"expected":{"in":"E21"}},
   {"input":"\u000b'source/i ","partial":false,"expected":{"fts":"\"'source/i\"","has_positive":true,"positive_terms":["'source/i"]}},
-  {"input":"zotero\u000bTHEME:zotero /\"  )’ „ event:“ „","partial":true,"expected":{"fts":"zotero* OR \"/\" OR \")’\" OR \"event:\" OR \"„\"","has_positive":true,"positive_terms":["zotero","/",")’","event:","„"],"theme":"zotero"}},
-  {"input":"12026-09 -\"’ month:\"_// theme:“b9 -“zo","partial":false,"expected":{"fts":"(\"12026-09\" OR \"_//\" OR \"zo\") NOT \"’ month:\"","has_positive":true,"positive_terms":["12026-09","_//","zo"],"negatives":["’ month:"],"theme":"b9 -"}},
-  {"input":"\\  zo:é” theme:y:event1","partial":false,"expected":{"fts":"\"\\\"","has_positive":true,"positive_terms":["\\"],"date":"event1","zotero":true}},
+  {"input":"zotero\u000bTHEME:zotero /\"  )’ „ event:“ „","partial":true,"expected":{"fts":"zotero* OR \"/\" OR \")’\" OR \"event:\" OR \"„\"","has_positive":true,"positive_terms":["zotero","/",")’","event:","„"],"theme":"zotero","themes":["zotero"]}},
+  {"input":"12026-09 -\"’ month:\"_// theme:“b9 -“zo","partial":false,"expected":{"fts":"(\"12026-09\" OR \"_//\" OR \"zo\") NOT \"’ month:\"","has_positive":true,"positive_terms":["12026-09","_//","zo"],"negatives":["’ month:"],"theme":"b9 -","themes":["b9 -"]}},
+  {"input":"\\  zo:é” theme:y:event1","partial":false,"expected":{"fts":"\"\\\"","has_positive":true,"positive_terms":["\\"],"date":"event1","zotero":true,"themes":[""]}},
   {"input":" of1 ́ \"","partial":false,"expected":{"fts":"\"of1\" \"́\"","has_positive":true,"positive_terms":["of1","́"]}},
   {"input":"/ ai:taga and tw:E21-. _","partial":false,"expected":{"fts":"\"/\" \"_\" \"E21-.\"","has_positive":true,"positive_terms":["/","_","E21-."],"type":"tweets","ai":"taga"}},
   {"input":"\n/ b/́ -„i:‘  THEME:\"1 ž-","partial":true,"expected":{"fts":"(\"/\" OR \"b/́\" OR 1* OR \"ž-\") NOT \"i:‘  THEME:\"","has_positive":true,"positive_terms":["/","b/́","1","ž-"],"negatives":["i:‘  THEME:"]}},
@@ -550,7 +550,7 @@
   {"input":" /","partial":true,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":"1/I .e","partial":false,"expected":{"fts":"\"1/I\" \".e\"","has_positive":true,"positive_terms":["1/I",".e"]}},
   {"input":"ž*( E21 tw:„of „/  ","partial":false,"expected":{"fts":"\"ž*(\" OR \"E21\" OR \"/\"","has_positive":true,"positive_terms":["ž*(","E21","/"],"type":"tweets"}},
-  {"input":" theme:’ of \\́/I\u000b","partial":false,"expected":{"fts":"\"\\́/I\"","has_positive":true,"positive_terms":["\\́/I"],"theme":"’"}},
+  {"input":" theme:’ of \\́/I\u000b","partial":false,"expected":{"fts":"\"\\́/I\"","has_positive":true,"positive_terms":["\\́/I"],"theme":"’","themes":["’"]}},
   {"input":"1","partial":false,"expected":{"fts":"\"1\"","has_positive":true,"positive_terms":["1"]}},
   {"input":"9\rco:|","partial":true,"expected":{"fts":"9*","has_positive":true,"positive_terms":["9"],"color":"|"}},
   {"input":", \\„-","partial":false,"expected":{"fts":"\",\" \"\\„-\"","has_positive":true,"positive_terms":[",","\\„-"]}},
@@ -558,18 +558,18 @@
   {"input":"event\n„/   Au/g  tw:“the/i\t","partial":false,"expected":{"fts":"\"event\" OR \"/   Au/g  tw:\" OR \"the/i\"","has_positive":true,"positive_terms":["event","/   Au/g  tw:","the/i"]}},
   {"input":"or bo:.\t“ -„ tag: :é\u000b-„ au:month","partial":false,"expected":{"fts":"(\"-\" \":é\" \".\") NOT \"„\"","has_positive":true,"positive_terms":["-",":é","."],"negatives":["„"],"author":"month","type":"books"}},
   {"input":"a“in/ co:* /","partial":true,"expected":{"fts":"\"a“in\"","has_positive":true,"positive_terms":["a“in"],"regexes":[{"source":" co:* ","flags":""}]}},
-  {"input":" \"  theme:)AND  /　1a","partial":false,"expected":{"fts":"\"/\" \"1a\"","has_positive":true,"positive_terms":["/","1a"],"theme":")AND"}},
+  {"input":" \"  theme:)AND  /　1a","partial":false,"expected":{"fts":"\"/\" \"1a\"","has_positive":true,"positive_terms":["/","1a"],"theme":")AND","themes":[")AND"]}},
   {"input":"\t/\\b  -“ /   ","partial":false,"expected":{"regexes":[{"source":"\\b  -“ ","flags":""}]}},
-  {"input":"(  event:_OR “ intag -„  ‟","partial":false,"expected":{"fts":"\"(\" OR \"intag -\" OR \"‟\"","has_positive":true,"positive_terms":["(","intag -","‟"],"event":"_OR"}},
+  {"input":"(  event:_OR “ intag -„  ‟","partial":false,"expected":{"fts":"\"(\" OR \"intag -\" OR \"‟\"","has_positive":true,"positive_terms":["(","intag -","‟"],"event":"_OR","events":["_OR"]}},
   {"input":" ai:„9 bo: ti: or","partial":false,"expected":{"type":"books","ai":"„9"}},
   {"input":"1 tw: ","partial":true,"expected":{"fts":"1*","has_positive":true,"positive_terms":["1"],"type":"tweets"}},
-  {"input":"‘ ti:ž /thee/\"\ntheme: co:","partial":false,"expected":{"fts":"\"‘\" \"/thee/\"","has_positive":true,"positive_terms":["‘","/thee/"],"title":"ž"}},
+  {"input":"‘ ti:ž /thee/\"\ntheme: co:","partial":false,"expected":{"fts":"\"‘\" \"/thee/\"","has_positive":true,"positive_terms":["‘","/thee/"],"title":"ž","themes":[""]}},
   {"input":" _ ) after:twand","partial":false,"expected":{"fts":"\"_\" \")\"","has_positive":true,"positive_terms":["_",")"],"after":"twand"}},
   {"input":" /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"]}},
   {"input":"\u000bZor é/I b’ANDé","partial":false,"expected":{"fts":"\"Zor\" OR \"é/I\" OR \"b’ANDé\"","has_positive":true,"positive_terms":["Zor","é/I","b’ANDé"]}},
-  {"input":"‟ a b entity:\"ž","partial":true,"expected":{"fts":"\"‟\" b*","has_positive":true,"positive_terms":["‟","b"],"entity":"\"ž"}},
+  {"input":"‟ a b entity:\"ž","partial":true,"expected":{"fts":"\"‟\" b*","has_positive":true,"positive_terms":["‟","b"],"entity":"\"ž","entities":["\"ž"]}},
   {"input":"\\","partial":false,"expected":{"fts":"\"\\\"","has_positive":true,"positive_terms":["\\"]}},
-  {"input":"\u000b au\u000btag: “the ́ aZb“\u000bmonth:\"","partial":false,"expected":{"fts":"\"au\" \"the ́ aZb\"","has_positive":true,"positive_terms":["au","the ́ aZb"],"month":"\""}},
+  {"input":"\u000b au\u000btag: “the ́ aZb“\u000bmonth:\"","partial":false,"expected":{"fts":"\"au\" \"the ́ aZb\"","has_positive":true,"positive_terms":["au","the ́ aZb"],"month":"\"","months":["\""]}},
   {"input":"ANDofy \"monthe","partial":false,"expected":{"fts":"\"ANDofy\" \"monthe\"","has_positive":true,"positive_terms":["ANDofy","monthe"]}},
   {"input":" Au:“E21etwE21","partial":false,"expected":{"author":"“E21etwE21"}},
   {"input":"Z  \\ymonth ti:́ Au:Z ","partial":true,"expected":{"fts":"Z* \"\\ymonth\"","has_positive":true,"positive_terms":["Z","\\ymonth"],"author":"Z","title":"́"}},
@@ -585,21 +585,21 @@
   {"input":"-\" in: 1 zo: eventi  -\"‟é/ ","partial":true,"expected":{"fts":"(\"‟é/\") NOT \"in: 1 zo: eventi  -\"","has_positive":true,"positive_terms":["‟é/"],"negatives":["in: 1 zo: eventi  -"]}},
   {"input":" b","partial":false,"expected":{"fts":"\"b\"","has_positive":true,"positive_terms":["b"]}},
   {"input":" in:“","partial":false,"expected":{"in":"“"}},
-  {"input":" y: \" zo:„E21Zthe month:„á /","partial":false,"expected":{"fts":"\"zo:\" OR \"E21Zthe\" OR \"/\"","has_positive":true,"positive_terms":["zo:","E21Zthe","/"],"month":"„á"}},
+  {"input":" y: \" zo:„E21Zthe month:„á /","partial":false,"expected":{"fts":"\"zo:\" OR \"E21Zthe\" OR \"/\"","has_positive":true,"positive_terms":["zo:","E21Zthe","/"],"month":"„á","months":["„á"]}},
   {"input":"or\\","partial":false,"expected":{"fts":"\"or\\\"","has_positive":true,"positive_terms":["or\\"]}},
   {"input":"y　/b \"  i:„|","partial":true,"expected":{"fts":"y* \"/b\" \"i:\"","has_positive":true,"positive_terms":["y","/b","i:"]}},
   {"input":"’","partial":false,"expected":{"fts":"\"’\"","has_positive":true,"positive_terms":["’"]}},
   {"input":" zo: -\"\\\u000b a\" ́ éž","partial":false,"expected":{"fts":"(\"́\" \"éž\") NOT \"\\\u000b a\"","has_positive":true,"positive_terms":["́","éž"],"negatives":["\\\u000b a"],"zotero":true}},
-  {"input":" month:","partial":false,"expected":{}},
+  {"input":" month:","partial":false,"expected":{"months":[""]}},
   {"input":"eora","partial":false,"expected":{"fts":"\"eora\"","has_positive":true,"positive_terms":["eora"]}},
-  {"input":"a y: entity:\\':Zzotero","partial":true,"expected":{"fts":"a*","has_positive":true,"positive_terms":["a"],"entity":"\\':Zzotero"}},
+  {"input":"a y: entity:\\':Zzotero","partial":true,"expected":{"fts":"a*","has_positive":true,"positive_terms":["a"],"entity":"\\':Zzotero","entities":["\\':Zzotero"]}},
   {"input":"\" OR","partial":false,"expected":{}},
   {"input":"é:","partial":false,"expected":{"fts":"\"é:\"","has_positive":true,"positive_terms":["é:"]}},
   {"input":"ti:e\"žzo  in:́)","partial":false,"expected":{"title":"e\"žzo","in":"́)"}},
-  {"input":"ofthe/Z THEME:zotero","partial":false,"expected":{"fts":"\"ofthe/Z\"","has_positive":true,"positive_terms":["ofthe/Z"],"theme":"zotero"}},
+  {"input":"ofthe/Z THEME:zotero","partial":false,"expected":{"fts":"\"ofthe/Z\"","has_positive":true,"positive_terms":["ofthe/Z"],"theme":"zotero","themes":["zotero"]}},
   {"input":"Z y","partial":true,"expected":{"fts":"Z* y*","has_positive":true,"positive_terms":["Z","y"]}},
   {"input":"b9\nafter:","partial":false,"expected":{"fts":"\"b9\"","has_positive":true,"positive_terms":["b9"]}},
-  {"input":"entity:\u000btag:inAué\\\\ /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"tag":"inAué\\\\"}},
+  {"input":"entity:\u000btag:inAué\\\\ /","partial":false,"expected":{"fts":"\"/\"","has_positive":true,"positive_terms":["/"],"tag":"inAué\\\\","entities":[""]}},
   {"input":" -„","partial":false,"expected":{"negatives":["„"]}},
   {"input":"OR/and","partial":false,"expected":{"fts":"\"OR/and\"","has_positive":true,"positive_terms":["OR/and"]}}
  ],

@@ -58,6 +58,11 @@
 //! - Join: a layer item belongs to every indexed document whose frontmatter
 //!   `source_system` + `source_id` give its key; failing that, to the
 //!   document whose key (relative path) equals its `path`.
+//! - Entity types: a tag row's optional `entities_typed`
+//!   (`[{"name", "type"}]`) types the names of its `entities`; a numbered
+//!   `entity_add` correction's `entity_type` types the name it adds.
+//!   `TopicInfo::entities` stays the list of names and
+//!   `TopicInfo::entity_types` maps a name under [`fold`] to its type.
 //! - Month: the item's `date` cut to `YYYY-MM` (the month of its latest
 //!   highlight), else the layer's `month` when that is `YYYY-MM`. It is
 //!   the month `month:` filters on and the month facet counts; `y:` /
@@ -114,6 +119,14 @@ pub struct TopicInfo {
     pub key: String,
     pub themes: Vec<String>,
     pub entities: Vec<String>,
+    /// The type of each entity that has one, by the entity's name under
+    /// [`fold`] (`"terence tao": "person"`): from the tag row's
+    /// `entities_typed`, and from the `entity_type` of a numbered
+    /// `entity_add` correction. `entities` stays a list of names; a name
+    /// without a type has no entry. Absent when no entity has a type (an
+    /// index built before engine 13).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub entity_types: BTreeMap<String, String>,
     /// The tag row's event, `YYYY-MM/Exx`, or null (also null when a
     /// correction took the item out of that event).
     pub event: Option<String>,
@@ -154,6 +167,11 @@ impl TopicInfo {
         self.entities.iter().any(|t| fold(t) == f)
     }
 
+    /// The type of the entity `name` on this item, when it has one.
+    pub fn entity_type(&self, name: &str) -> Option<&str> {
+        self.entity_types.get(&fold(name)).map(String::as_str)
+    }
+
     /// The ids of every event the item is in: `events`, else `event`.
     pub fn event_ids(&self) -> &[String] {
         match &self.events {
@@ -169,11 +187,18 @@ impl TopicInfo {
         self.event_ids().iter().any(|e| fold(e) == f)
     }
 
+    /// The month the item is counted in: the one assignment of an item
+    /// to a month. `month:` filters on it ([`TopicInfo::in_month`]), the
+    /// month facet counts it and `theme-months` puts the item in its
+    /// column.
+    pub fn layer_month(&self) -> Option<&str> {
+        self.month.as_deref()
+    }
+
     /// `month` is `YYYY-MM` (that month) or `YYYY` (any month of the year).
     pub fn in_month(&self, month: &str) -> bool {
         let m = month.trim();
-        self.month
-            .as_deref()
+        self.layer_month()
             .is_some_and(|have| have == m || (m.len() == 4 && have.starts_with(m)))
     }
 }
@@ -192,6 +217,12 @@ pub fn valid_month(v: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Is `v` exactly a month `YYYY-MM`: seven bytes, a real month, nothing
+/// around it? (A bare year and a padded value are not.)
+pub fn exact_month(v: &str) -> bool {
+    v.len() == 7 && v.trim().len() == 7 && valid_month(v)
 }
 
 /// `ai:` values: `true|yes|1` and `false|no|0`, any case.
@@ -221,6 +252,9 @@ struct LayerLine {
     ai_related: Option<bool>,
     themes: Option<Vec<String>>,
     entities: Option<Vec<String>>,
+    /// `[{"name": …, "type": …}]`; read leniently (any JSON), so that a
+    /// row that was a row before types were read still is one.
+    entities_typed: Option<serde_json::Value>,
     event: Option<String>,
     event_name: Option<String>,
     confidence: Option<String>,
@@ -661,10 +695,13 @@ fn add_layer_line(
         );
     }
     let month = month_of(l.date.as_deref(), l.month.as_deref());
+    let entities = l.entities.unwrap_or_default();
+    let entity_types = typed_entities(l.entities_typed.as_ref(), &entities);
     let info = TopicInfo {
         key: key.clone(),
         themes: l.themes.unwrap_or_default(),
-        entities: l.entities.unwrap_or_default(),
+        entities,
+        entity_types,
         event: l.event.filter(|e| !e.trim().is_empty()),
         event_name: l.event_name,
         events: None,
@@ -684,6 +721,33 @@ fn add_layer_line(
         },
     );
     true
+}
+
+/// The types a tag row's `entities_typed` gives the names of its
+/// `entities`: each `{"name", "type"}` object with a non-blank text for
+/// both, whose name is one of `entities` under [`fold`]; the type trimmed,
+/// as written. A later object of the same name wins. Anything else in the
+/// value (not a list, an item of another shape, a name the row does not
+/// list) is passed over.
+fn typed_entities(
+    typed: Option<&serde_json::Value>,
+    entities: &[String],
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(list) = typed.and_then(|v| v.as_array()) else {
+        return out;
+    };
+    let names: BTreeSet<String> = entities.iter().map(|e| fold(e)).collect();
+    for item in list {
+        let text = |k: &str| item.get(k).and_then(|v| v.as_str()).map(str::trim);
+        if let (Some(name), Some(kind)) = (text("name"), text("type")) {
+            let f = fold(name);
+            if !f.is_empty() && !kind.is_empty() && names.contains(&f) {
+                out.insert(f, kind.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Add to and take from a list of names under [`fold`]: additions first
@@ -793,15 +857,29 @@ fn apply_correction(
         mark("themes", t);
     }
     if let Some(v) = entities {
+        // A whole list: the names it keeps keep their types.
+        let kept: BTreeSet<String> = v.iter().map(|n| fold(n)).collect();
+        t.entity_types.retain(|name, _| kept.contains(name));
         t.entities = v;
         mark("entities", t);
     }
     if entity_add.is_some() || entity_remove.is_some() {
-        patch_names(
-            &mut t.entities,
-            &entity_add.unwrap_or_default(),
-            &entity_remove.unwrap_or_default(),
+        let (add, remove) = (
+            entity_add.unwrap_or_default(),
+            entity_remove.unwrap_or_default(),
         );
+        patch_names(&mut t.entities, &add, &remove);
+        // The line's `entity_type` (a numbered line's, checked by
+        // `correction_lines`) is the type of the name it adds, also when
+        // the row has the name by now. A name taken off has no type.
+        if let Some(kind) = m.get("entity_type").and_then(|v| v.as_str()) {
+            for name in add.iter().map(|a| fold(a)).filter(|f| !f.is_empty()) {
+                t.entity_types.insert(name, kind.to_string());
+            }
+        }
+        for name in &remove {
+            t.entity_types.remove(&fold(name));
+        }
         mark("entities", t);
     }
     if let Some(v) = event {
@@ -1177,6 +1255,22 @@ mod tests {
         );
         assert_eq!(month_of(None, Some("2022-Q2")), None);
         assert_eq!(month_of(None, Some("2022-05")).as_deref(), Some("2022-05"));
+        assert!(exact_month("2026-09"));
+        for bad in [
+            "2026",
+            "2026   ",
+            "   2026",
+            " 2026  ",
+            "2026-9",
+            "2026-13",
+            "2026-00",
+            " 2026-09",
+            "2026-09 ",
+            "2026\u{a0}\u{a0}",
+            "",
+        ] {
+            assert!(!exact_month(bad), "{bad:?}");
+        }
         assert!(parse_ai("Yes").unwrap());
         assert!(!parse_ai("false").unwrap());
         assert!(parse_ai("maybe").is_err());

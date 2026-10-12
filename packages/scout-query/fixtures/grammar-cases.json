@@ -29,7 +29,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -60,7 +64,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -91,7 +99,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -124,7 +136,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -157,7 +173,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -190,7 +210,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -223,7 +247,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -257,7 +285,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -291,7 +323,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -326,7 +362,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -359,7 +399,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -393,7 +437,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -426,7 +474,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -457,7 +509,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -488,7 +544,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -519,7 +579,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -552,7 +616,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -585,7 +653,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -616,7 +688,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -647,7 +723,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -681,7 +761,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -714,7 +798,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -748,7 +836,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -782,7 +874,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -815,7 +911,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -848,7 +948,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -881,7 +985,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -914,7 +1022,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -948,7 +1060,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -982,7 +1098,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1016,7 +1136,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1050,7 +1174,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1084,7 +1212,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1118,7 +1250,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1152,7 +1288,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1185,7 +1325,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1218,7 +1362,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1251,7 +1399,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1285,7 +1437,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1320,7 +1476,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1355,7 +1515,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1390,7 +1554,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1423,7 +1591,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1456,7 +1628,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1489,7 +1665,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1522,7 +1702,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1558,7 +1742,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1593,7 +1781,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1629,7 +1821,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1667,7 +1863,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1709,7 +1909,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1742,7 +1946,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1775,7 +1983,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1808,7 +2020,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1839,7 +2055,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1870,7 +2090,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1903,7 +2127,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1934,7 +2162,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1965,7 +2197,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -1996,7 +2232,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2029,7 +2269,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2060,7 +2304,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2094,7 +2342,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2125,7 +2377,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2156,7 +2412,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2187,7 +2447,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2218,7 +2482,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2249,7 +2517,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2280,7 +2552,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2313,7 +2589,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2344,7 +2624,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2375,7 +2659,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2406,7 +2694,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2439,7 +2731,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2472,7 +2768,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2503,7 +2803,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2534,7 +2838,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2567,7 +2875,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2600,7 +2912,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2633,7 +2949,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2664,7 +2984,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2695,7 +3019,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2728,7 +3056,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2764,7 +3096,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2797,7 +3133,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2830,7 +3170,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2863,7 +3207,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2896,7 +3244,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2927,7 +3279,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2958,7 +3314,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -2991,7 +3351,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3025,7 +3389,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3058,7 +3426,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3092,7 +3464,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3125,7 +3501,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "AI and mathematics"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3156,7 +3538,15 @@
         "entity": "GPT-6 Astra",
         "event": "2026-09/E21",
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [
+          "GPT-6 Astra"
+        ],
+        "events": [
+          "2026-09/E21"
+        ],
+        "months": []
       }
     },
     {
@@ -3189,7 +3579,13 @@
         "entity": null,
         "event": null,
         "ai": "true",
-        "month": "2026-09"
+        "month": "2026-09",
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": [
+          "2026-09"
+        ]
       }
     },
     {
@@ -3222,7 +3618,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "Anthropology"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3257,7 +3659,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3288,7 +3694,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "Research integrity, publishing and peer review"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3324,7 +3736,13 @@
         "entity": null,
         "event": "2026-09/E21",
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [
+          "2026-09/E21"
+        ],
+        "months": []
       }
     },
     {
@@ -3357,7 +3775,14 @@
         "entity": null,
         "event": "2026-09/E22",
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [
+          "2026-09/E21",
+          "2026-09/E22"
+        ],
+        "months": []
       }
     },
     {
@@ -3395,7 +3820,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "AI/ML and proofs"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3426,7 +3857,13 @@
         "entity": "GPT \"Astra\"",
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [
+          "GPT \"Astra\""
+        ],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3459,7 +3896,13 @@
         "entity": "back\\slash",
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [
+          "back\\slash"
+        ],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3490,7 +3933,13 @@
         "entity": "O’Reilly",
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [
+          "O’Reilly"
+        ],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3524,7 +3973,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3558,7 +4011,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3592,7 +4049,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3625,7 +4086,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3660,7 +4125,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3694,7 +4163,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3727,7 +4200,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3761,7 +4238,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3796,7 +4277,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3830,7 +4315,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3864,7 +4353,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3897,7 +4390,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3930,7 +4427,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "Bar"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3963,7 +4466,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -3998,7 +4505,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4031,7 +4542,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4064,7 +4579,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4097,7 +4616,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4131,7 +4654,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "A"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4170,7 +4699,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4203,7 +4736,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4241,7 +4778,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4275,7 +4816,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4309,7 +4854,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4344,7 +4893,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4378,7 +4931,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4409,7 +4966,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4443,7 +5004,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4474,7 +5039,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4509,7 +5078,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4540,7 +5113,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "AB"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4573,7 +5152,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "curly value"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4606,7 +5191,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "v"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4639,7 +5230,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "\"unclosed"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4672,7 +5269,13 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "low"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4703,7 +5306,13 @@
         "entity": "a ” b",
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [
+          "a ” b"
+        ],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4738,7 +5347,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4769,7 +5382,14 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [
+          "x",
+          "y"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4807,7 +5427,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4845,7 +5469,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4878,7 +5506,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4911,7 +5543,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4944,7 +5580,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -4980,7 +5620,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -5018,7 +5662,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -5051,7 +5699,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -5084,7 +5736,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -5117,7 +5773,11 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     },
     {
@@ -5150,7 +5810,440 @@
         "entity": null,
         "event": null,
         "ai": null,
-        "month": null
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "theme:A theme:B",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "B",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "A",
+          "B"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "theme:\"AI and mathematics\" proof theme:Agents in:one",
+      "partial": false,
+      "expected": {
+        "fts": "\"proof\"",
+        "has_positive": true,
+        "positive_terms": [
+          "proof"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "one",
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "Agents",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "AI and mathematics",
+          "Agents"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "entity:X ENTITY:\"Y z\" entity:X",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": "X",
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [],
+        "entities": [
+          "X",
+          "Y z",
+          "X"
+        ],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "event:2026-09/E21 event:2026-09-fields-declaration",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": "2026-09-fields-declaration",
+        "ai": null,
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [
+          "2026-09/E21",
+          "2026-09-fields-declaration"
+        ],
+        "months": []
+      }
+    },
+    {
+      "input": "month:2026 month:2026-02 month:2025-12",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": "2025-12",
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": [
+          "2026",
+          "2026-02",
+          "2025-12"
+        ]
+      }
+    },
+    {
+      "input": "theme: theme:A",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "A",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "",
+          "A"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "theme:A theme:",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "A",
+          ""
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "\"theme:A\" -theme:B theme:C",
+      "partial": false,
+      "expected": {
+        "fts": "(\"theme:A\") NOT \"theme:B\"",
+        "has_positive": true,
+        "positive_terms": [
+          "theme:A"
+        ],
+        "negatives": [
+          "theme:B"
+        ],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "C",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "C"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "au:a au:b ti:a ti:b tag:a tag:b co:a co:b in:a in:b lang:a lang:b genre:a genre:b source:a source:b ai:true ai:false y:2001 y:2002 after:2001 after:2002 before:2001 before:2002",
+      "partial": false,
+      "expected": {
+        "fts": "",
+        "has_positive": false,
+        "positive_terms": [],
+        "negatives": [],
+        "regexes": [],
+        "author": "b",
+        "title": "b",
+        "type": null,
+        "tag": "b",
+        "color": "b",
+        "date": "2002",
+        "after": "2002",
+        "before": "2002",
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": "b",
+        "lang": "b",
+        "genre": "b",
+        "source": "b",
+        "theme": null,
+        "entity": null,
+        "event": null,
+        "ai": "false",
+        "month": null,
+        "themes": [],
+        "entities": [],
+        "events": [],
+        "months": []
+      }
+    },
+    {
+      "input": "tw:theme:A theme:B month:2026-02 metaphor OR proof",
+      "partial": false,
+      "expected": {
+        "fts": "\"metaphor\" OR \"proof\" \"theme:A\"",
+        "has_positive": true,
+        "positive_terms": [
+          "metaphor",
+          "proof",
+          "theme:A"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": "tweets",
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "B",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": "2026-02",
+        "themes": [
+          "B"
+        ],
+        "entities": [],
+        "events": [],
+        "months": [
+          "2026-02"
+        ]
+      }
+    },
+    {
+      "input": "theme:A theme:B proof",
+      "partial": true,
+      "expected": {
+        "fts": "proof*",
+        "has_positive": true,
+        "positive_terms": [
+          "proof"
+        ],
+        "negatives": [],
+        "regexes": [],
+        "author": null,
+        "title": null,
+        "type": null,
+        "tag": null,
+        "color": null,
+        "date": null,
+        "after": null,
+        "before": null,
+        "favorite": false,
+        "zotero": false,
+        "has_image": false,
+        "in": null,
+        "lang": null,
+        "genre": null,
+        "source": null,
+        "theme": "B",
+        "entity": null,
+        "event": null,
+        "ai": null,
+        "month": null,
+        "themes": [
+          "A",
+          "B"
+        ],
+        "entities": [],
+        "events": [],
+        "months": []
       }
     }
   ],

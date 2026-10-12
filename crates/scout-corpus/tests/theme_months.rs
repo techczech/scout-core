@@ -559,8 +559,24 @@ fn an_empty_query_a_corpus_only_query_and_a_corpus_with_a_field_all_equal_facets
 #[test]
 fn a_blank_or_padded_bound_is_refused_and_only_an_absent_one_is_inferred() {
     let fx = fixture();
+    // A bare year is no month either, however it is padded to the seven
+    // bytes of one (`"2026   "` was taken as the year 2026 before).
     for bad in [
-        "", " ", "  ", "\t", " 2026-02", "2026-02 ", "2026", "2026-2",
+        "",
+        " ",
+        "  ",
+        "\t",
+        " 2026-02",
+        "2026-02 ",
+        "2026",
+        "2026-2",
+        "2026   ",
+        "   2026",
+        " 2026  ",
+        "2026\u{a0} ",
+        "2026-13",
+        "2026-00",
+        "2026-1 ",
     ] {
         for from in [true, false] {
             let mut q = ThemeMonthsQuery {

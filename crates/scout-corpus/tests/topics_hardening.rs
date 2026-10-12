@@ -239,7 +239,14 @@ fn regexes_and_repeated_fields_beside_slash_values() {
     assert_eq!(n("event:2026-09/E21"), 4);
     assert_eq!(n("event:2026-09/E21 /proof/i"), 4);
     assert_eq!(n("event:2026-09/E21 /item 3/"), 1);
-    assert_eq!(n("event:2026-09/E22 event:2026-09/E21"), 4, "last wins");
+    // Two events: an item must be in both (it was "the last wins" before
+    // engine 13); no item of the fixture is.
+    assert_eq!(n("event:2026-09/E22 event:2026-09/E21"), 0, "both");
+    assert_eq!(
+        n("event:2026-09/E21 event:2026-09/e21"),
+        4,
+        "the same twice"
+    );
     assert_eq!(n("theme:\"AI/ML and proofs\" /proof/"), 2);
 }
 
@@ -430,13 +437,13 @@ fn constructs_are_read_only_at_token_start() {
     assert_eq!(p.any_of[0].len(), 1, "one phrase term");
     // A URL holding `theme:` is one term, not a theme filter.
     let p = Plan::parse("https://example.org/theme:Foo").unwrap();
-    assert!(p.filter.theme.is_none());
+    assert!(p.filter.theme.is_empty());
     assert!(p.filter.is_empty());
     let p = Plan::parse("notes/theme:Foo proof").unwrap();
     assert!(p.filter.is_empty());
     assert!(p.has_positive());
     let p = Plan::parse("x(theme:Foo) theme:Bar").unwrap();
-    assert_eq!(p.filter.theme.as_deref(), Some("Bar"));
+    assert_eq!(p.filter.theme, ["Bar"]);
 }
 
 // ---------- round 3 ----------

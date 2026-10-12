@@ -23,6 +23,7 @@ use crate::ngrams::{self, NgramRequest, NgramResults};
 use crate::register::RegistryStore;
 pub use crate::register::{AddCorpus, Removed};
 use crate::registry::{self, CorpusConfig, Preset, Registry};
+pub use crate::search::Sort;
 use crate::search::{self, CitedPassage, PassageId, SearchRequest, SearchResults};
 use crate::semantic::{self, store, Embedder, Freshness, SearchMode};
 use crate::similar::{self, SimilarRequest, SimilarResults};
@@ -110,6 +111,11 @@ pub struct SearchQuery {
     /// `auto` (hybrid where the engine has an embedder and the corpus has
     /// current vectors, else full text), `fts`, `semantic` or `hybrid`.
     pub mode: SearchMode,
+    /// `relevance` (the default), `newest` or `oldest`: the order of the
+    /// documents. A date order is a full-text search (vectors rank by
+    /// relevance only), and with one the query may be empty or name only
+    /// corpora: every document is then listed.
+    pub sort: Sort,
 }
 
 impl Default for SearchQuery {
@@ -120,6 +126,7 @@ impl Default for SearchQuery {
             limit: 20,
             passage: false,
             mode: SearchMode::Auto,
+            sort: Sort::Relevance,
         }
     }
 }
@@ -838,8 +845,12 @@ impl Engine {
     }
 
     pub fn search(&self, q: &SearchQuery) -> Result<Reply<SearchResults>> {
-        if q.query.trim().is_empty() {
+        let dated = q.sort != Sort::Relevance;
+        if q.query.trim().is_empty() && !dated {
             bail!("empty query");
+        }
+        if dated && matches!(q.mode, SearchMode::Semantic | SearchMode::Hybrid) {
+            bail!("sort newest or oldest is a full-text search; it does not combine with semantic or hybrid");
         }
         let mut notes = vec![];
         // `in:` in the query selects corpora when `in` does not.
@@ -852,7 +863,12 @@ impl Engine {
         let mut req = SearchRequest::new(q.query.clone());
         req.limit = q.limit;
         req.whole_passage = q.passage;
-        if q.mode == SearchMode::Fts || (q.mode == SearchMode::Auto && self.embedder.is_none()) {
+        req.sort = q.sort;
+        // A date order never ranks by vectors.
+        if dated
+            || q.mode == SearchMode::Fts
+            || (q.mode == SearchMode::Auto && self.embedder.is_none())
+        {
             let body = search_all(&corpora, &req)?;
             return Ok(Reply { body, notes });
         }
@@ -966,10 +982,15 @@ impl Engine {
 
     /// Topic-layer facets over the documents `search` would return for the
     /// same query (the full-text and filter match, all of it, not `limit`).
+    ///
+    /// - A bare query (empty, or `in:` alone) counts every tagged
+    ///   document with an indexed passage ([`search::counted_docs`]).
+    /// - Themes, entities, events and `ai` are counted under the whole
+    ///   query. The month facet is counted under the query WITHOUT its
+    ///   `month:` terms (months are ORed, so each month's count is what
+    ///   that month holds under the rest of the query, selected or not).
+    /// - Every count comes from the one selection search runs.
     pub fn facets(&self, q: &FacetsQuery) -> Result<Reply<FacetsResults>> {
-        if q.query.trim().is_empty() {
-            bail!("empty query");
-        }
         let mut notes = vec![];
         let named = search::query_corpora(&q.query)?;
         let ids = if q.in_.is_empty() {
@@ -981,7 +1002,10 @@ impl Engine {
         let mut counter = FacetCounter::default();
         counter.event_floor(q.min_event_items);
         let mut used = Vec::new();
-        let mut plan = search::Plan::parse(&q.query)?;
+        let plan = search::Plan::parse(&q.query)?;
+        // The month facet's own counter, when the query picks months.
+        let months_plan = (!plan.filter.month.is_empty()).then(|| plan.without_months());
+        let mut months = FacetCounter::default();
         let mut searched = Vec::new();
         for c in &corpora {
             if named.is_empty() || named.iter().any(|n| n == c.id()) {
@@ -993,10 +1017,13 @@ impl Engine {
             if per_corpus {
                 counter.corpus(c.id());
             }
-            let (p, docs) = search::matching_docs(conn, &q.query)?;
-            plan = p;
-            for d in &docs {
+            for d in &search::counted_docs(conn, &plan)? {
                 counter.add(d);
+            }
+            if let Some(p) = &months_plan {
+                for d in &search::counted_docs(conn, p)? {
+                    months.add(d);
+                }
             }
             counter.add_event_records(&crate::events::load(conn)?);
             if q.min_event_items > 1 {
@@ -1017,6 +1044,10 @@ impl Engine {
                 have.join(", ")
             );
         }
+        let mut facets = counter.facets(q.top);
+        if months_plan.is_some() {
+            facets.month = months.facets(0).month;
+        }
         Ok(Reply {
             body: FacetsResults {
                 schema_version: crate::topics::SCHEMA_VERSION,
@@ -1027,7 +1058,7 @@ impl Engine {
                 tagged_documents: counter.tagged,
                 top: q.top,
                 min_event_items: (q.min_event_items > 1).then_some(q.min_event_items),
-                facets: counter.facets(q.top),
+                facets,
             },
             notes,
         })
@@ -1035,12 +1066,17 @@ impl Engine {
 
     /// The theme × month matrix: documents per theme and layer month, in
     /// one call. A month's documents are the ones [`Engine::facets`]
-    /// counts for the same query with `month:YYYY-MM` added, chosen by
-    /// the same function ([`search::month_docs`]: the query's plan with
-    /// that month as its filter), whatever the query is: none, a corpus
-    /// alone (`in:`), fields, terms. A document counts once per theme it
-    /// carries. So a cell is the count `facets` gives that theme for the
-    /// same query with `month:YYYY-MM` added.
+    /// counts for the same query with `month:YYYY-MM` added, whatever the
+    /// query is: none, a corpus alone (`in:`), fields, terms. It is made
+    /// in one pass: the selection `facets` runs for the query
+    /// ([`search::counted_docs`]) is run once per corpus, and each tagged
+    /// document goes in the column of its month, the month the `month:`
+    /// filter compares ([`crate::topics::TopicInfo::layer_month`]; the
+    /// filter is equality with it, so "the query with `month:M` added"
+    /// selects exactly the selected documents whose month is `M`). A
+    /// document counts once per theme it carries. So a cell is the count
+    /// `facets` gives that theme for the same query with `month:YYYY-MM`
+    /// added.
     ///
     /// A bound is a month `YYYY-MM` or is absent; an absent one is the
     /// documents' own first or last month. A blank bound is not absent.
@@ -1058,7 +1094,7 @@ impl Engine {
         let bound = |what: &str, v: &Option<String>| -> Result<Option<String>> {
             match v.as_deref() {
                 None => Ok(None),
-                Some(m) if m.len() == 7 && crate::topics::valid_month(m) => Ok(Some(m.to_string())),
+                Some(m) if crate::topics::exact_month(m) => Ok(Some(m.to_string())),
                 Some(m) => bail!("--{what} {m:?} is not a month YYYY-MM"),
             }
         };
@@ -1071,7 +1107,7 @@ impl Engine {
         let query = q.query.trim();
         let mut notes = vec![];
         let plan = search::Plan::parse(query)?;
-        if let Some(m) = &plan.filter.month {
+        if let Some(m) = plan.filter.month.first() {
             bail!(
                 "month:{m} in the query: theme-months counts every month of its range, so a query does not pick one; use --from and --to"
             );
@@ -1091,23 +1127,22 @@ impl Engine {
                 continue;
             }
             let conn = index::open_existing(&c.config, c.index_path())?;
-            // The months to ask for: those some document of the corpus
-            // has, within the bounds. (No other month has a document
-            // under any query: `month:` is equality with it.)
-            let months: std::collections::BTreeSet<String> = crate::filter::load_docs(&conn)?
-                .into_values()
-                .filter_map(|d| d.topic.and_then(|t| t.month))
-                .filter(|m| m.len() == 7 && crate::topics::valid_month(m))
-                .filter(|m| {
-                    !(from.as_ref().is_some_and(|f| m < f) || to.as_ref().is_some_and(|t| m > t))
-                })
-                .collect();
-            for month in months {
-                for d in search::month_docs(&conn, &plan, &month)? {
-                    // `month:` keeps tagged documents only.
-                    let themes = d.topic.map(|t| t.themes).unwrap_or_default();
-                    docs.push((month.clone(), themes));
+            // One selection per corpus; each document then goes in its
+            // month's column. `month:` keeps tagged documents only, and
+            // only a month `YYYY-MM` within the bounds is a column.
+            for d in search::counted_docs(&conn, &plan)? {
+                let Some(t) = d.topic else {
+                    continue;
+                };
+                let Some(month) = t.layer_month().filter(|m| crate::topics::exact_month(m)) else {
+                    continue;
+                };
+                if from.as_deref().is_some_and(|f| month < f)
+                    || to.as_deref().is_some_and(|l| month > l)
+                {
+                    continue;
                 }
+                docs.push((month.to_string(), t.themes));
             }
             used.push(c.id().to_string());
         }
@@ -1193,7 +1228,7 @@ impl Engine {
     pub fn topics(&self, q: &TopicsQuery) -> Result<Reply<TopicsResults>> {
         let field: TopicField = q.field.parse()?;
         let filter = DocFilter {
-            month: q.month.clone(),
+            month: q.month.iter().cloned().collect(),
             ..DocFilter::default()
         };
         filter.validate()?;

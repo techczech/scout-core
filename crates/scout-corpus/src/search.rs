@@ -14,7 +14,9 @@
 //!   `tag:` (a highlight's tags or a document's topics) and `co:` (a
 //!   highlight's colour).
 //! - A query with no positive term but with filters or a regex lists every
-//!   passage that passes them (score 0).
+//!   passage that passes them (score 0). A bare query (empty, or `in:`
+//!   alone) lists nothing, unless a date order is asked for ([`Sort`]):
+//!   then it lists every document.
 //! - Title- and topic-aware: a passage matches an AND-group when it holds at
 //!   least one of the group's terms and every other term is in the passage
 //!   or in its document's title, topics or summary. Its document score is
@@ -37,6 +39,65 @@ use std::path::Path;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// The order of a search's documents.
+///
+/// - `Relevance` (the default): by score, as search always ordered them.
+/// - `Newest` / `Oldest`: by the document's date, the `date` every result
+///   carries (see [`date_key`]); undated documents last in both; ties by
+///   corpus, then path. With one of these a query needs no term or filter:
+///   every document with an indexed passage is listed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sort {
+    #[default]
+    Relevance,
+    Newest,
+    Oldest,
+}
+
+impl Sort {
+    fn is_relevance(&self) -> bool {
+        *self == Sort::Relevance
+    }
+}
+
+impl std::str::FromStr for Sort {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "relevance" => Sort::Relevance,
+            "newest" => Sort::Newest,
+            "oldest" => Sort::Oldest,
+            other => bail!("unknown sort {other:?}: use relevance, newest or oldest"),
+        })
+    }
+}
+
+/// What `Newest` and `Oldest` order a document by: the day of its `date`
+/// (a year or a month counts as its first day, a timestamp as its day;
+/// [`crate::filter::date_floor`], the reading the date filters use), then
+/// the `date` text itself, so two timestamps of one day keep their order.
+/// `None` for a document without a date or with one that does not parse:
+/// it goes last in both orders.
+pub fn date_key(date: Option<&str>) -> Option<(String, &str)> {
+    let d = date?;
+    Some((crate::filter::date_floor(d)?, d.trim()))
+}
+
+/// `a` before `b` under `sort` (`Newest` or `Oldest`), by date alone:
+/// dated before undated, then the date descending or ascending. Callers
+/// break ties by corpus and path.
+fn by_date(sort: Sort, a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    match (date_key(a), date_key(b)) {
+        (None, None) => Equal,
+        (Some(_), None) => Less,
+        (None, Some(_)) => Greater,
+        (Some(x), Some(y)) if sort == Sort::Newest => y.cmp(&x),
+        (Some(x), Some(y)) => x.cmp(&y),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
     pub query: String,
@@ -46,6 +107,8 @@ pub struct SearchRequest {
     pub hits_per_doc: usize,
     /// Quote the whole passage instead of the hit sentence.
     pub whole_passage: bool,
+    /// The order of the documents (default: relevance).
+    pub sort: Sort,
 }
 
 impl SearchRequest {
@@ -55,6 +118,7 @@ impl SearchRequest {
             limit: 20,
             hits_per_doc: 3,
             whole_passage: false,
+            sort: Sort::Relevance,
         }
     }
 }
@@ -190,6 +254,20 @@ impl Plan {
 
     pub fn has_positive(&self) -> bool {
         !self.any_of.is_empty()
+    }
+
+    /// A plan that selects nothing by itself: no positive term and no
+    /// filter (an empty query, or one that only names corpora with `in:`).
+    pub fn is_bare(&self) -> bool {
+        !self.has_positive() && !self.has_selector()
+    }
+
+    /// The plan without its `month:` terms: what the month facet is
+    /// counted under.
+    pub(crate) fn without_months(&self) -> Plan {
+        let mut plan = self.clone();
+        plan.filter.month.clear();
+        plan
     }
 
     /// Anything that selects passages without a positive term.
@@ -404,6 +482,10 @@ pub struct SearchResults {
     /// full-text search (whose JSON is unchanged).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// `newest` or `oldest` when the documents are in date order; absent
+    /// in relevance order (whose JSON is unchanged).
+    #[serde(skip_serializing_if = "Sort::is_relevance")]
+    pub sort: Sort,
 }
 
 fn round6(x: f64) -> f64 {
@@ -617,8 +699,11 @@ pub fn search_corpus(
         total_passages: 0,
         results: vec![],
         mode: None,
+        sort: req.sort,
     };
-    if !plan.has_positive() && !plan.has_selector() {
+    // A bare query lists nothing, but in date order, where it lists every
+    // document.
+    if plan.is_bare() && req.sort.is_relevance() {
         return Ok(res);
     }
     let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
@@ -666,6 +751,13 @@ pub fn search_corpus(
         .first()
         .map(|(r, ps)| doc_score(r, ps))
         .unwrap_or(0.0);
+    // Relevance order is the order above and nothing below touches it;
+    // only `Newest` / `Oldest` reorder, by date, then path (the sort is
+    // stable over the path order of equal scores, and the key is total).
+    if !req.sort.is_relevance() {
+        let date = |rel: &str| docs.get(rel).and_then(|d| d.date.as_deref());
+        groups.sort_by(|a, b| by_date(req.sort, date(&a.0), date(&b.0)).then(a.0.cmp(&b.0)));
+    }
 
     let rules = normalize::compile_rules(&cfg.boilerplate)?;
     let mut get_pass = conn
@@ -842,9 +934,17 @@ pub fn matching_docs(conn: &Connection, query: &str) -> Result<(Plan, Vec<DocInf
 /// [`matching_docs`], and the only one. `scout facets` and the cells of
 /// `scout topics theme-months` both count over what this returns.
 fn plan_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
-    if !plan.has_positive() && !plan.has_selector() {
+    if plan.is_bare() {
         return Ok(vec![]);
     }
+    selected_docs(conn, plan)
+}
+
+/// The selection itself, the one implementation: the documents that pass
+/// the plan's filter and have a passage the plan keeps, in key order. A
+/// bare plan keeps every passage, so it gives every document with an
+/// indexed passage.
+fn selected_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
     let terms = plan.terms();
     let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
     let rows = collect_rows(conn, plan, &terms, &docs)?;
@@ -855,15 +955,19 @@ fn plan_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
         .collect())
 }
 
-/// The documents [`matching_docs`] returns for `plan`'s query with
-/// `month:<month>` added: the plan with that month as its `month:`
-/// filter, through the same selection. (A `month:` field changes nothing
-/// of a parsed query but that filter.)
-pub(crate) fn month_docs(conn: &Connection, plan: &Plan, month: &str) -> Result<Vec<DocInfo>> {
-    let mut plan = plan.clone();
-    plan.filter.month = Some(month.to_string());
-    plan.filter.validate()?;
-    plan_docs(conn, &plan)
+/// The documents `scout facets` and `scout topics theme-months` count for
+/// a plan, through the one selection ([`selected_docs`]): what
+/// [`matching_docs`] returns, and for a bare plan (an empty query, or
+/// `in:` alone) every TAGGED document with an indexed passage. Those are
+/// the documents a topic filter can return: adding `theme:V`, `entity:V`,
+/// `event:V` or `month:V` to a bare query selects from exactly them, so a
+/// count over them is the count of that search.
+pub(crate) fn counted_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
+    let mut docs = selected_docs(conn, plan)?;
+    if plan.is_bare() {
+        docs.retain(|d| d.topic.is_some());
+    }
+    Ok(docs)
 }
 
 /// A passage row as the index stores it, for building a hit.
@@ -945,6 +1049,17 @@ pub(crate) fn doc_result(
 /// Merge per-corpus results: rank desc (score / the corpus's best score),
 /// then score desc, corpus, path. With one corpus this is score order.
 pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> Result<SearchResults> {
+    merge_sorted(query, parts, limit, Sort::Relevance)
+}
+
+/// [`merge`] in the order `sort` names: relevance as above; `Newest` /
+/// `Oldest` by each result's `date`, undated last, then corpus, path.
+pub fn merge_sorted(
+    query: &str,
+    parts: Vec<SearchResults>,
+    limit: usize,
+    sort: Sort,
+) -> Result<SearchResults> {
     let plan = Plan::parse(query)?;
     let mut out = SearchResults {
         schema_version: SCHEMA_VERSION,
@@ -956,6 +1071,7 @@ pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> Result<Sea
         total_passages: 0,
         results: vec![],
         mode: None,
+        sort,
     };
     for p in parts {
         out.corpora.extend(p.corpora);
@@ -963,13 +1079,21 @@ pub fn merge(query: &str, parts: Vec<SearchResults>, limit: usize) -> Result<Sea
         out.total_passages += p.total_passages;
         out.results.extend(p.results);
     }
-    out.results.sort_by(|a, b| {
-        b.rank
-            .total_cmp(&a.rank)
-            .then(b.score.total_cmp(&a.score))
-            .then(a.corpus.cmp(&b.corpus))
-            .then(a.rel_path.cmp(&b.rel_path))
-    });
+    if sort.is_relevance() {
+        out.results.sort_by(|a, b| {
+            b.rank
+                .total_cmp(&a.rank)
+                .then(b.score.total_cmp(&a.score))
+                .then(a.corpus.cmp(&b.corpus))
+                .then(a.rel_path.cmp(&b.rel_path))
+        });
+    } else {
+        out.results.sort_by(|a, b| {
+            by_date(sort, a.date.as_deref(), b.date.as_deref())
+                .then(a.corpus.cmp(&b.corpus))
+                .then(a.rel_path.cmp(&b.rel_path))
+        });
+    }
     out.results.truncate(limit);
     Ok(out)
 }

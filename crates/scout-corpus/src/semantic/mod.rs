@@ -193,6 +193,7 @@ pub fn semantic_corpus(
         total_passages: kept,
         results,
         mode: Some("semantic".into()),
+        sort: search::Sort::Relevance,
     })
 }
 

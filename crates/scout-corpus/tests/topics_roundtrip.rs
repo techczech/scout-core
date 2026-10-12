@@ -198,15 +198,15 @@ fn filter_serialisation_round_trips_every_generated_label() {
                 ..Default::default()
             },
             DocFilter {
-                theme: v.clone(),
+                theme: vec![l.clone()],
                 ..Default::default()
             },
             DocFilter {
-                entity: v.clone(),
+                entity: vec![l.clone()],
                 ..Default::default()
             },
             DocFilter {
-                event: v.clone(),
+                event: vec![l.clone()],
                 ..Default::default()
             },
         ] {
@@ -218,14 +218,15 @@ fn filter_serialisation_round_trips_every_generated_label() {
         round(&DocFilter {
             author: v.clone(),
             title: Some(other.clone()),
-            theme: v.clone(),
-            entity: Some(other),
-            event: v.clone(),
+            // Several values of a field: one term each, in order.
+            theme: vec![l.clone(), other.clone()],
+            entity: vec![other.clone()],
+            event: vec![l.clone(), other, l.clone()],
             after: Some("2020".into()),
             before: Some("2026-10".into()),
             year: Some(2024),
             ai: Some(i % 2 == 0),
-            month: Some("2026-09".into()),
+            month: vec!["2026-09".into(), "2025".into()],
             ..Default::default()
         });
         // List fields are comma lists, so an item cannot hold a comma.

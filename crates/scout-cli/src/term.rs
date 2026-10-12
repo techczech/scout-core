@@ -75,12 +75,24 @@ pub fn safe(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// `s` in double quotes for a terminal: through [`safe`] first, then
-/// quoted as Rust quotes a string (a `"` or a `\` in it escaped). How a
-/// view shows a query, a term or a pattern it was given: no view writes
-/// `{:?}` of a string itself.
+/// `s` in double quotes for a terminal: through [`safe`] first, then a
+/// `\` before each `"` and each `\` of its own, and nothing else changed:
+/// what [`safe`] keeps (a tab, a no-break space, the zero width joiner of
+/// an emoji sequence, the non-joiner) is written as itself, never as an
+/// escape of the language. How a view shows a query, a term or a pattern
+/// it was given: no view writes `{:?}` of a string itself.
 pub fn quoted(s: &str) -> String {
-    format!("{:?}", safe(s))
+    let safe = safe(s);
+    let mut out = String::with_capacity(safe.len() + 2);
+    out.push('"');
+    for c in safe.chars() {
+        if matches!(c, '"' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 /// [`safe`] on each line of a text that is a document of several lines: a
@@ -141,6 +153,19 @@ mod tests {
             assert!(!q.chars().any(acts), "{q:?}");
             assert!(!q.contains("\\u{") && !q.contains("\\n"), "{q}");
         }
+        // What `safe` keeps is written as itself, not as an escape: a
+        // tab, a no-break space, a ZWJ emoji sequence, the non-joiner, an
+        // apostrophe, a combining mark.
+        for keep in [
+            "a\tb",
+            "a\u{a0}b",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+            "\u{645}\u{6cc}\u{200c}\u{62e}\u{648}\u{627}\u{647}\u{645}",
+            "O'Reilly e\u{301}",
+        ] {
+            assert_eq!(quoted(keep), format!("\"{keep}\""), "{keep:?}");
+        }
+        assert_eq!(quoted("\\\""), "\"\\\\\\\"\"");
     }
 
     #[test]

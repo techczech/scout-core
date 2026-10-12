@@ -57,3 +57,27 @@ describe("has_image filter", () => {
     expect(scopeToFilters("img")).toEqual({ has_image: true });
   });
 });
+
+describe("repeated fields", () => {
+  test("theme, entity, event and month keep every value; the scalar keeps the last", () => {
+    const p = parseSearch('theme:A proof theme:"B c" entity:X ENTITY:Y event:e1 event:e2 month:2026 month:2026-02 in:one');
+    expect(p.themes).toEqual(["A", "B c"]);
+    expect(p.entities).toEqual(["X", "Y"]);
+    expect(p.events).toEqual(["e1", "e2"]);
+    expect(p.months).toEqual(["2026", "2026-02"]);
+    expect([p.theme, p.entity, p.event, p.month]).toEqual(["B c", "Y", "e2", "2026-02"]);
+    expect(p.in).toBe("one");
+    expect(p.positive_terms).toEqual(["proof"]);
+  });
+
+  test("every other field keeps the last value and has no list", () => {
+    const p = parseSearch("au:a au:b ti:a ti:b tag:a tag:b in:a in:b lang:a lang:b ai:true ai:false y:2001 y:2002");
+    expect([p.author, p.title, p.tag, p.in, p.lang, p.ai, p.date]).toEqual(["b", "b", "b", "b", "b", "false", "2002"]);
+    expect([p.themes, p.entities, p.events, p.months]).toEqual([[], [], [], []]);
+  });
+
+  test("an empty value is kept in the list, and a type shortcut is no list field", () => {
+    expect(parseSearch("theme: theme:A").themes).toEqual(["", "A"]);
+    expect(parseSearch("tw:theme:A").themes).toEqual([]);
+  });
+});

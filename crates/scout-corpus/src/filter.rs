@@ -27,40 +27,110 @@ use std::collections::BTreeMap;
 /// - Topic layer ([`crate::topics`]): `theme`, `entity`, `event`: exact
 ///   name or id, case-insensitive; `ai`: the item's `ai_related`; `month`:
 ///   the layer month, `YYYY-MM` or `YYYY`. A document without topic tags
-///   fails every topic filter (`ai:false` included).
+///   fails every topic filter (`ai:false` included). These four take
+///   several values, one per query term: a document must carry EVERY
+///   theme, EVERY entity and be in EVERY event named, and be in ANY of
+///   the months named (a document has one month).
 ///
 /// A document without a parseable date fails every date filter; one
 /// without the field fails the field's filter.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+///
+/// As JSON (`plan.filters`, `filters`) only the set keys appear. A topic
+/// field with one value is `"theme": "A"`, as it always was; with several
+/// values `theme` is the last one and `themes` lists them all in query
+/// order (`entity` / `entities`, `event` / `events`, `month` / `months`
+/// alike), so a reader of the string key still parses.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DocFilter {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lang: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub genre: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub kind: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Every theme the document must carry (AND).
+    pub theme: Vec<String>,
+    /// Every entity the document must carry (AND).
+    pub entity: Vec<String>,
+    /// Every event the document must be in (AND).
+    pub event: Vec<String>,
     pub ai: Option<bool>,
+    /// The months the document may be in (OR): `YYYY-MM` or `YYYY`.
+    pub month: Vec<String>,
+}
+
+/// [`DocFilter`] as JSON: the keys it always had, in their order, and a
+/// list key after each topic field that has two or more values.
+#[derive(Serialize)]
+struct FilterJson<'a> {
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    lang: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    genre: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub month: Option<String>,
+    after: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    year: Option<i32>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    source: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    kind: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    themes: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entity: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entities: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ai: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    month: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    months: Option<&'a [String]>,
+}
+
+impl Serialize for DocFilter {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        fn several(v: &[String]) -> Option<&[String]> {
+            (v.len() > 1).then_some(v)
+        }
+        FilterJson {
+            lang: &self.lang,
+            genre: &self.genre,
+            after: &self.after,
+            before: &self.before,
+            year: self.year,
+            source: &self.source,
+            kind: &self.kind,
+            author: &self.author,
+            title: &self.title,
+            theme: self.theme.last(),
+            themes: several(&self.theme),
+            entity: self.entity.last(),
+            entities: several(&self.entity),
+            event: self.event.last(),
+            events: several(&self.event),
+            ai: self.ai,
+            month: self.month.last(),
+            months: several(&self.month),
+        }
+        .serialize(s)
+    }
 }
 
 /// One indexed document's metadata.
@@ -140,7 +210,7 @@ impl DocFilter {
                 }
             }
         }
-        if let Some(m) = &self.month {
+        for m in &self.month {
             if !crate::topics::valid_month(m) {
                 bail!("month:{m}: expected YYYY-MM or YYYY");
             }
@@ -150,11 +220,11 @@ impl DocFilter {
 
     /// Does the filter use a topic-layer field?
     pub fn has_topic_terms(&self) -> bool {
-        self.theme.is_some()
-            || self.entity.is_some()
-            || self.event.is_some()
+        !self.theme.is_empty()
+            || !self.entity.is_empty()
+            || !self.event.is_empty()
             || self.ai.is_some()
-            || self.month.is_some()
+            || !self.month.is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -188,23 +258,23 @@ impl DocFilter {
                 t.push(format!("{k}:{}", q(&v.join(","))));
             }
         }
-        for (k, v) in [
-            ("au", &self.author),
-            ("ti", &self.title),
-            ("theme", &self.theme),
-            ("entity", &self.entity),
-            ("event", &self.event),
-        ] {
+        for (k, v) in [("au", &self.author), ("ti", &self.title)] {
             if let Some(v) = v {
                 t.push(format!("{k}:{}", q(v)));
             }
         }
+        // One term per value, as the grammar reads them back.
+        for (k, v) in [
+            ("theme", &self.theme),
+            ("entity", &self.entity),
+            ("event", &self.event),
+        ] {
+            t.extend(v.iter().map(|v| format!("{k}:{}", q(v))));
+        }
         if let Some(a) = self.ai {
             t.push(format!("ai:{a}"));
         }
-        if let Some(m) = &self.month {
-            t.push(format!("month:{}", q(m)));
-        }
+        t.extend(self.month.iter().map(|m| format!("month:{}", q(m))));
         t.join(" ")
     }
 
@@ -248,11 +318,12 @@ impl DocFilter {
             let Some(t) = &d.topic else {
                 return false;
             };
-            if self.theme.as_deref().is_some_and(|v| !t.has_theme(v))
-                || self.entity.as_deref().is_some_and(|v| !t.has_entity(v))
-                || self.event.as_deref().is_some_and(|v| !t.has_event(v))
+            // Every theme, entity and event named; any of the months.
+            if !self.theme.iter().all(|v| t.has_theme(v))
+                || !self.entity.iter().all(|v| t.has_entity(v))
+                || !self.event.iter().all(|v| t.has_event(v))
                 || self.ai.is_some_and(|v| t.ai_related != Some(v))
-                || self.month.as_deref().is_some_and(|v| !t.in_month(v))
+                || !(self.month.is_empty() || self.month.iter().any(|v| t.in_month(v)))
             {
                 return false;
             }
@@ -307,7 +378,9 @@ fn list(v: &str) -> Vec<String> {
 
 /// Apply the document-level fields of a parsed `@scout/query` query to a
 /// filter: `after: before: y: lang: genre: source: zo: ty: au: ti:` and the
-/// topic-layer fields `theme: entity: event: ai: month:`.
+/// topic-layer fields `theme: entity: event: ai: month:`. A repeated
+/// field keeps its last value, but for `theme: entity: event: month:`,
+/// where every term counts (each one must have a value).
 /// `y:2016` sets the year; `y:2010-2015` (and every other `y:` / `date:`
 /// form) becomes the `after` / `before` range of the grammar's `dateRange`.
 /// Returns the corpus ids of `in:`.
@@ -368,13 +441,21 @@ pub fn apply_query_fields(p: &scout_query::ParsedQuery, f: &mut DocFilter) -> Re
     }
     f.author = nonempty("au", &p.author)?;
     f.title = nonempty("ti", &p.title)?;
-    f.theme = nonempty("theme", &p.theme)?;
-    f.entity = nonempty("entity", &p.entity)?;
-    f.event = nonempty("event", &p.event)?;
+    let each = |name: &str, vs: &[String]| -> Result<Vec<String>> {
+        vs.iter()
+            .map(|v| match v.trim() {
+                "" => bail!("{name}: needs a value"),
+                v => Ok(v.to_string()),
+            })
+            .collect()
+    };
+    f.theme = each("theme", &p.themes)?;
+    f.entity = each("entity", &p.entities)?;
+    f.event = each("event", &p.events)?;
     f.ai = nonempty("ai", &p.ai)?
         .map(|v| crate::topics::parse_ai(&v))
         .transpose()?;
-    f.month = nonempty("month", &p.month)?;
+    f.month = each("month", &p.months)?;
     let corpora = match nonempty("in", &p.in_)? {
         Some(v) => list(&v),
         None => vec![],
@@ -461,15 +542,18 @@ pub fn filtered_docs(conn: &Connection, f: &DocFilter) -> Result<BTreeMap<String
     // `event:` takes a lasting id, a merged-away id or a monthly id; each
     // names the lasting event this index resolves it to.
     let resolved;
-    let f = match &f.event {
-        Some(e) => {
-            resolved = DocFilter {
-                event: Some(crate::events::resolve_in(conn, e)?),
-                ..f.clone()
-            };
-            &resolved
-        }
-        None => f,
+    let f = if f.event.is_empty() {
+        f
+    } else {
+        resolved = DocFilter {
+            event: f
+                .event
+                .iter()
+                .map(|e| crate::events::resolve_in(conn, e))
+                .collect::<Result<_>>()?,
+            ..f.clone()
+        };
+        &resolved
     };
     all.retain(|_, d| f.matches(d));
     Ok(all)

@@ -33,8 +33,8 @@
 //!
 //! - An operation appends ONE line: the id, `at`, `date`, `by:
 //!   "dominik"`, the `key`, and one patch key holding a list of one name
-//!   (`entity_add` also `entity_type`, which the reader does not read:
-//!   an item's entities are plain names).
+//!   (`entity_add` also `entity_type`, which the reader keeps as the
+//!   type of that name, beside the item's list of names).
 //! - `undo` appends ONE line, `{id, at, date, by, key, undoes}`. The
 //!   reader then does not apply the line named, as if it were not in the
 //!   file. No value is computed or kept: the undo is exact whatever the
@@ -789,8 +789,8 @@ impl CorrectionEditor {
     /// Add the entity `name` to the item `key`. The name is free text:
     /// trimmed, no control character, at most [`MAX_NAME_CHARS`]
     /// characters. `kind` is one of [`ENTITY_TYPES`]; it is kept on the
-    /// line and the reader does not read it. Refused: an entity the item
-    /// has.
+    /// line and the reader gives it to the name as its type
+    /// (`TopicInfo::entity_types`). Refused: an entity the item has.
     pub fn add_entity(&self, key: &str, name: &str, kind: &str) -> Result<Corrected> {
         let name = text("the entity", name)?;
         if name.chars().count() > MAX_NAME_CHARS {
@@ -931,6 +931,17 @@ impl CorrectionEditor {
             list.push(value.clone());
         } else {
             list.retain(|x| fold(x) != f);
+        }
+        // An entity's type goes with its name: the added one has the
+        // line's type, the one taken off has none.
+        match (op, kind) {
+            (Op::EntityAdd, Some(kind)) => {
+                want.entity_types.insert(f.clone(), kind.to_string());
+            }
+            (Op::EntityRemove, _) => {
+                want.entity_types.remove(&f);
+            }
+            _ => {}
         }
         for (k, it) in &state.items {
             let Some(now) = after.get(k) else {

@@ -14,6 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct FacetItem {
     pub value: String,
     pub count: usize,
+    /// Entities: the entity's type, when a counted document gives it one
+    /// (the most frequent type among the counted documents; ties: the
+    /// first in type-name order).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// Events: the event's name (its record's, else the layer's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -110,6 +115,7 @@ impl ValueCounts {
                 FacetItem {
                     value,
                     count: *count,
+                    kind: None,
                     name: None,
                     corpus: None,
                 }
@@ -164,6 +170,8 @@ pub struct FacetCounter {
     pub tagged: usize,
     theme: ValueCounts,
     entity: ValueCounts,
+    /// Folded entity name -> (type -> documents giving it that type).
+    entity_kinds: BTreeMap<String, BTreeMap<String, usize>>,
     month: ValueCounts,
     /// One entry per corpus fed, in feeding order.
     events: Vec<CorpusEvents>,
@@ -205,7 +213,19 @@ impl FacetCounter {
         self.tagged += 1;
         self.theme.add_doc(&t.themes);
         self.entity.add_doc(&t.entities);
-        self.month.add_doc(t.month.iter());
+        // Once per document and name, as the count is.
+        let typed: BTreeSet<String> = t.entities.iter().map(|e| fold(e)).collect();
+        for name in typed {
+            if let Some(kind) = t.entity_types.get(&name) {
+                *self
+                    .entity_kinds
+                    .entry(name)
+                    .or_default()
+                    .entry(kind.clone())
+                    .or_default() += 1;
+            }
+        }
+        self.month.add_doc(t.layer_month().map(String::from).iter());
         let ev = self.current();
         ev.counts.add_doc(t.event_ids());
         // The layer's name belongs to the tag row's own event id; it names
@@ -289,12 +309,28 @@ impl FacetCounter {
         Facet { distinct, items }
     }
 
+    /// The entity facet, each value with its type: the most frequent one
+    /// among the counted documents (ties: the first in type-name order).
+    fn entity_facet(&self, top: usize) -> Facet {
+        let mut f = self.entity.facet(top, false, |_| true);
+        for it in f.items.iter_mut() {
+            it.kind = self.entity_kinds.get(&fold(&it.value)).and_then(|kinds| {
+                let max = kinds.values().max()?;
+                kinds
+                    .iter()
+                    .find(|(_, c)| *c == max)
+                    .map(|(k, _)| k.clone())
+            });
+        }
+        f
+    }
+
     /// All four facets; `top` cuts themes, entities and events (0 = all);
     /// months are all listed, chronologically.
     pub fn facets(&self, top: usize) -> Facets {
         Facets {
             theme: self.theme.facet(top, false, |_| true),
-            entity: self.entity.facet(top, false, |_| true),
+            entity: self.entity_facet(top),
             event: self.event_facet(top),
             month: self.month.facet(0, true, |_| true),
             ai: self.ai.clone(),
@@ -305,7 +341,7 @@ impl FacetCounter {
     pub fn facet(&self, field: TopicField, top: usize) -> Facet {
         match field {
             TopicField::Theme => self.theme.facet(top, false, |_| true),
-            TopicField::Entity => self.entity.facet(top, false, |_| true),
+            TopicField::Entity => self.entity_facet(top),
             TopicField::Event => self.event_facet(top),
             TopicField::Month => self.month.facet(top, true, |_| true),
         }

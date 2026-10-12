@@ -81,7 +81,7 @@ pub use registry::{
     CiteStyle, CorpusConfig, CorpusKind, DocumentUnit, Preset, Registry, RegistryMissing,
 };
 pub use rowdist::RowDistBy;
-pub use search::{CitedPassage, PassageId, PassageNotFound, SearchRequest, SearchResults};
+pub use search::{CitedPassage, PassageId, PassageNotFound, SearchRequest, SearchResults, Sort};
 pub use semantic::{Embedder, HashEmbedder, SearchMode};
 pub use verify::VerifyResult;
 
@@ -208,7 +208,7 @@ pub fn search_all(corpora: &[Corpus], req: &SearchRequest) -> Result<SearchResul
             have.join(", ")
         );
     }
-    search::merge(&req.query, parts, req.limit)
+    search::merge_sorted(&req.query, parts, req.limit, req.sort)
 }
 
 /// A slice of the archive for the two-slice views: corpora plus a filter.
