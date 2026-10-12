@@ -84,6 +84,16 @@ impl Snapshot {
         })
     }
 
+    /// A snapshot of records that are in no folder.
+    #[cfg(test)]
+    pub fn of_records(records: Vec<EventRecord>) -> Snapshot {
+        Snapshot {
+            dir: PathBuf::new(),
+            set: EventSet::from_records(PathBuf::new(), records),
+            files: BTreeMap::new(),
+        }
+    }
+
     /// The record `id` names (ids compare under the reader's fold).
     pub fn record(&self, id: &str) -> Result<&EventRecord> {
         match self.set.records.get(&fold(id)) {
@@ -197,19 +207,13 @@ impl Snapshot {
                 .warnings
                 .iter()
                 .filter(|w| !known.contains(w))
-                .map(|w| format!("the reader would warn: {w}")),
+                .map(|w| new_warning(w)),
         );
         let keys: BTreeSet<&String> = expected.keys().chain(after.aliases.keys()).collect();
         for k in keys {
             let (want, got) = (expected.get(k), after.aliases.get(k));
             if want != got {
-                let show =
-                    |v: Option<&String>| v.map_or("no event".to_string(), |v| format!("{v:?}"));
-                faults.push(format!(
-                    "{k}: would be held by {}, where this operation means {}",
-                    show(got),
-                    show(want)
-                ));
+                faults.push(moved_fault(k, got, want));
             }
         }
         refuse(faults)
@@ -219,6 +223,21 @@ impl Snapshot {
     pub fn names_in_use(&self) -> Result<BTreeSet<String>> {
         event_seed::names_in_use(&self.dir, &self.set)
     }
+}
+
+/// The fault of a warning the reader would give and does not give now.
+pub(super) fn new_warning(w: &str) -> String {
+    format!("the reader would warn: {w}")
+}
+
+/// The fault of an id that would not resolve as the operation means.
+pub(super) fn moved_fault(k: &str, got: Option<&String>, want: Option<&String>) -> String {
+    let show = |v: Option<&String>| v.map_or("no event".to_string(), |v| format!("{v:?}"));
+    format!(
+        "{k}: would be held by {}, where this operation means {}",
+        show(got),
+        show(want)
+    )
 }
 
 /// `Ok` for no faults, else one error listing them and saying that

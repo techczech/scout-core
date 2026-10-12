@@ -13,13 +13,14 @@
 //! writes and the states of a merge line are in the notes of [`super`].
 
 use super::log::{By, MergeLine, MergeLog, Planned, UndoLine, MERGE_LOG};
-use super::store::{self, leftover_temps, still_as_read, Snapshot};
+use super::store::{self, leftover_temps, still_as_read, Rewrite, Snapshot};
+use super::unmerge_check::Folder;
 use super::{is_date, plain_text, EventEditor, MergeRequest, Step};
 use crate::events::EventRecord;
 use crate::normalize::fold;
 use anyhow::{bail, Result};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Why two records are not merged.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +179,78 @@ pub(super) enum LineState {
     Other(String),
 }
 
+/// An undo that would be accepted: what [`EventEditor::unmerge`] then
+/// writes.
+pub(super) struct UnmergePlan {
+    pub line: MergeLine,
+    /// Record `a` as the undo leaves it.
+    pub new_a: EventRecord,
+    /// The rewrite of `a`'s file; none for a line that is withdrawn.
+    pub write: Option<Rewrite>,
+    pub undo: UndoLine,
+    pub withdrawn: bool,
+}
+
+/// Every check of `scout events unmerge <log_id>`, with no write, over
+/// the folder and the log as read: the line is there and not undone,
+/// record `a` is merged into its `b` (or into nothing: withdrawn), `a`'s
+/// file can be rewritten, the reader reads the folder as meant with `a`
+/// unmerged ([`Folder::without_merge`]), the log has an id left and can
+/// take the undo line (`at` is its time). `folder` is the read of the
+/// records, gone over once for however many merges are asked about.
+///
+/// The one statement of whether an undo is accepted: `unmerge` writes
+/// only what this returns, and `scout events merges` and `scout events`
+/// say `undoable: false` with this function's refusal, word for word.
+pub(super) fn unmerge_plan(
+    folder: &Folder,
+    log: &MergeLog,
+    log_id: &str,
+    at: String,
+) -> Result<UnmergePlan> {
+    let Some(line) = log.merge(log_id).cloned() else {
+        bail!(
+            "{log_id}: no such merge in {} (nothing was changed)",
+            log.path().display()
+        );
+    };
+    if let Some(by) = log.undone.get(log_id) {
+        bail!("{log_id}: already undone, by {by} (nothing was changed)");
+    }
+    let snap = folder.snap;
+    let a = snap.record(&line.a)?;
+    let withdrawn = match line_state(snap, &line) {
+        LineState::InEffect => false,
+        LineState::NotApplied => true,
+        LineState::Other(why) => bail!(
+            "{log_id}: {} is no longer merged into {} ({why}); the merge cannot be undone (nothing was changed)",
+            a.id, line.b
+        ),
+    };
+    let mut new_a = a.clone();
+    let mut write = None;
+    if !withdrawn {
+        new_a.merged_into = None;
+        let wa = snap.rewrite(&new_a, false)?;
+        folder.without_merge(a)?;
+        write = Some(wa);
+    }
+    let undo = UndoLine {
+        id: log.next_id()?,
+        at,
+        undoes: line.id.clone(),
+    };
+    // The line goes out last; that the log can take it is seen now.
+    log.ready_for_undo(&undo)?;
+    Ok(UnmergePlan {
+        line,
+        new_a,
+        write,
+        undo,
+        withdrawn,
+    })
+}
+
 /// The state of `line`, with `a` the record its `a` names (`None`: no
 /// such record). The one statement of when a merge line is in effect:
 /// `merge`, `unmerge`, `check`, `merges` and the `merge_id` of `scout
@@ -206,49 +279,6 @@ pub(super) fn not_applied_line<'l>(
 ) -> Option<&'l MergeLine> {
     log.live()
         .find(|l| fold(&l.a) == fold(a) && line_state(snap, l) == LineState::NotApplied)
-}
-
-/// The reader's id table as it is meant to be once `a` is merged into
-/// nothing: `a`, every record merged into `a` (directly or through a
-/// chain) and each monthly id those records hold now resolve to `a`;
-/// nothing else moves.
-fn table_without_merge(snap: &Snapshot, a: &EventRecord) -> BTreeMap<String, String> {
-    let records = &snap.set.records;
-    let a_key = fold(&a.id);
-    let reaches_a = |r: &EventRecord| {
-        let mut cur = r;
-        // A chain is at most as long as the set.
-        for _ in 0..=records.len() {
-            if fold(&cur.id) == a_key {
-                return true;
-            }
-            match cur
-                .merged_into
-                .as_deref()
-                .and_then(|t| records.get(&fold(t)))
-            {
-                Some(next) => cur = next,
-                None => return false,
-            }
-        }
-        false
-    };
-    let mut expected = snap.set.aliases.clone();
-    let holder = expected.get(&a_key).cloned();
-    for (k, r) in records.iter().filter(|(_, r)| reaches_a(r)) {
-        // A member that is a record id is not a monthly id (the reader
-        // passes over it).
-        let members = r.members.iter().map(|m| fold(m));
-        let keys = std::iter::once(k.clone()).chain(members.filter(|m| !records.contains_key(m)));
-        for key in keys {
-            if let Some(have) = expected.get_mut(&key) {
-                if Some(&*have) == holder.as_ref() {
-                    *have = a.id.clone();
-                }
-            }
-        }
-    }
-    expected
 }
 
 impl EventEditor {
@@ -366,42 +396,19 @@ impl EventEditor {
         let log_id = log_id.trim();
         let snap = Snapshot::read(&self.dir)?;
         let mut log = MergeLog::read(&self.dir)?;
-        let Some(line) = log.merge(log_id).cloned() else {
-            bail!(
-                "{log_id}: no such merge in {} (nothing was changed)",
-                log.path().display()
-            );
-        };
-        if let Some(by) = log.undone.get(log_id) {
-            bail!("{log_id}: already undone, by {by} (nothing was changed)");
-        }
-        let a = snap.record(&line.a)?;
-        let withdrawn = match line_state(&snap, &line) {
-            LineState::InEffect => false,
-            LineState::NotApplied => true,
-            LineState::Other(why) => bail!(
-                "{log_id}: {} is no longer merged into {} ({why}); the merge cannot be undone (nothing was changed)",
-                a.id, line.b
-            ),
-        };
-        let mut new_a = a.clone();
-        let mut write = None;
-        if !withdrawn {
-            new_a.merged_into = None;
-            let wa = snap.rewrite(&new_a, false)?;
-            snap.verify(&[&new_a], &table_without_merge(&snap, a))?;
-            write = Some(wa);
-        }
-        let undo = UndoLine {
-            id: log.next_id()?,
-            at: self.now(),
-            undoes: line.id.clone(),
-        };
+        let UnmergePlan {
+            line,
+            new_a,
+            write,
+            undo,
+            withdrawn,
+        } = unmerge_plan(&Folder::of(&snap), &log, log_id, self.now())?;
         self.step(Step::Read)?;
+        // Asked again of the folder as it is by now: the record's file,
+        // and the log (the plan's own question, [`MergeLog::ready_for_undo`]).
         if let Some(w) = &write {
             still_as_read(&snap.dir, &w.file, &w.old)?;
         }
-        // The line goes out last; that the log can take it is seen now.
         log.ready_for_undo(&undo)?;
         let (undo_id, at) = (undo.id.clone(), undo.at.clone());
         let mut wrote = false;

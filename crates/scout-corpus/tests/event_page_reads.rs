@@ -4,7 +4,8 @@
 //! - `EventEditor::merges` and the `merge_id` of a listed `merged_from`
 //!   entry: direct and chained merges, a record merged by hand (no log
 //!   line), an undone merge; an index older than the folder (no id the
-//!   folder would not take, and `stale`);
+//!   folder would not take, and `stale`); a merge `unmerge` would
+//!   refuse (`undoable: false`, `why_not` in `unmerge`'s words);
 //! - `own_aliases`, `month_spans`, `undated_items` in `scout events`, each
 //!   absent where it has nothing to say;
 //! - records without items, with their `origin` and `edited`;
@@ -131,6 +132,14 @@ fn page() -> Indexed {
 }
 
 impl Indexed {
+    /// The editor of the archive under the path the corpus has for it
+    /// (a refusal names files by the path the folder was opened with).
+    fn editor(&self) -> EventEditor {
+        EventEditor::open(&self.corpus.config.root())
+            .unwrap()
+            .with_now(NOW)
+    }
+
     fn build(&self) {
         self.corpus.build_index(false).unwrap();
     }
@@ -394,6 +403,95 @@ fn a_listing_made_from_a_stale_index_names_only_lines_still_in_effect() {
     fs::remove_file(&bad).unwrap();
     let reply = ix.engine.events(&q).unwrap();
     assert!(reply.notes.is_empty(), "{:?}", reply.notes);
+}
+
+/// What `merges`, the listing's entry for `a` under `b` (index rebuilt)
+/// and `unmerge` say of the merge `id`: `merges` and the listing must
+/// give one answer, and it must be `unmerge`'s.
+fn undo_answers(ix: &Indexed, id: &str, a: &str, b: &str) -> Option<String> {
+    let merges = ix.editor().merges().unwrap();
+    let m = merges.iter().find(|m| m.id == id).expect("listed");
+    let entry = ix.row(b)["merged_from"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == a)
+        .unwrap()
+        .clone();
+    assert_eq!(entry["merge_id"], json!(id));
+    let row = serde_json::to_value(m).unwrap();
+    match &m.why_not {
+        Some(why) => {
+            assert_eq!(m.undoable, Some(false));
+            assert_eq!(row["undoable"], json!(false));
+            assert_eq!(row["why_not"], json!(why));
+            assert_eq!(entry["undoable"], json!(false));
+            assert_eq!(entry["why_not"], json!(why));
+        }
+        None => {
+            assert_eq!(m.undoable, None);
+            for v in [&row, &entry] {
+                assert!(v.get("undoable").is_none() && v.get("why_not").is_none());
+            }
+        }
+    }
+    m.why_not.clone()
+}
+
+#[test]
+fn a_merge_unmerge_would_refuse_says_so_in_unmerges_words() {
+    // The normal case: neither key, and `unmerge` takes the id.
+    let ix = page();
+    let m = ix.merge(BETA, ALPHA, None);
+    assert_eq!(undo_answers(&ix, &m, BETA, ALPHA), None);
+    let text = serde_json::to_string(&ix.listing(true)).unwrap()
+        + &serde_json::to_string(&ix.editor().merge_list(true).unwrap()).unwrap();
+    assert!(!text.contains("\"undoable\":") && !text.contains("\"why_not\":"));
+    let before = ix.fx.tree();
+
+    // 1. A comment in beta's frontmatter: not the writer's form, so the
+    //    file is not rewritten.
+    let good = ix.fx.bytes(BETA);
+    let text = String::from_utf8(good.clone()).unwrap();
+    let commented = text.replacen("---\n", "---\n# mine\n", 1);
+    assert_ne!(commented, text);
+    let file = ix.fx.dir.join(format!("{BETA}.md"));
+    fs::write(&file, commented).unwrap();
+    let why = undo_answers(&ix, &m, BETA, ALPHA).expect("refused");
+    let refusal = format!("{:#}", ix.editor().unmerge(&m).unwrap_err());
+    assert_eq!(why, refusal);
+    fs::write(&file, &good).unwrap();
+    assert_eq!(undo_answers(&ix, &m, BETA, ALPHA), None);
+
+    // 2. Alpha given beta's monthly id by hand: unmerged, two records
+    //    would hold it.
+    let alpha = ix.fx.record(ALPHA);
+    let mut shared = alpha.clone();
+    shared.members.push("2026-10/E04".into());
+    put(&ix.fx.dir, &shared);
+    let why = undo_answers(&ix, &m, BETA, ALPHA).expect("refused");
+    let refusal = format!("{:#}", ix.editor().unmerge(&m).unwrap_err());
+    assert_eq!(why, refusal);
+    assert!(why.contains("2026-10/E04"), "{why}");
+    put(&ix.fx.dir, &alpha);
+    assert!(ix.fx.tree() == before);
+    assert_eq!(undo_answers(&ix, &m, BETA, ALPHA), None);
+
+    // 3. The log ends at the largest id: no id is left for the undo line.
+    let log = ix.fx.dir.join(MERGE_LOG);
+    let lines = fs::read_to_string(&log).unwrap();
+    let last = "m999999999";
+    fs::write(&log, lines.replace(&m, last)).unwrap();
+    let why = undo_answers(&ix, last, BETA, ALPHA).expect("refused");
+    let refusal = format!("{:#}", ix.editor().unmerge(last).unwrap_err());
+    assert_eq!(why, refusal);
+    assert!(why.contains("the largest id"), "{why}");
+    fs::write(&log, lines).unwrap();
+
+    // Nothing was written by any of it, and the id is taken in the end.
+    assert!(ix.fx.tree() == before);
+    assert_eq!(undo_answers(&ix, &m, BETA, ALPHA), None);
+    ix.editor().unmerge(&m).unwrap();
 }
 
 /// Every `merge_id` of a listing made without a rebuild, with the id of
@@ -705,6 +803,39 @@ fn the_event_facet_of_an_event_lists_the_event_and_the_events_sharing_items() {
 }
 
 #[test]
+fn the_selected_event_has_no_place_of_its_own_in_its_event_facet() {
+    // One work, in beta and in alpha: the two events count the same.
+    let mut one = row(1, Some("2026-10-03"), "2026-10/E04");
+    one["events"] = json!(["2026-09/E01"]);
+    let ix = indexed(&[one], &[Some("2026-10-03")]);
+    ix.build();
+    let events = |top: usize| {
+        let q = FacetsQuery {
+            query: format!("event:{BETA}"),
+            top,
+            ..Default::default()
+        };
+        serde_json::to_value(ix.engine.facets(&q).unwrap().body).unwrap()["facets"]["event"].clone()
+    };
+    // Count, then value, as any facet: alpha sorts before the selected
+    // beta. The selected event is told by its id.
+    assert_eq!(
+        events(0),
+        json!({"distinct": 2, "items": [
+            {"value": ALPHA, "count": 1, "name": "Alpha story"},
+            {"value": BETA, "count": 1, "name": "Beta follow-up"},
+        ]})
+    );
+    // And a `--top` below `distinct` can leave it out.
+    assert_eq!(
+        events(1),
+        json!({"distinct": 2, "items": [
+            {"value": ALPHA, "count": 1, "name": "Alpha story"},
+        ]})
+    );
+}
+
+#[test]
 fn mentioned_works_are_on_the_hit_and_counted_as_a_facet() {
     let ix = page();
     ix.build();
@@ -783,8 +914,11 @@ struct Before {
 }
 
 /// Every key this version adds, anywhere in a reply, as JSON writes it.
-const NEW_KEYS: [&str; 11] = [
+const NEW_KEYS: [&str; 14] = [
     "\"merge_id\":",
+    "\"undoable\":",
+    "\"why_not\":",
+    "\"stale\":",
     "\"own_aliases\":",
     "\"month_spans\":",
     "\"undated_items\":",
@@ -987,6 +1121,18 @@ fn on_the_real_archive_merges_have_ids_and_works_are_counted() {
         listed.iter().filter(|l| l.undated_items.is_some()).count()
     );
     assert!(from.iter().all(|m| m.merge_id.is_some()));
+    // And `unmerge` would take every one of them.
+    assert!(from
+        .iter()
+        .all(|m| m.undoable.is_none() && m.why_not.is_none()));
+    assert!(live
+        .iter()
+        .all(|m| m.undoable.is_none() && m.why_not.is_none()));
+    eprintln!(
+        "real archive: {} merged-in entries, {} with undoable: false",
+        from.len(),
+        from.iter().filter(|m| m.undoable == Some(false)).count()
+    );
     // Each line in effect is named once, by the record it merged away.
     let live_ids: std::collections::BTreeSet<&str> = live.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, live_ids);

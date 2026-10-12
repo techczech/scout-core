@@ -21,6 +21,13 @@ pub struct MergedFrom {
     /// hand, with no line in effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_id: Option<String>,
+    /// With a `merge_id` that `unmerge` would refuse now: `false`, with
+    /// `why_not` the refusal, word for word. Both keys are absent when
+    /// `unmerge` would accept the id, and where there is no `merge_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undoable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why_not: Option<String>,
 }
 
 /// What an event shows of its own record and the records merged into it.
@@ -136,6 +143,8 @@ pub fn combined(own: &EventRecord, merged: &[&EventRecord]) -> Combined {
                 id: r.id.clone(),
                 name: r.name.clone(),
                 merge_id: None,
+                undoable: None,
+                why_not: None,
             })
             .collect(),
     }

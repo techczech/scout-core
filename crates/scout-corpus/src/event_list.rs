@@ -19,7 +19,7 @@
 //! `merged`) is listed with its own values only.
 
 use crate::api::{Engine, Outcome, Reply};
-use crate::events::{self, EventRecord, MergedFrom, EVENTS_DIR};
+use crate::events::{self, EventRecord, MergedFrom};
 use crate::index;
 use crate::normalize::fold;
 use crate::topics::valid_month;
@@ -204,8 +204,7 @@ impl Engine {
             let merge_ids = if merged_in.is_empty() {
                 BTreeMap::new()
             } else {
-                let dir = c.config.root().join(EVENTS_DIR);
-                match crate::event_edit::live_merge_ids(&dir, &records) {
+                match crate::event_edit::live_merge_ids(&c.config.root(), &records) {
                     Ok(live) => {
                         stale |= live.stale;
                         live.ids
@@ -306,7 +305,7 @@ fn listing(
     corpus: &str,
     record: Option<&EventRecord>,
     merged: &[&EventRecord],
-    merge_ids: &BTreeMap<String, String>,
+    merge_ids: &BTreeMap<String, (String, Option<String>)>,
     t: Tally,
     month_items: Option<usize>,
 ) -> EventListing {
@@ -323,7 +322,11 @@ fn listing(
     let merged = if r.merged_into.is_some() { &[] } else { merged };
     let mut all = events::combined(&r, merged);
     for m in all.merged_from.iter_mut() {
-        m.merge_id = merge_ids.get(&fold(&m.id)).cloned();
+        if let Some((id, why_not)) = merge_ids.get(&fold(&m.id)) {
+            m.merge_id = Some(id.clone());
+            m.undoable = why_not.as_ref().map(|_| false);
+            m.why_not = why_not.clone();
+        }
     }
     let dated: usize = t.months.values().sum();
     let own = |own: &Option<String>, shown: &Option<String>| (own != shown).then(|| own.clone());

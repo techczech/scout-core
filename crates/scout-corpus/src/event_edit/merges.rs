@@ -16,11 +16,19 @@
 //! decides nothing here; it only says which entries the listing has, and
 //! an entry the folder no longer agrees with gets no id.
 //!
+//! Whether `unmerge` would accept a merge in effect is asked of
+//! `unmerge`'s own checks ([`unmerge_plan`], which `unmerge` runs before
+//! its first write), once per merge, over the one snapshot and the one
+//! log of the call ([`Live::why_not`]). Where they refuse, the row and
+//! the listing's entry carry `undoable: false` and `why_not`, the
+//! refusal word for word; where they accept, neither key.
+//!
 //! Nothing here writes.
 
 use super::log::{By, LogLine, MergeLine, MergeLog};
-use super::merge::{state_of, LineState};
+use super::merge::{state_of, unmerge_plan, LineState};
 use super::store::Snapshot;
+use super::unmerge_check::Folder;
 use super::EventEditor;
 use crate::events::EventRecord;
 use crate::normalize::fold;
@@ -47,6 +55,14 @@ impl Live {
     /// `scout events` takes each `merge_id` from.
     fn in_effect(&self) -> impl Iterator<Item = &MergeLine> {
         self.log.live().filter(|l| self.holds(l))
+    }
+
+    /// Why `unmerge` would refuse `line` now, in its words; `None` when
+    /// it would accept it. `at` is the time the undo line would carry.
+    fn why_not(&self, folder: &Folder, line: &MergeLine, at: &str) -> Option<String> {
+        unmerge_plan(folder, &self.log, &line.id, at.to_string())
+            .err()
+            .map(|e| format!("{e:#}"))
     }
 }
 
@@ -76,6 +92,13 @@ pub struct MergeInfo {
     pub undone_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undone_at: Option<String>,
+    /// On a merge in effect that `unmerge` would refuse now: `false`,
+    /// with `why_not` the refusal, word for word. Both keys are absent
+    /// on a merge `unmerge` would accept, and on an undone line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undoable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why_not: Option<String>,
 }
 
 /// `scout events merges` (one JSON line).
@@ -128,6 +151,8 @@ impl EventEditor {
             id: id.to_string(),
             name: snap.record(id).ok().map(|r| r.name.clone()),
         };
+        let now = self.now();
+        let folder = Folder::of(snap);
         let mut merges = Vec::new();
         for line in log.merges() {
             let undone_by = log.undone.get(&line.id);
@@ -138,6 +163,10 @@ impl EventEditor {
             if !shown {
                 continue;
             }
+            let why_not = match undone_by {
+                Some(_) => None,
+                None => live.why_not(&folder, line, &now),
+            };
             merges.push(MergeInfo {
                 id: line.id.clone(),
                 at: line.at.clone(),
@@ -149,13 +178,15 @@ impl EventEditor {
                 undone_at: undone_by
                     .and_then(|u| undo_at.get(u.as_str()))
                     .map(|at| at.to_string()),
+                undoable: why_not.as_ref().map(|_| false),
+                why_not,
             });
         }
         // Ids only grow along the log.
         merges.reverse();
         Ok(MergeList {
             tool: "scout events merges".into(),
-            at: self.now(),
+            at: now,
             dir: self.dir.display().to_string(),
             all,
             merges,
@@ -167,8 +198,9 @@ impl EventEditor {
 #[derive(Debug, Default)]
 pub(crate) struct LiveMergeIds {
     /// By folded id of a record the index has as merged in: the id of
-    /// the merge in effect for it now.
-    pub ids: BTreeMap<String, String>,
+    /// the merge in effect for it now, and why `unmerge` would refuse
+    /// that id now (`None`: it would accept it).
+    pub ids: BTreeMap<String, (String, Option<String>)>,
     /// The index has a record merged in that the folder does not have
     /// merged in the same way: the folder changed since the index was
     /// built.
@@ -189,13 +221,18 @@ pub(crate) struct LiveMergeIds {
 /// record an id when the folder holds no log. Of two lines in effect for
 /// one record (only hand edits leave that) the later one is given.
 ///
-/// An error says which of the two reads failed.
+/// The folder is the records folder of `archive`, opened as `unmerge`
+/// opens it ([`EventEditor::open`]: the same path rules, and the same
+/// path in a refusal). An error says which of the two reads failed.
 pub(crate) fn live_merge_ids(
-    dir: &Path,
+    archive: &Path,
     indexed: &BTreeMap<String, EventRecord>,
 ) -> Result<LiveMergeIds> {
+    let not_read = |e: anyhow::Error| anyhow!("the events folder was not read ({e:#})");
+    let editor = EventEditor::open(archive).map_err(not_read)?;
+    let dir = editor.dir();
     let live = Live {
-        snap: Snapshot::read(dir).map_err(|e| anyhow!("the events folder was not read ({e:#})"))?,
+        snap: Snapshot::read(dir).map_err(not_read)?,
         log: MergeLog::read(dir).map_err(|e| anyhow!("the merge log was not read ({e:#})"))?,
     };
     let now = &live.snap.set.records;
@@ -223,12 +260,17 @@ pub(crate) fn live_merge_ids(
     };
     let in_effect: BTreeMap<String, &MergeLine> =
         live.in_effect().map(|l| (fold(&l.a), l)).collect();
+    let at = editor.now();
+    let folder = Folder::of(&live.snap);
     let mut out = LiveMergeIds::default();
     for (k, _) in indexed.iter().filter(|(_, r)| r.merged_into.is_some()) {
         if !agrees(k) {
             out.stale = true;
         } else if let Some(line) = in_effect.get(k) {
-            out.ids.insert(k.clone(), line.id.clone());
+            out.ids.insert(
+                k.clone(),
+                (line.id.clone(), live.why_not(&folder, line, &at)),
+            );
         }
     }
     Ok(out)

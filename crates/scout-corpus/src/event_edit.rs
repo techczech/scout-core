@@ -130,6 +130,7 @@ pub(crate) mod log;
 mod merge;
 mod merges;
 mod proposals;
+mod unmerge_check;
 pub(crate) mod store;
 
 use crate::event_seed::naming;

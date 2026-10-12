@@ -285,10 +285,7 @@ impl EventSet {
                         aliases.insert(mk, last.clone());
                     }
                     Some(have) if *have == last => {}
-                    Some(have) => warnings.push(format!(
-                        "{}: member {m:?} already belongs to {have:?}; kept there",
-                        file_of(&r.id)
-                    )),
+                    Some(have) => warnings.push(member_conflict(&r.id, m, have)),
                 }
             }
         }
@@ -325,6 +322,15 @@ impl EventSet {
             warnings: self.warnings.iter().take(MAX_WARNINGS).cloned().collect(),
         }
     }
+}
+
+/// The warning for member `m` of record `id` that the event `have` holds
+/// already.
+pub(crate) fn member_conflict(id: &str, m: &str, have: &str) -> String {
+    format!(
+        "{}: member {m:?} already belongs to {have:?}; kept there",
+        file_of(id)
+    )
 }
 
 fn file_of(id: &str) -> String {
