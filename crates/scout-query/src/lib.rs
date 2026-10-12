@@ -125,9 +125,18 @@ pub struct Query {
     pub any_of: Vec<Vec<FreeTerm>>,
     /// Negated terms (`-x`), in order.
     pub not: Vec<FreeTerm>,
+    /// [`is_empty_or_corpus_only`] of the text parsed.
+    #[serde(skip)]
+    pub corpus_only: bool,
 }
 
 impl Query {
+    /// Was the text parsed empty, or nothing but `in:` terms? See
+    /// [`is_empty_or_corpus_only`].
+    pub fn is_empty_or_corpus_only(&self) -> bool {
+        self.corpus_only
+    }
+
     pub fn has_positive(&self) -> bool {
         self.any_of.iter().any(|g| !g.is_empty())
     }
@@ -401,9 +410,11 @@ fn build_free_text(tokens: &[Free], partial: bool) -> FreeText {
 /// changes the `fts` string.
 pub fn parse_with(raw: &str, partial: bool) -> Query {
     let mut parsed = ParsedQuery::default();
+    let mut corpus_only = true;
     let mut free: Vec<Free> = Vec::new();
     let mut shortcut_text: Vec<String> = Vec::new();
     for token in scan::tokenize(raw, is_field_name) {
+        corpus_only &= is_corpus_term(&token);
         match token {
             Token::Phrase { negated, text } => free.push(Free::Phrase { negated, text }),
             Token::Term(t) => free.push(Free::Term(t)),
@@ -441,7 +452,25 @@ pub fn parse_with(raw: &str, partial: bool) -> Query {
         parsed,
         any_of: free.any_of,
         not: free.not,
+        corpus_only,
     }
+}
+
+fn is_corpus_term(token: &Token) -> bool {
+    matches!(token, Token::Field { name, .. } if name == "in")
+}
+
+/// TS `isEmptyOrCorpusOnly(raw)`: does the query say nothing but, at most,
+/// which corpora to look in? True when the text has no token at all
+/// (empty, or whitespace only) or every token is an `in:` field term.
+/// Any other token makes it false, also one that selects nothing by
+/// itself (`OR`, `!`, `i:`, `tag:""`): the answer is about what was
+/// written, not about what it compiles to. An engine counts or lists a
+/// whole corpus only for a query of which this is true.
+pub fn is_empty_or_corpus_only(raw: &str) -> bool {
+    scan::tokenize(raw, is_field_name)
+        .into_iter()
+        .all(|t| is_corpus_term(&t))
 }
 
 /// TS `parseSearch(raw, partial)`.

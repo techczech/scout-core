@@ -983,8 +983,9 @@ impl Engine {
     /// Topic-layer facets over the documents `search` would return for the
     /// same query (the full-text and filter match, all of it, not `limit`).
     ///
-    /// - A bare query (empty, or `in:` alone) counts every tagged
-    ///   document with an indexed passage ([`search::counted_docs`]).
+    /// - An empty query, or `in:` alone, counts every tagged document
+    ///   with an indexed passage ([`search::counted_docs`]). Any other
+    ///   query that selects nothing by itself (`OR`, `i:`) counts none.
     /// - One rule for which documents a facet is counted over. A field
     ///   whose further term NARROWS (theme, entity, event: terms are
     ///   ANDed) is counted under the whole query. A field whose further
@@ -1120,7 +1121,11 @@ impl Engine {
         }
         let query = q.query.trim();
         let mut notes = vec![];
-        let plan = search::Plan::parse(query)?;
+        // A cell is the query with `month:M` added, so the plan is the
+        // base of a count: bare, it is every tagged document, whatever
+        // text it came from (`OR` gives the matrix of no query, as it
+        // did when each month was a search of its own).
+        let plan = search::Plan::parse(query)?.into_count_base();
         if let Some(m) = plan.filter.month.first() {
             bail!(
                 "month:{m} in the query: theme-months counts every month of its range, so a query does not pick one; use --from and --to"

@@ -337,3 +337,76 @@ fn a_quoted_query_keeps_joiners_tabs_and_no_break_spaces_as_they_are() {
     assert!(stdout(&o)
         .starts_with("0 documents (0 tagged) for \"theme:a\u{fffd}[31m\u{fffd}b\" in notes"));
 }
+
+/// A query that is not empty and not only `in:` terms, yet selects nothing
+/// by itself (`OR`, `i:`, `!`, `tag:""`), is not the empty query: `facets`
+/// counts no document and a search in date order lists none, as before an
+/// empty query counted or listed anything. `theme-months` gives the matrix
+/// of no query, as it always did (each cell is the query with a month
+/// added). The empty query and `in:` alone still stand for the corpus.
+#[test]
+fn a_query_that_selects_nothing_is_not_the_empty_query() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data) = fixture(tmp.path());
+    let run = |args: &[&str]| scout(&cfg, &data, args);
+    let json = |o: &Output| -> serde_json::Value { serde_json::from_slice(&o.stdout).unwrap() };
+
+    let whole_matrix = json(&run(&["topics", "theme-months", "--json"]));
+    assert_eq!(whole_matrix["theme_totals"], serde_json::json!([2, 2]));
+    for query in [
+        "OR",
+        "i:",
+        "!",
+        "tag:\"\"",
+        "OR i: !",
+        "in:notes OR",
+        "i: in:notes",
+    ] {
+        let o = run(&["facets", query, "--json"]);
+        assert_eq!(o.status.code(), Some(1), "facets {query:?}: {o:?}");
+        let f = json(&o);
+        assert_eq!(f["total_documents"], 0, "facets {query:?}");
+        assert_eq!(f["tagged_documents"], 0, "facets {query:?}");
+        assert_eq!(f["facets"]["theme"]["distinct"], 0, "facets {query:?}");
+        assert_eq!(
+            f["facets"]["ai"],
+            serde_json::json!({"true": 0, "false": 0})
+        );
+        let o = run(&["facets", query]);
+        assert_eq!(o.status.code(), Some(1), "facets {query:?} (text)");
+
+        let plain = run(&["search", query, "--json"]);
+        assert_eq!(plain.status.code(), Some(1), "search {query:?}: {plain:?}");
+        for sort in ["newest", "oldest"] {
+            let o = run(&["search", query, "--sort", sort, "--json"]);
+            assert_eq!(o.status.code(), Some(1), "search {query:?} {sort}: {o:?}");
+            let r = json(&o);
+            assert_eq!(r["total_documents"], 0, "search {query:?} {sort}");
+            assert!(files(&o).is_empty(), "search {query:?} {sort}");
+        }
+
+        let o = run(&["topics", "theme-months", query, "--json"]);
+        assert_eq!(o.status.code(), Some(0), "theme-months {query:?}: {o:?}");
+        let m = json(&o);
+        for key in ["months", "themes", "counts", "theme_totals", "month_totals"] {
+            assert_eq!(m[key], whole_matrix[key], "theme-months {query:?} {key}");
+        }
+    }
+    // With one more term such a query is that term's query.
+    let o = run(&["facets", "OR theme:Maths", "--json"]);
+    assert_eq!(json(&o)["total_documents"], 2);
+    // A month picked beside it: the month facet still lists the others.
+    let f = json(&run(&["facets", "OR month:2026-02", "--json"]));
+    assert_eq!(f["total_documents"], 1);
+    assert_eq!(f["facets"]["month"]["distinct"], 2);
+
+    // The empty query and corpora alone: the whole corpus, as documented.
+    for query in ["", "  ", "in:notes"] {
+        let o = run(&["facets", query, "--json"]);
+        assert_eq!(o.status.code(), Some(0), "facets {query:?}: {o:?}");
+        assert_eq!(json(&o)["total_documents"], 3, "facets {query:?}");
+        let o = run(&["search", query, "--sort", "newest", "--json"]);
+        assert_eq!(o.status.code(), Some(0), "search {query:?}: {o:?}");
+        assert_eq!(files(&o).len(), 3, "search {query:?}");
+    }
+}

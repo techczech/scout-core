@@ -1,5 +1,5 @@
 {
-  "about": "Shared @scout/query grammar cases: parseSearch(input, partial) and dateRange(input). The TS package (grammar.test.ts) and the Rust port (crates/scout-query) must both reproduce every expected value. Expected values are generated from the TS implementation: SCOUT_WRITE_FIXTURES=1 npx vitest run packages/scout-query/grammar.test.ts",
+  "about": "Shared @scout/query grammar cases: parseSearch(input, partial), dateRange(input) and isEmptyOrCorpusOnly(input) (corpus_only). The TS package (grammar.test.ts) and the Rust port (crates/scout-query) must both reproduce every expected value. Expected values are generated from the TS implementation: SCOUT_WRITE_FIXTURES=1 npx vitest run packages/scout-query/grammar.test.ts",
   "parse": [
     {
       "input": "",
@@ -6394,6 +6394,124 @@
     {
       "input": "2016-1-05",
       "expected": null
+    }
+  ],
+  "corpus_only": [
+    {
+      "input": "",
+      "expected": true
+    },
+    {
+      "input": "   ",
+      "expected": true
+    },
+    {
+      "input": " \t",
+      "expected": true
+    },
+    {
+      "input": "in:notes",
+      "expected": true
+    },
+    {
+      "input": "in:notes in:hl",
+      "expected": true
+    },
+    {
+      "input": " in:a,b ",
+      "expected": true
+    },
+    {
+      "input": "IN:notes",
+      "expected": true
+    },
+    {
+      "input": "in:",
+      "expected": true
+    },
+    {
+      "input": "in:\"my notes\"",
+      "expected": true
+    },
+    {
+      "input": "OR",
+      "expected": false
+    },
+    {
+      "input": "!",
+      "expected": false
+    },
+    {
+      "input": "i:",
+      "expected": false
+    },
+    {
+      "input": "tag:\"\"",
+      "expected": false
+    },
+    {
+      "input": "in:notes OR",
+      "expected": false
+    },
+    {
+      "input": "OR in:notes",
+      "expected": false
+    },
+    {
+      "input": "in:notes proof",
+      "expected": false
+    },
+    {
+      "input": "-x",
+      "expected": false
+    },
+    {
+      "input": "\"\"",
+      "expected": false
+    },
+    {
+      "input": "/re/",
+      "expected": false
+    },
+    {
+      "input": "zo:",
+      "expected": false
+    },
+    {
+      "input": "theme:A",
+      "expected": false
+    },
+    {
+      "input": "in:notes i:",
+      "expected": false
+    },
+    {
+      "input": "AND",
+      "expected": false
+    },
+    {
+      "input": "|",
+      "expected": false
+    },
+    {
+      "input": "tw:",
+      "expected": false
+    },
+    {
+      "input": "in :notes",
+      "expected": false
+    },
+    {
+      "input": "notin:x",
+      "expected": false
+    },
+    {
+      "input": "in:notes ai:true",
+      "expected": false
+    },
+    {
+      "input": "month:2026-02",
+      "expected": false
     }
   ]
 }

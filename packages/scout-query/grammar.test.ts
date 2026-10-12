@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { dateRange, parseSearch } from "./src/query";
+import { dateRange, isEmptyOrCorpusOnly, parseSearch } from "./src/query";
 
 interface ParseCase {
   input: string;
@@ -19,10 +19,15 @@ interface DateCase {
   input: string;
   expected?: unknown;
 }
+interface CorpusOnlyCase {
+  input: string;
+  expected?: boolean;
+}
 interface Fixtures {
   about: string;
   parse: ParseCase[];
   date_range: DateCase[];
+  corpus_only: CorpusOnlyCase[];
 }
 
 const path = fileURLToPath(new URL("./fixtures/grammar-cases.json", import.meta.url));
@@ -31,6 +36,7 @@ const fixtures: Fixtures = JSON.parse(readFileSync(path, "utf8"));
 if (process.env.SCOUT_WRITE_FIXTURES) {
   for (const c of fixtures.parse) c.expected = parseSearch(c.input, c.partial);
   for (const c of fixtures.date_range) c.expected = dateRange(c.input);
+  for (const c of fixtures.corpus_only) c.expected = isEmptyOrCorpusOnly(c.input);
   writeFileSync(path, JSON.stringify(fixtures, null, 2) + "\n");
 }
 
@@ -38,6 +44,7 @@ describe("shared grammar fixtures", () => {
   test("the fixture file has cases", () => {
     expect(fixtures.parse.length).toBeGreaterThan(40);
     expect(fixtures.date_range.length).toBeGreaterThan(5);
+    expect(fixtures.corpus_only.length).toBeGreaterThan(20);
   });
 
   for (const c of fixtures.parse) {
@@ -50,6 +57,13 @@ describe("shared grammar fixtures", () => {
   for (const c of fixtures.date_range) {
     test(`dateRange(${JSON.stringify(c.input)})`, () => {
       expect(dateRange(c.input)).toEqual(c.expected);
+    });
+  }
+
+  for (const c of fixtures.corpus_only) {
+    test(`isEmptyOrCorpusOnly(${JSON.stringify(c.input)})`, () => {
+      expect(c.expected, "run with SCOUT_WRITE_FIXTURES=1 to fill").toBeDefined();
+      expect(isEmptyOrCorpusOnly(c.input)).toBe(c.expected);
     });
   }
 });

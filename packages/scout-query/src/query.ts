@@ -292,6 +292,22 @@ function buildFreeText(tokens: Free[], partial: boolean): FreeText {
   return { fts, hasPositive, positiveTerms, negatives };
 }
 
+/**
+ * Does the query say nothing but, at most, which corpora to look in? True
+ * when the text has no token at all (empty, or whitespace only) or every
+ * token is an `in:` field term. Any other token makes it false, also one
+ * that selects nothing by itself (`OR`, `!`, `i:`, `tag:""`): the answer is
+ * about what was written, not about what it compiles to. The engine counts
+ * or lists a whole corpus only for a query of which this is true (Rust:
+ * `scout_query::is_empty_or_corpus_only`).
+ */
+export function isEmptyOrCorpusOnly(raw: string): boolean {
+  for (const t of tokenize(raw, (name) => FIELD_NAMES.has(name))) {
+    if (t.kind !== "field" || t.name !== "in") return false;
+  }
+  return true;
+}
+
 export function parseSearch(raw: string, partial = false): ParsedQuery {
   const parsed: ParsedQuery = {
     fts: "", has_positive: false, positive_terms: [], negatives: [], regexes: [],

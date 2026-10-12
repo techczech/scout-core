@@ -179,6 +179,11 @@ pub struct Plan {
     pub ignored: Vec<String>,
     #[serde(skip)]
     compiled: Vec<regex::Regex>,
+    /// When the plan is bare, does it stand for the whole corpus
+    /// ([`Plan::is_whole_corpus`])? From the text parsed, not from what it
+    /// compiled to.
+    #[serde(skip)]
+    corpus_wide: bool,
 }
 
 impl Plan {
@@ -238,6 +243,7 @@ impl Plan {
             regexes,
             ignored,
             compiled,
+            corpus_wide: q.is_empty_or_corpus_only(),
         })
     }
 
@@ -257,9 +263,32 @@ impl Plan {
     }
 
     /// A plan that selects nothing by itself: no positive term and no
-    /// filter (an empty query, or one that only names corpora with `in:`).
+    /// filter. An empty query and one that only names corpora with `in:`
+    /// compile to one, and so does a query whose every token selects
+    /// nothing (`OR`, `!`, `i:`, `tag:""`). The two are told apart by
+    /// [`Plan::is_whole_corpus`].
     pub fn is_bare(&self) -> bool {
         !self.has_positive() && !self.has_selector()
+    }
+
+    /// Does the plan stand for the whole corpus: a bare plan of a query
+    /// that was empty or only `in:` terms
+    /// (`scout_query::is_empty_or_corpus_only`, the parser's answer about
+    /// the text)? Only then do `facets` and a search in date order count
+    /// and list every document. A bare plan of any other text matches
+    /// nothing, as it did before an empty query counted anything.
+    pub fn is_whole_corpus(&self) -> bool {
+        self.is_bare() && self.corpus_wide
+    }
+
+    /// The plan as the base of a count per value of a field it has no
+    /// term of: the count beside a value is the search with that value's
+    /// term ADDED, and that search has a selector whatever else the text
+    /// held (`OR month:2026-02` is `month:2026-02`). So such a base, when
+    /// bare, stands for the whole corpus.
+    pub(crate) fn into_count_base(mut self) -> Plan {
+        self.corpus_wide = true;
+        self
     }
 
     /// The plan without its `month:` terms: what the month facet is
@@ -267,7 +296,7 @@ impl Plan {
     pub(crate) fn without_months(&self) -> Plan {
         let mut plan = self.clone();
         plan.filter.month.clear();
-        plan
+        plan.into_count_base()
     }
 
     /// The plan without its `ai:` term: what the `ai` facet is counted
@@ -275,7 +304,7 @@ impl Plan {
     pub(crate) fn without_ai(&self) -> Plan {
         let mut plan = self.clone();
         plan.filter.ai = None;
-        plan
+        plan.into_count_base()
     }
 
     /// Anything that selects passages without a positive term.
@@ -709,9 +738,9 @@ pub fn search_corpus(
         mode: None,
         sort: req.sort,
     };
-    // A bare query lists nothing, but in date order, where it lists every
-    // document.
-    if plan.is_bare() && req.sort.is_relevance() {
+    // A bare query lists nothing, but an empty or `in:`-only one in date
+    // order, which lists every document.
+    if plan.is_bare() && (req.sort.is_relevance() || !plan.is_whole_corpus()) {
         return Ok(res);
     }
     let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
@@ -965,16 +994,22 @@ fn selected_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
 
 /// The documents `scout facets` and `scout topics theme-months` count for
 /// a plan, through the one selection ([`selected_docs`]): what
-/// [`matching_docs`] returns, and for a bare plan (an empty query, or
-/// `in:` alone) every TAGGED document with an indexed passage. Those are
-/// the documents a topic filter can return: adding `theme:V`, `entity:V`,
-/// `event:V` or `month:V` to a bare query selects from exactly them, so a
-/// count over them is the count of that search.
+/// [`matching_docs`] returns, and for a plan that stands for the whole
+/// corpus ([`Plan::is_whole_corpus`]: an empty query, or `in:` alone)
+/// every TAGGED document with an indexed passage. Those are the documents
+/// a topic filter can return: adding `theme:V`, `entity:V`, `event:V` or
+/// `month:V` to such a query selects from exactly them, so a count over
+/// them is the count of that search. Any other bare plan (`OR`, `i:`)
+/// counts nothing, as [`matching_docs`] returns nothing for it.
 pub(crate) fn counted_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
-    let mut docs = selected_docs(conn, plan)?;
-    if plan.is_bare() {
-        docs.retain(|d| d.topic.is_some());
+    if !plan.is_bare() {
+        return selected_docs(conn, plan);
     }
+    if !plan.is_whole_corpus() {
+        return Ok(vec![]);
+    }
+    let mut docs = selected_docs(conn, plan)?;
+    docs.retain(|d| d.topic.is_some());
     Ok(docs)
 }
 
