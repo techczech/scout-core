@@ -7,8 +7,14 @@
 //! - [`EventEditor::merges`] lists the lines in effect against the records
 //!   folder as it is;
 //! - [`live_merge_ids`] gives `scout events` the `merge_id` of each record
-//!   it lists as merged in, against the records the listing shows (the
-//!   index's copy).
+//!   it lists as merged in.
+//!
+//! Both get the lines in effect from one function ([`Live::in_effect`]),
+//! over the folder as it is now, read as `unmerge` reads it
+//! ([`Snapshot::read`], [`MergeLog::read`]): an id the listing gives is
+//! an id `unmerge` finds in effect. The index's copy of the records
+//! decides nothing here; it only says which entries the listing has, and
+//! an entry the folder no longer agrees with gets no id.
 //!
 //! Nothing here writes.
 
@@ -18,10 +24,31 @@ use super::store::Snapshot;
 use super::EventEditor;
 use crate::events::EventRecord;
 use crate::normalize::fold;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// The records folder and its merge log as they are now.
+struct Live {
+    snap: Snapshot,
+    log: MergeLog,
+}
+
+impl Live {
+    /// Is `line` in effect: is the record its `a` names merged into its
+    /// `b` in the folder?
+    fn holds(&self, line: &MergeLine) -> bool {
+        state_of(self.snap.record(&line.a).ok(), line) == LineState::InEffect
+    }
+
+    /// The merges in effect: the lines no line undoes whose record `a` is
+    /// merged into their `b`, oldest first. What `merges` lists and what
+    /// `scout events` takes each `merge_id` from.
+    fn in_effect(&self) -> impl Iterator<Item = &MergeLine> {
+        self.log.live().filter(|l| self.holds(l))
+    }
+}
 
 /// One side of a merge: the record's id as the line has it, and the
 /// record's name as it is now (null when the record is gone, which only
@@ -82,8 +109,13 @@ impl EventEditor {
 
     /// What `scout events merges` prints; `all` also lists undone lines.
     pub fn merge_list(&self, all: bool) -> Result<MergeList> {
-        let snap = Snapshot::read(&self.dir)?;
-        let log = MergeLog::read(&self.dir)?;
+        let live = Live {
+            snap: Snapshot::read(&self.dir)?,
+            log: MergeLog::read(&self.dir)?,
+        };
+        let (snap, log) = (&live.snap, &live.log);
+        let in_effect: BTreeMap<&str, &MergeLine> =
+            live.in_effect().map(|l| (l.id.as_str(), l)).collect();
         let undo_at: BTreeMap<&str, &str> = log
             .lines
             .iter()
@@ -101,7 +133,7 @@ impl EventEditor {
             let undone_by = log.undone.get(&line.id);
             let shown = match undone_by {
                 Some(_) => all,
-                None => state_of(snap.record(&line.a).ok(), line) == LineState::InEffect,
+                None => in_effect.contains_key(line.id.as_str()),
             };
             if !shown {
                 continue;
@@ -131,20 +163,73 @@ impl EventEditor {
     }
 }
 
-/// By folded id of each record merged away: the id of the merge line in
-/// effect for it, told against `records` (by folded id) with the log in
-/// the records folder `dir`. A record merged by hand has no entry; nor
-/// has any record when the folder holds no log. Of two lines in effect
-/// for one record (only hand edits leave that) the later one is given.
+/// What `scout events` takes from the folder as it is now.
+#[derive(Debug, Default)]
+pub(crate) struct LiveMergeIds {
+    /// By folded id of a record the index has as merged in: the id of
+    /// the merge in effect for it now.
+    pub ids: BTreeMap<String, String>,
+    /// The index has a record merged in that the folder does not have
+    /// merged in the same way: the folder changed since the index was
+    /// built.
+    pub stale: bool,
+}
+
+/// The `merge_id` of each record the index (`indexed`, by folded id) has
+/// as merged in, from the merges in effect in the records folder `dir`
+/// now ([`Live::in_effect`], the answer of `scout events merges`).
+///
+/// A record gets an id only when the folder and the index agree about
+/// it: every record of its chain in the index, from the record to the
+/// record the listing shows it under, is in the folder with the same
+/// `merged_into` (so the merge's `a` and `b` are the entry's record and
+/// the record the index has it merged into, and its event is the one
+/// listed). Where they do not agree the record has no id and `stale` is
+/// set. A record merged by hand has no id and is not stale; nor has any
+/// record an id when the folder holds no log. Of two lines in effect for
+/// one record (only hand edits leave that) the later one is given.
+///
+/// An error says which of the two reads failed.
 pub(crate) fn live_merge_ids(
     dir: &Path,
-    records: &BTreeMap<String, EventRecord>,
-) -> Result<BTreeMap<String, String>> {
-    let log = MergeLog::read(dir)?;
-    let in_effect = |l: &&MergeLine| state_of(records.get(&fold(&l.a)), l) == LineState::InEffect;
-    Ok(log
-        .live()
-        .filter(in_effect)
-        .map(|l| (fold(&l.a), l.id.clone()))
-        .collect())
+    indexed: &BTreeMap<String, EventRecord>,
+) -> Result<LiveMergeIds> {
+    let live = Live {
+        snap: Snapshot::read(dir).map_err(|e| anyhow!("the events folder was not read ({e:#})"))?,
+        log: MergeLog::read(dir).map_err(|e| anyhow!("the merge log was not read ({e:#})"))?,
+    };
+    let now = &live.snap.set.records;
+    let merged_into = |r: &EventRecord| r.merged_into.as_deref().map(fold);
+    // Does the folder have this record as the index has it?
+    let same =
+        |k: &str, r: &EventRecord| now.get(k).is_some_and(|n| merged_into(n) == merged_into(r));
+    // The index's chain from `k` to the record it is listed under.
+    let agrees = |k: &str| {
+        let mut cur = k.to_string();
+        // A chain is at most as long as the set.
+        for _ in 0..=indexed.len() {
+            let Some(r) = indexed.get(&cur) else {
+                return false;
+            };
+            if !same(&cur, r) {
+                return false;
+            }
+            match merged_into(r) {
+                Some(next) => cur = next,
+                None => return true,
+            }
+        }
+        false
+    };
+    let in_effect: BTreeMap<String, &MergeLine> =
+        live.in_effect().map(|l| (fold(&l.a), l)).collect();
+    let mut out = LiveMergeIds::default();
+    for (k, _) in indexed.iter().filter(|(_, r)| r.merged_into.is_some()) {
+        if !agrees(k) {
+            out.stale = true;
+        } else if let Some(line) = in_effect.get(k) {
+            out.ids.insert(k.clone(), line.id.clone());
+        }
+    }
+    Ok(out)
 }

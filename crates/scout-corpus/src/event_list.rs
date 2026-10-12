@@ -8,9 +8,11 @@
 //! A record that others are merged into is listed as the combined event
 //! ([`events::combined`]): `start` / `end` cover the merged records,
 //! `aliases` take in their names and aliases, `merged_from` names them
-//! (each with the `merge_id` of the merge-log line in effect for it, when
-//! there is one: the log is read by its one reader, in the corpus's
-//! records folder, and only for a corpus that has a merged record), and
+//! (each with the `merge_id` of the merge in effect for it now, when
+//! there is one: the answer of `scout events merges` over the corpus's
+//! records folder as it is, asked only for a corpus that has a merged
+//! record; an entry the folder no longer agrees with has none, and the
+//! reply then carries `stale`), and
 //! `own_start` / `own_end` / `own_aliases` give the record's own value
 //! where the combined one differs. `members`, `themes`, `origin`, `edited` and the
 //! description are the record's own. A record merged away (listed with
@@ -148,6 +150,11 @@ pub struct EventsResults {
     /// Removed records are listed too; the key is absent otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// The events folder of a searched corpus changed since its index was
+    /// built (a record listed as merged in is not merged in that way in
+    /// the folder now): rebuild the index. The key is absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
     /// Events before `top`.
     pub distinct: usize,
     pub events: Vec<EventListing>,
@@ -186,24 +193,28 @@ impl Engine {
         let mut notes = vec![];
         let corpora = self.scope(&q.in_, &mut notes)?;
         let mut out = Vec::new();
+        let mut stale = false;
         for c in &corpora {
             let conn = index::open_existing(&c.config, c.index_path())?;
             let records = events::load(&conn)?;
             let merged_in = events::merged_in(&records);
-            // The merge line of each record merged in: read only where
-            // there is one to show, by the log's own reader. A log that
-            // cannot be read costs the ids, never the listing.
+            // The merge of each record merged in, from the folder as it
+            // is now: read only where there is one to show. A folder or
+            // a log that cannot be read costs the ids, never the listing.
             let merge_ids = if merged_in.is_empty() {
                 BTreeMap::new()
             } else {
                 let dir = c.config.root().join(EVENTS_DIR);
-                crate::event_edit::live_merge_ids(&dir, &records).unwrap_or_else(|e| {
-                    notes.push(format!(
-                        "scout: note: no merge_id for {}: the merge log was not read ({e:#})",
-                        c.id()
-                    ));
-                    BTreeMap::new()
-                })
+                match crate::event_edit::live_merge_ids(&dir, &records) {
+                    Ok(live) => {
+                        stale |= live.stale;
+                        live.ids
+                    }
+                    Err(e) => {
+                        notes.push(format!("scout: note: no merge_id for {}: {e:#}", c.id()));
+                        BTreeMap::new()
+                    }
+                }
             };
             let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
             for d in crate::filter::load_docs(&conn)?.values() {
@@ -282,6 +293,7 @@ impl Engine {
                 min_items: q.min_items,
                 merged: q.merged,
                 removed: q.removed,
+                stale,
                 distinct,
                 events: out,
             },

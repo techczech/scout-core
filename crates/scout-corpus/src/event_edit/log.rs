@@ -61,7 +61,7 @@
 use super::store::{ident_of, links_of, no_follow, read_plain};
 use anyhow::{bail, Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -441,7 +441,17 @@ pub(super) struct MergeLog {
     pub lines: Vec<LogLine>,
     /// Merge line id → the id of the line that undoes it.
     pub undone: BTreeMap<String, String>,
+    /// Merge line id → its place in `lines`, kept as lines are read and
+    /// appended: an undo line finds its merge line here, so the read is
+    /// linear in the log.
+    merge_at: HashMap<String, usize>,
     last: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lines [`MergeLog::merge`] has looked at on this thread.
+    static LINES_LOOKED_AT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl MergeLog {
@@ -454,6 +464,7 @@ impl MergeLog {
         let mut log = MergeLog {
             lines: Vec::new(),
             undone: BTreeMap::new(),
+            merge_at: HashMap::new(),
             last: 0,
             file,
         };
@@ -499,7 +510,7 @@ impl MergeLog {
                 log.undone.insert(u.undoes.clone(), u.id.clone());
             }
             log.last = n;
-            log.lines.push(line);
+            log.push(line);
         }
         Ok(log)
     }
@@ -568,8 +579,24 @@ impl MergeLog {
         self.file.ready(line)
     }
 
+    /// Add a line, with its place when it is a merge line.
+    fn push(&mut self, line: LogLine) {
+        if let LogLine::Merge(m) = &line {
+            self.merge_at.insert(m.id.clone(), self.lines.len());
+        }
+        self.lines.push(line);
+    }
+
+    /// The merge line `id`, found by its place ([`MergeLog::merge_at`]):
+    /// one line looked at, however long the log.
     pub fn merge(&self, id: &str) -> Option<&MergeLine> {
-        self.merges().find(|m| m.id == id)
+        let at = *self.merge_at.get(id)?;
+        #[cfg(test)]
+        LINES_LOOKED_AT.with(|n| n.set(n.get() + 1));
+        match self.lines.get(at)? {
+            LogLine::Merge(m) => Some(&**m),
+            LogLine::Undo(_) => None,
+        }
     }
 
     pub fn merges(&self) -> impl Iterator<Item = &MergeLine> {
@@ -587,7 +614,7 @@ impl MergeLog {
     pub fn append_merge(&mut self, line: MergeLine) -> Result<()> {
         self.file.append(&line)?;
         self.last = number(&line.id).unwrap_or(self.last);
-        self.lines.push(LogLine::Merge(Box::new(line)));
+        self.push(LogLine::Merge(Box::new(line)));
         Ok(())
     }
 
@@ -595,7 +622,7 @@ impl MergeLog {
         self.file.append(&line)?;
         self.last = number(&line.id).unwrap_or(self.last);
         self.undone.insert(line.undoes.clone(), line.id.clone());
-        self.lines.push(LogLine::Undo(line));
+        self.push(LogLine::Undo(line));
         Ok(())
     }
 }
@@ -851,5 +878,79 @@ mod tests {
         ] {
             assert_eq!(number(bad), None, "{bad}");
         }
+    }
+
+    /// 30,000 merges, each undone by the next line, then one merge no
+    /// line undoes.
+    fn long_log(dir: &Path, pairs: u64) {
+        let id = |n: u64| crate::numbered_id::write('m', n);
+        let mut text = String::new();
+        let merge = |n: u64| {
+            let line = MergeLine {
+                id: id(n),
+                at: "2026-10-12T00:00:00Z".into(),
+                by: By::Dominik,
+                reason: None,
+                a: format!("a{n}"),
+                b: "b".into(),
+                a_merged_into_before: None,
+            };
+            serde_json::to_string(&line).unwrap() + "\n"
+        };
+        for i in 0..pairs {
+            text += &merge(2 * i + 1);
+            let undo = UndoLine {
+                id: id(2 * i + 2),
+                at: "2026-10-12T00:00:01Z".into(),
+                undoes: id(2 * i + 1),
+            };
+            text += &(serde_json::to_string(&undo).unwrap() + "\n");
+        }
+        text += &merge(2 * pairs + 1);
+        std::fs::write(dir.join(MERGE_LOG), text).unwrap();
+    }
+
+    #[test]
+    fn a_long_log_is_read_with_one_line_looked_at_per_undo() {
+        const PAIRS: u64 = 30_000;
+        let tmp = tempfile::tempdir().unwrap();
+        long_log(tmp.path(), PAIRS);
+        LINES_LOOKED_AT.with(|n| n.set(0));
+        let started = std::time::Instant::now();
+        let log = MergeLog::read(tmp.path()).unwrap();
+        let took = started.elapsed();
+        let looked_at = LINES_LOOKED_AT.with(|n| n.get());
+        // Each undo line finds its merge line by its place: one line
+        // looked at per undo, where a scan from the top looks at
+        // 1 + 2 + … + 30,000 of them.
+        assert_eq!(looked_at, PAIRS, "lines looked at while reading");
+        assert!(took.as_secs_f64() < 3.0, "the read took {took:?}");
+        assert_eq!(log.lines.len() as u64, 2 * PAIRS + 1);
+        assert_eq!(log.undone.len() as u64, PAIRS);
+        assert_eq!(log.merge_at.len() as u64, PAIRS + 1);
+        let live: Vec<&str> = log.live().map(|m| m.id.as_str()).collect();
+        assert_eq!(live, ["m060001"]);
+        // The place kept for an id is the place of that line.
+        for id in ["m000001", "m030001", "m059999", "m060001"] {
+            assert_eq!(log.merge(id).map(|m| m.id.as_str()), Some(id));
+        }
+        // An undo line's id, and an id of no line, are no merge line.
+        assert!(log.merge("m000002").is_none());
+        assert!(log.merge("m060002").is_none());
+        // A line appended is found too.
+        let mut log = log;
+        let next = log.next_id().unwrap();
+        assert_eq!(next, "m060002");
+        log.append_merge(MergeLine {
+            id: next.clone(),
+            at: "t".into(),
+            by: By::Model,
+            reason: None,
+            a: "z".into(),
+            b: "b".into(),
+            a_merged_into_before: None,
+        })
+        .unwrap();
+        assert_eq!(log.merge(&next).map(|m| m.a.as_str()), Some("z"));
     }
 }

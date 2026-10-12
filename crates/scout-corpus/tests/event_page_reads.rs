@@ -3,7 +3,8 @@
 //!
 //! - `EventEditor::merges` and the `merge_id` of a listed `merged_from`
 //!   entry: direct and chained merges, a record merged by hand (no log
-//!   line), an undone merge;
+//!   line), an undone merge; an index older than the folder (no id the
+//!   folder would not take, and `stale`);
 //! - `own_aliases`, `month_spans`, `undated_items` in `scout events`, each
 //!   absent where it has nothing to say;
 //! - records without items, with their `origin` and `edited`;
@@ -344,6 +345,7 @@ fn a_listing_made_from_a_stale_index_names_only_lines_still_in_effect() {
         alpha["merged_from"],
         json!([{"id": BETA, "name": "Beta follow-up"}])
     );
+    assert_eq!(stale["stale"], json!(true));
 
     // A log that cannot be read costs the ids and a note, not the listing.
     let m = ix.merge(BETA, ALPHA, None);
@@ -363,11 +365,148 @@ fn a_listing_made_from_a_stale_index_names_only_lines_still_in_effect() {
     let alpha = reply.body.events.iter().find(|x| x.id == ALPHA).unwrap();
     assert_eq!(alpha.merged_from.len(), 1);
     assert_eq!(alpha.merged_from[0].merge_id, None);
+    assert!(!reply.body.stale);
     fs::write(&log, good).unwrap();
     let reply = ix.engine.events(&q).unwrap();
     assert!(reply.notes.is_empty(), "{:?}", reply.notes);
+    assert!(!reply.body.stale);
     let alpha = reply.body.events.iter().find(|x| x.id == ALPHA).unwrap();
     assert_eq!(alpha.merged_from[0].merge_id.as_deref(), Some(m.as_str()));
+
+    // So does a records folder that cannot be read (`unmerge` is refused
+    // there too): a file that is no record.
+    let bad = ix.fx.dir.join("broken.md");
+    fs::write(&bad, "no frontmatter\n").unwrap();
+    assert!(ix.fx.editor().unmerge(&m).is_err());
+    let reply = ix.engine.events(&q).unwrap();
+    assert_eq!(reply.notes.len(), 1, "{:?}", reply.notes);
+    assert!(
+        reply.notes[0].starts_with(
+            "scout: note: no merge_id for highlights: the events folder was not read ("
+        ),
+        "{:?}",
+        reply.notes
+    );
+    let alpha = reply.body.events.iter().find(|x| x.id == ALPHA).unwrap();
+    assert_eq!(alpha.merged_from.len(), 1);
+    assert_eq!(alpha.merged_from[0].merge_id, None);
+    assert!(!reply.body.stale);
+    fs::remove_file(&bad).unwrap();
+    let reply = ix.engine.events(&q).unwrap();
+    assert!(reply.notes.is_empty(), "{:?}", reply.notes);
+}
+
+/// Every `merge_id` of a listing made without a rebuild, with the id of
+/// the record it is on.
+fn offered(listing: &Value) -> Vec<(String, String)> {
+    listing["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|e| e["merged_from"].as_array().cloned().unwrap_or_default())
+        .filter_map(|m| {
+            Some((
+                m["id"].as_str()?.to_string(),
+                m["merge_id"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn a_merge_id_is_offered_only_where_unmerge_takes_it() {
+    let ix = page();
+    let m = ix.merge(BETA, ALPHA, None);
+    let fresh = ix.listing(true);
+    assert_eq!(offered(&fresh), [(BETA.to_string(), m.clone())]);
+    assert!(fresh.get("stale").is_none(), "{fresh}");
+    let as_indexed = || {
+        let q = EventsQuery {
+            min_items: 0,
+            merged: true,
+            ..Default::default()
+        };
+        let reply = ix.engine.events(&q).unwrap();
+        assert!(reply.notes.is_empty(), "{:?}", reply.notes);
+        serde_json::to_value(reply.body).unwrap()
+    };
+
+    // Beta's `merged_into` set to gamma by hand, the index not rebuilt:
+    // the line is no longer in effect, and `unmerge` refuses it.
+    let mut beta = ix.fx.record(BETA);
+    beta.merged_into = Some(GAMMA.into());
+    put(&ix.fx.dir, &beta);
+    let e = ix.fx.editor();
+    assert!(e.merges().unwrap().is_empty());
+    let check = e.check().unwrap();
+    assert_eq!(check.problems.len(), 1);
+    assert_eq!(check.problems[0].kind, "not-as-logged");
+    assert_eq!(check.problems[0].log_id.as_deref(), Some(m.as_str()));
+    assert!(e.unmerge(&m).is_err());
+    // The listing is the index's (beta still under alpha), offers no id
+    // and says the folder changed.
+    let stale = as_indexed();
+    let alpha = stale["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == ALPHA)
+        .unwrap();
+    assert_eq!(
+        alpha["merged_from"],
+        json!([{"id": BETA, "name": "Beta follow-up"}])
+    );
+    assert!(offered(&stale).is_empty(), "{stale}");
+    assert_eq!(stale["stale"], json!(true));
+    // Rebuilt: beta is under gamma, by hand; nothing is stale.
+    let rebuilt = ix.listing(true);
+    assert!(rebuilt.get("stale").is_none(), "{rebuilt}");
+    assert!(offered(&rebuilt).is_empty());
+    assert_eq!(
+        ix.row(GAMMA)["merged_from"],
+        json!([{"id": BETA, "name": "Beta follow-up"}])
+    );
+
+    // A chain. Delta into beta, beta into alpha, indexed; then the
+    // survivor alpha is merged into gamma in the folder only. Every id
+    // the listing offers must be one `unmerge` would take, and the two
+    // entries listed under alpha are no longer alpha's to show.
+    beta.merged_into = None;
+    put(&ix.fx.dir, &beta);
+    // (The first line, logged and now not applied, is withdrawn.)
+    ix.fx.editor().unmerge(&m).unwrap();
+    let inner = ix.merge(DELTA, BETA, None);
+    let outer = ix.merge(BETA, ALPHA, None);
+    let fresh = ix.listing(true);
+    assert_eq!(
+        offered(&fresh),
+        [
+            (DELTA.to_string(), inner.clone()),
+            (BETA.to_string(), outer.clone())
+        ]
+    );
+    assert!(fresh.get("stale").is_none());
+    let top = ix.merge(ALPHA, GAMMA, None);
+    let stale = as_indexed();
+    assert!(offered(&stale).is_empty(), "{stale}");
+    assert_eq!(stale["stale"], json!(true));
+    // Rebuilt, all three are gamma's, each with its own line, and each
+    // id offered is in effect.
+    let rebuilt = ix.listing(true);
+    assert!(rebuilt.get("stale").is_none());
+    let ids: Vec<String> = offered(&rebuilt).into_iter().map(|(_, id)| id).collect();
+    assert_eq!(ids.len(), 3);
+    let live: Vec<String> = ix
+        .fx
+        .editor()
+        .merges()
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    for id in [&inner, &outer, &top] {
+        assert!(ids.contains(id) && live.contains(id), "{id}");
+    }
 }
 
 #[test]
@@ -833,6 +972,7 @@ fn on_the_real_archive_merges_have_ids_and_works_are_counted() {
         })
         .unwrap();
     assert!(reply.notes.is_empty(), "{:?}", reply.notes);
+    assert!(!reply.body.stale);
     let listed = &reply.body.events;
     let from: Vec<_> = listed.iter().flat_map(|l| &l.merged_from).collect();
     let ids: std::collections::BTreeSet<&str> =
