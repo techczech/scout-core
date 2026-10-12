@@ -224,14 +224,21 @@ impl Snapshot {
 /// `Ok` for no faults, else one error listing them and saying that
 /// nothing was changed.
 pub(super) fn refuse(faults: Vec<String>) -> Result<()> {
-    match fail_with(faults) {
-        Ok(()) => Ok(()),
-        // The seed's last line is about its own writes.
-        Err(e) => bail!(
-            "{}",
-            e.to_string()
-                .replace("\nnothing was written", "\nnothing was changed")
-        ),
+    fail_with(faults).map_err(nothing_changed)
+}
+
+/// The seed's refusal, for an edit: its last line is about the seed's
+/// own writes ("nothing was written"); here nothing is changed. The
+/// error stays one of several lines ([`crate::ErrorLines`]).
+pub(crate) fn nothing_changed(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast::<crate::ErrorLines>() {
+        Ok(mut lines) => {
+            if let Some(last) = lines.0.last_mut().filter(|l| *l == "nothing was written") {
+                *last = "nothing was changed".into();
+            }
+            lines.into()
+        }
+        Err(e) => e,
     }
 }
 

@@ -181,7 +181,8 @@ pub fn print_events_report(e: &EventsReport) {
     }
 }
 
-/// The `index build` line for a corpus with a topic layer.
+/// The `index build` line for a corpus with a topic layer, and a second
+/// line when its corrections file was not read.
 pub fn print_topic_report(t: &TopicReport) {
     let mut extra = Vec::new();
     if t.bad_lines > 0 {
@@ -214,6 +215,13 @@ pub fn print_topic_report(t: &TopicReport) {
         t.unmatched,
         t.tagged_documents
     );
+    if let Some(skipped) = &t.corrections_skipped {
+        println!(
+            "{:<10} WARNING: corrections NOT applied: {}",
+            "",
+            safe(&skipped.reason)
+        );
+    }
     if let Some(e) = &t.events {
         print_events_report(e);
     }

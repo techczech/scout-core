@@ -482,8 +482,8 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             // An error names what it stopped at: a path, a key, a value
-            // of a file. Its line feeds stay (a cause per line).
-            eprintln!("scout: {}", term::safe_lines(&format!("{e:#}")));
+            // of a file or an argument. Each cause is one line.
+            eprintln!("scout: {}", term::error_text(&e));
             if e.downcast_ref::<PassageNotFound>().is_some() {
                 return ExitCode::from(1);
             }
@@ -508,7 +508,7 @@ fn out<T: serde::Serialize + Outcome>(
 ) -> Result<ExitCode> {
     let reply = reply?;
     for n in &reply.notes {
-        eprintln!("{}", term::safe_lines(n));
+        eprintln!("{}", term::safe(n));
     }
     if json {
         println!("{}", api::to_json(&reply.body)?);
@@ -869,7 +869,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 };
                 let tty = std::io::stderr().is_terminal();
                 let mut on = |ev: BuildEvent| match ev {
-                    BuildEvent::Download(note) => eprintln!("{}", term::safe_lines(&note)),
+                    BuildEvent::Download(note) => eprintln!("{}", term::safe(&note)),
                     BuildEvent::Embedding {
                         corpus,
                         done,

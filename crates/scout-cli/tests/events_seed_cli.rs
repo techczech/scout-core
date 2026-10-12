@@ -337,3 +337,49 @@ fn a_refusal_is_a_non_zero_exit_with_the_file_and_the_reason_and_no_write() {
     assert_eq!(names(tmp.path()), before);
     assert!(!h.join("analysis/events").exists());
 }
+
+/// A refusal of several faults is several lines, and the only line
+/// breaks are the ones between the faults: a line feed in a file name
+/// starts no line.
+#[cfg(unix)]
+#[test]
+fn a_refusal_of_several_faults_breaks_lines_only_between_the_faults() {
+    let tmp = tempfile::tempdir().unwrap();
+    let h = tmp.path().join("archive");
+    archive(&h);
+    let out = tmp.path().join("out");
+    let bad = "---\nid: !!binary YQ==\nmembers: [2026-09/E01]\n---\n";
+    write(&out, "a.md", bad);
+    write(&out, "b\nFAKE: all records are fine.md", bad);
+    let r = scout(
+        tmp.path(),
+        &[
+            "events",
+            "seed",
+            "--archive",
+            h.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(r.status.code(), Some(2));
+    assert_eq!(text(&r.stdout), "");
+    let err = text(&r.stderr);
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(lines.len(), 3, "{err:?}");
+    assert!(lines[0].starts_with("scout: "), "{err:?}");
+    assert!(
+        lines[..2]
+            .iter()
+            .all(|l| l.contains("cannot read the record")),
+        "{err:?}"
+    );
+    assert!(
+        err.contains("b\u{fffd}FAKE: all records are fine.md: cannot read the record"),
+        "{err:?}"
+    );
+    assert_eq!(
+        lines[2],
+        "these 2 records are not read by scout; fix or remove before seeding (nothing was written)"
+    );
+}

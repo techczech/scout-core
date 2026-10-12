@@ -4,7 +4,7 @@
 //! index build on the temp archive, then a search hit's `topics`); a
 //! refusal leaves every file of the archive as it was.
 
-use scout_corpus::corrections::{Corrected, CorrectionEditor, MAX_NAME_CHARS};
+use scout_corpus::corrections::{Corrected, CorrectionEditor, MAX_FILE_BYTES, MAX_NAME_CHARS};
 use scout_corpus::registry::{CorpusConfig, CorpusKind, DocumentUnit, FieldMap};
 use scout_corpus::topics::{self, TopicInfo};
 use scout_corpus::{events, Corpus, SearchRequest};
@@ -692,12 +692,12 @@ fn a_file_with_a_line_the_writer_cannot_read_is_not_appended_to() {
                     .replace("\"theme_add\"", "\"note\":\"x\",\"theme_add\"")
             ),
             "line 2: a numbered line with the key \"note\"",
-            0,
+            1,
         ),
         (
             format!("{good}\n{}\n", good.replace("\"x:4\"", "\"x:1\"")),
             "line 2: id \"c000001\" is not greater than the numbered line before",
-            0,
+            1,
         ),
         (
             format!(
@@ -713,7 +713,7 @@ fn a_file_with_a_line_the_writer_cannot_read_is_not_appended_to() {
                 r#"{"id":"c000002","at":"t","date":"d","by":"dominik","key":"x:4","theme_add":["A","B"]}"#
             ),
             "line 2: \"theme_add\" is not a list of one name",
-            0,
+            1,
         ),
         (
             format!(
@@ -721,7 +721,7 @@ fn a_file_with_a_line_the_writer_cannot_read_is_not_appended_to() {
                 r#"{"id":"c000002","date":"d","by":"dominik","key":"x:4","theme_add":["A"]}"#
             ),
             "line 2: a numbered line without a text \"at\"",
-            0,
+            1,
         ),
     ] {
         let fx = fixture(true);
@@ -731,7 +731,7 @@ fn a_file_with_a_line_the_writer_cannot_read_is_not_appended_to() {
         fx.refused(why, || e.undo("c000001"));
         fx.refused(why, || e.list("x:1"));
         fx.refused("nothing was changed", || e.add_entity("x:1", "E", "person"));
-        // The reader stays tolerant: it builds, and counts what it skips.
+        // The reader builds all the same, and counts the line it skips.
         let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
         assert_eq!(build.corrections_bad_lines, reader_bad, "{why}");
     }
@@ -1099,4 +1099,362 @@ fn undo_is_refused_for_an_item_that_has_no_tag_row_any_more() {
     assert_eq!(fx.reader(4).themes, [MATHS]);
     e.undo("c000001").unwrap();
     assert!(fx.reader(4).themes.is_empty());
+}
+
+/// A numbered line with the usual provenance for `key`, and `rest` as its
+/// other keys.
+fn numbered(id: &str, key: &str, rest: &str) -> String {
+    format!(r#"{{"id":"{id}","at":"t","date":"d","by":"dominik","key":"{key}",{rest}}}"#)
+}
+
+/// The review's reproduction: `c000002`, then `c000001` with a `note`.
+/// The reader applies the first and counts the second; the writer refuses
+/// the file and names that same line.
+#[test]
+fn an_out_of_order_numbered_line_with_a_note_is_skipped_by_the_reader_and_named_by_the_writer() {
+    let fx = fixture(true);
+    let text = format!(
+        "{}\n{}\n",
+        numbered("c000002", "x:4", r#""theme_add":["AI and mathematics"]"#),
+        numbered(
+            "c000001",
+            "x:4",
+            r#""note":"by hand","entity_add":["Terence Tao"],"entity_type":"person""#
+        ),
+    );
+    write(fx.root(), topics::CORRECTIONS_FILE, &text);
+    let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert_eq!(
+        (
+            build.corrections,
+            build.corrections_bad_lines,
+            build.corrections_unmatched,
+            build.corrections_undone
+        ),
+        (1, 1, 0, 0)
+    );
+    let four = fx.reader(4);
+    assert_eq!(four.themes, [MATHS]);
+    assert!(four.entities.is_empty(), "{four:?}");
+    assert_eq!(four.corrected, ["themes"]);
+    let e = fx.editor();
+    let why = "line 2: a numbered line with the key \"note\"";
+    fx.refused(why, || e.add_theme("x:1", VIBE));
+    fx.refused(why, || e.undo("c000002"));
+    fx.refused(why, || e.list("x:4"));
+    // Out of order alone is enough.
+    let text = format!(
+        "{}\n{}\n",
+        numbered("c000002", "x:4", r#""theme_add":["AI and mathematics"]"#),
+        numbered(
+            "c000001",
+            "x:4",
+            r#""entity_add":["Terence Tao"],"entity_type":"person""#
+        ),
+    );
+    write(fx.root(), topics::CORRECTIONS_FILE, &text);
+    let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert_eq!((build.corrections, build.corrections_bad_lines), (1, 1));
+    assert!(fx.reader(4).entities.is_empty());
+    fx.refused(
+        "line 2: id \"c000001\" is not greater than the numbered line before",
+        || e.add_theme("x:1", VIBE),
+    );
+}
+
+/// One table, both paths. Line 1 is a valid correction (`c000002`: x:4
+/// gets a theme). Line 2 is a numbered line of one rejection kind, which
+/// would change x:4 if it were applied. Line 3, where given, is a
+/// numbered undo of line 2.
+///
+/// Reader: line 1 applied, every other line a bad line, x:4 as line 1
+/// leaves it. Writer: every command refuses, naming line 2 and the
+/// reason. The reason is the reader's too: it comes from the one function
+/// both ask.
+#[test]
+fn every_kind_of_rejected_numbered_line_is_judged_alike_by_the_reader_and_the_writer() {
+    let first = numbered("c000002", "x:4", r#""theme_add":["AI and mathematics"]"#);
+    let person = r#""entity_add":["E"],"entity_type":"person""#;
+    let cases: Vec<(&str, String, Option<String>, &str)> = vec![
+        (
+            "a key `scout correct` does not write",
+            numbered("c000003", "x:4", &format!(r#""note":"n",{person}"#)),
+            None,
+            "a numbered line with the key \"note\", which `scout correct` does not write",
+        ),
+        (
+            "a whole-list key on a numbered line",
+            numbered("c000003", "x:4", r#""themes":["Replaced"]"#),
+            None,
+            "a numbered line with the key \"themes\", which `scout correct` does not write",
+        ),
+        (
+            "more than one change",
+            numbered(
+                "c000003",
+                "x:4",
+                r#""theme_add":["B"],"theme_remove":["AI and mathematics"]"#,
+            ),
+            None,
+            "a numbered line with more than one change",
+        ),
+        (
+            "a change and an undo",
+            numbered("c000003", "x:4", r#""theme_add":["B"],"undoes":"c000002""#),
+            None,
+            "a numbered line with more than one change",
+        ),
+        (
+            "no change",
+            numbered("c000003", "x:4", r#""entity_type":"person""#),
+            None,
+            "a numbered line with no change and no `undoes`",
+        ),
+        (
+            "an id below an earlier numbered id",
+            numbered("c000001", "x:4", person),
+            None,
+            "id \"c000001\" is not greater than the numbered line before",
+        ),
+        (
+            "an id equal to an earlier numbered id",
+            numbered("c000002", "x:4", person),
+            None,
+            "id \"c000002\" is not greater than the numbered line before",
+        ),
+        (
+            "a list of two names",
+            numbered("c000003", "x:4", r#""theme_add":["B","C"]"#),
+            None,
+            "\"theme_add\" is not a list of one name",
+        ),
+        (
+            "a name that is not in a list",
+            numbered("c000003", "x:4", r#""theme_remove":"AI and mathematics""#),
+            None,
+            "\"theme_remove\" is not a list of one name",
+        ),
+        (
+            "a blank name",
+            numbered(
+                "c000003",
+                "x:4",
+                r#""entity_add":[" "],"entity_type":"person""#,
+            ),
+            None,
+            "\"entity_add\" is not a list of one name",
+        ),
+        (
+            "an entity type that is none",
+            numbered(
+                "c000003",
+                "x:4",
+                r#""entity_add":["E"],"entity_type":"thing""#,
+            ),
+            None,
+            "`entity_type` is not an entity type",
+        ),
+        (
+            "an entity without its type",
+            numbered("c000003", "x:4", r#""entity_add":["E"]"#),
+            None,
+            "`entity_type` goes with `entity_add`, and only with it",
+        ),
+        (
+            "no `at`",
+            numbered("c000003", "x:4", person).replace(r#""at":"t","#, ""),
+            None,
+            "a numbered line without a text \"at\"",
+        ),
+        (
+            "a `by` that is not text",
+            numbered("c000003", "x:4", person).replace(r#""by":"dominik""#, r#""by":7"#),
+            None,
+            "a numbered line without a text \"by\"",
+        ),
+        (
+            "an `undoes` that is not a correction id",
+            numbered("c000003", "x:4", r#""undoes":"m000002""#),
+            None,
+            "`undoes` is not a correction id",
+        ),
+        (
+            "an undo of no line",
+            numbered("c000003", "x:4", r#""undoes":"c000001""#),
+            None,
+            "undoes \"c000001\", which no earlier correction of its key is",
+        ),
+        (
+            "an undo of another item's correction",
+            numbered("c000003", "x:1", r#""undoes":"c000002""#),
+            None,
+            "undoes \"c000002\", which no earlier correction of its key is",
+        ),
+        (
+            "a rejected line is not undone either",
+            numbered("c000003", "x:4", &format!(r#""note":"n",{person}"#)),
+            Some(numbered("c000004", "x:4", r#""undoes":"c000003""#)),
+            "a numbered line with the key \"note\", which `scout correct` does not write",
+        ),
+    ];
+    for (kind, second, third, why) in cases {
+        let fx = fixture(true);
+        let mut text = format!("{first}\n{second}\n");
+        let mut bad = 1;
+        if let Some(third) = &third {
+            text.push_str(&format!("{third}\n"));
+            bad += 1;
+        }
+        write(fx.root(), topics::CORRECTIONS_FILE, &text);
+        // The reader.
+        let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+        assert_eq!(
+            (
+                build.corrections,
+                build.corrections_bad_lines,
+                build.corrections_unmatched,
+                build.corrections_undone
+            ),
+            (1, bad, 0, 0),
+            "{kind}"
+        );
+        let four = fx.reader(4);
+        assert_eq!(four.themes, [MATHS], "{kind}");
+        assert!(four.entities.is_empty(), "{kind}: {four:?}");
+        assert_eq!(four.corrected, ["themes"], "{kind}");
+        assert_eq!(fx.reader(1).corrected, Vec::<String>::new(), "{kind}");
+        // The writer: the same line, the same reason.
+        let e = fx.editor();
+        let named = format!("line 2: {why}");
+        fx.refused(&named, || e.add_theme("x:1", VIBE));
+        fx.refused(&named, || e.undo("c000002"));
+        fx.refused(&named, || e.list("x:4"));
+    }
+
+    // A second undo of one correction: line 3 is the rejected line.
+    let fx = fixture(true);
+    let undo = |id: &str| numbered(id, "x:4", r#""undoes":"c000002""#);
+    write(
+        fx.root(),
+        topics::CORRECTIONS_FILE,
+        &format!("{first}\n{}\n{}\n", undo("c000003"), undo("c000004")),
+    );
+    let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert_eq!(
+        (
+            build.corrections,
+            build.corrections_bad_lines,
+            build.corrections_undone
+        ),
+        (0, 1, 1)
+    );
+    assert!(fx.reader(4).themes.is_empty());
+    let e = fx.editor();
+    fx.refused("line 3: undoes \"c000002\" a second time", || {
+        e.add_theme("x:4", MATHS)
+    });
+
+    // An `id` of another form makes no numbered line: both read it as a
+    // hand-written line, on which the patch keys are not read.
+    let fx = fixture(true);
+    for (n, id) in ["c1", "c0000000001", "C000003", "x000003"]
+        .iter()
+        .enumerate()
+    {
+        let hand = numbered(id, "x:4", r#""theme_add":["B"]"#);
+        write(
+            fx.root(),
+            topics::CORRECTIONS_FILE,
+            &format!("{first}\n{hand}\n"),
+        );
+        let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+        assert_eq!(
+            (build.corrections, build.corrections_bad_lines),
+            (2, 0),
+            "{id}"
+        );
+        assert_eq!(fx.reader(4).themes, [MATHS], "{id}");
+        let e = fx.editor();
+        let l = e.list("x:4").unwrap();
+        assert_eq!(l.corrections[0].op, "hand-written", "{id}");
+        assert_eq!(l.corrections[0].id, None, "{id}");
+        if n == 0 {
+            let c = e.add_entity("x:4", "E", "person").unwrap();
+            assert_eq!(c.id, "c000003");
+            fx.agreed(4, 2, &c);
+        }
+    }
+}
+
+/// A corrections file over the limit the writer keeps it under is not
+/// read at all: the build completes, applies no correction, and its
+/// report says so. Back under the limit, the corrections apply again.
+#[test]
+fn a_corrections_file_over_the_size_limit_is_not_read_and_the_build_says_so() {
+    let fx = fixture(true);
+    let e = fx.editor();
+    e.add_theme("x:4", MATHS).unwrap();
+    let ok = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert_eq!(
+        (ok.corrections, &ok.corrections_skipped, ok.warnings),
+        (1, &None, 0)
+    );
+    let json = serde_json::to_value(&ok).unwrap();
+    assert!(json.get("corrections_skipped").is_none() && json.get("warnings").is_none());
+    assert_eq!(fx.reader(4).themes, [MATHS]);
+
+    // One byte over (a sparse tail: no megabytes are written).
+    let len = fs::metadata(fx.file()).unwrap().len();
+    let over = MAX_FILE_BYTES + 1;
+    let f = fs::OpenOptions::new().write(true).open(fx.file()).unwrap();
+    f.set_len(over).unwrap();
+    let report = fx.corpus.build_index(false).unwrap();
+    let t = report.topics.unwrap();
+    assert!(t.reloaded);
+    assert_eq!(
+        (
+            t.corrections,
+            t.corrections_unmatched,
+            t.corrections_bad_lines,
+            t.corrections_undone
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(t.warnings, 1);
+    let skipped = t.corrections_skipped.clone().expect("skipped");
+    assert_eq!((skipped.bytes, skipped.limit), (over, MAX_FILE_BYTES));
+    assert_eq!(
+        skipped.reason,
+        format!(
+            "the corrections file is {over} bytes, larger than the limit of {MAX_FILE_BYTES} bytes; it was not read and NO correction was applied"
+        )
+    );
+    let json = serde_json::to_value(&t).unwrap();
+    assert_eq!(json["corrections_skipped"]["bytes"], over);
+    assert_eq!(json["warnings"], 1);
+    let four = fx.reader(4);
+    assert!(
+        four.themes.is_empty() && four.corrected.is_empty(),
+        "{four:?}"
+    );
+    // An unchanged rebuild keeps saying so.
+    let again = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert!(!again.reloaded);
+    assert_eq!(
+        (again.warnings, again.corrections_skipped),
+        (1, Some(skipped))
+    );
+    // The writer does not read it either.
+    let err = e.add_theme("x:1", VIBE).unwrap_err().to_string();
+    assert!(err.contains("larger than"), "{err}");
+
+    // Back at its length: read again.
+    f.set_len(len).unwrap();
+    let t = fx.corpus.build_index(false).unwrap().topics.unwrap();
+    assert!(t.reloaded);
+    assert_eq!(
+        (t.corrections, &t.corrections_skipped, t.warnings),
+        (1, &None, 0)
+    );
+    assert_eq!(fx.reader(4).themes, [MATHS]);
 }

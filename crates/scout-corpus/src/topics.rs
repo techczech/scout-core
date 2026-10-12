@@ -26,12 +26,22 @@
 //!   the line's own `themes` / `entities`, additions first: a name the
 //!   list has under [`fold`] is not added again; a removal takes out every
 //!   name equal under the fold); and `undoes` (a numbered id) makes the
-//!   line an undo line. An undo line takes back every earlier numbered
-//!   line of that id and the same `key` that is not itself an undo line:
-//!   such a line is not applied at all, as if it were not in the file.
-//!   Nothing else on an undo line is read. An undo line that names no
-//!   such earlier line is a bad line. A file without a numbered line
-//!   reads exactly as it did before numbered lines existed.
+//!   line an undo line. An undo line takes back the earlier numbered
+//!   correction of that id and the same `key`: that line is not applied
+//!   at all, as if it were not in the file. A numbered line is read only
+//!   when it is valid, and what is valid is decided in one place for this
+//!   reader and for the writer ([`crate::correction_lines`]: the keys
+//!   `scout correct` writes and no other, one change, an id greater than
+//!   every earlier numbered id, an `undoes` that names an earlier valid
+//!   correction of the same key not yet undone). Any other numbered line
+//!   is a bad line: counted, not applied, and not undone by a later line.
+//!   A file without a numbered line reads exactly as it did before
+//!   numbered lines existed.
+//! - Limits: a corrections file over 64 MiB
+//!   ([`crate::correction_lines::MAX_FILE_BYTES`], the limit the writer
+//!   keeps the file under) is not read at all: no correction is applied
+//!   and the layer says so (`Layer::corrections_skipped`). The file is
+//!   read line by line, twice; no line is kept once it is read.
 //! - Events: everything in this note holds only for a corpus that has a
 //!   records folder (`analysis/events/`, [`crate::events`]). There an item
 //!   can be in several events: the tag row's `event`, the ids of its
@@ -56,6 +66,7 @@
 //! writer, [`crate::corrections`]). The index copy is rebuilt whenever the
 //! layer files' bytes or the corpus's documents change.
 
+use crate::correction_lines::{self, numbered, Counts, Kept, LineRead, Opened, Skipped};
 use crate::events::{EventSet, EventsReport};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -261,6 +272,10 @@ pub struct Layer {
     /// Numbered correction lines an undo line took back. Neither they nor
     /// the undo lines count in `corrections`.
     pub corrections_undone: usize,
+    /// Set when the corrections file was not read at all (it is over the
+    /// size limit): then no correction is applied and every count above
+    /// is 0.
+    pub corrections_skipped: Option<Skipped>,
     /// The corpus's event records, when it has a records folder.
     pub events: Option<EventSet>,
 }
@@ -367,7 +382,18 @@ fn layer_hash(root: &Path) -> Result<String> {
     let layer = stream_lines(&root.join(LAYER_FILE), 0, &mut h, |_| {})?;
     if layer {
         h.update([0u8]);
-        stream_lines(&root.join(CORRECTIONS_FILE), 0, &mut h, |_| {})?;
+        let path = root.join(CORRECTIONS_FILE);
+        match correction_lines::open(&path, correction_lines::MAX_FILE_BYTES)? {
+            Opened::Missing => {}
+            Opened::TooLarge(skipped) => correction_lines::hash_skipped(&mut h, &skipped),
+            Opened::File(mut file, len) => split_lines(
+                correction_lines::rewound(&mut file, len)?,
+                0,
+                &mut h,
+                |_| {},
+            )
+            .with_context(|| format!("read {}", path.display()))?,
+        }
     }
     Ok(if layer || records {
         hex(h)
@@ -401,7 +427,7 @@ fn read_beside(root: &Path) -> Result<Beside> {
     let mut h = Sha1::new();
     let records = crate::events::read_hashed(root, &mut h)?;
     let lasting = records.is_some();
-    let Some(rows) = read_tag_rows_hashed(root, lasting, &mut h)? else {
+    let Some(mut rows) = read_tag_rows_hashed(root, lasting, &mut h)? else {
         // No tags: the records are still read, hashed and (by `refresh`)
         // stored, so `scout events --min-items 0` lists them.
         let hash = match records {
@@ -415,28 +441,25 @@ fn read_beside(root: &Path) -> Result<Beside> {
         });
     };
     h.update([0u8]);
-    let mut lines: Vec<Option<String>> = Vec::new();
-    stream_lines(
+    let read = read_corrections_file(
         &root.join(CORRECTIONS_FILE),
-        MAX_LINE_BYTES,
+        correction_lines::MAX_FILE_BYTES,
+        &mut rows.items,
+        &mut rows.members,
+        lasting,
         &mut h,
-        |l| match l {
-            Line::Text(t) => lines.push(Some(t.to_string())),
-            Line::Bad => lines.push(None),
-        },
     )?;
-    let lines: Vec<Option<&str>> = lines.iter().map(Option::as_deref).collect();
-    let (items, read) = correct(rows.items, rows.members, records.as_ref(), &lines);
-    let count = |want: LineRead| read.iter().filter(|r| **r == want).count();
+    finish(&mut rows.items, &rows.members, records.as_ref());
     Ok(Beside {
         layer: Some(Layer {
             layer_path: root.join(LAYER_FILE),
-            items,
+            items: rows.items,
             bad_lines: rows.bad_lines,
-            corrections: count(LineRead::Applied),
-            corrections_unmatched: count(LineRead::UnknownKey),
-            corrections_bad_lines: count(LineRead::Bad),
-            corrections_undone: count(LineRead::Undone),
+            corrections: read.counts.applied,
+            corrections_unmatched: read.counts.unknown_key,
+            corrections_bad_lines: read.counts.bad,
+            corrections_undone: read.counts.undone,
+            corrections_skipped: read.skipped,
             events: records,
         }),
         records_alone: None,
@@ -444,22 +467,77 @@ fn read_beside(root: &Path) -> Result<Beside> {
     })
 }
 
-/// The tag rows with a corrections file's lines applied, as every reader
-/// of the layer has them: the lines in order ([`apply_corrections`]), the
-/// event names filled, and, with records, every item's events resolved.
-/// Gives the items and what each line was read as.
-fn correct(
-    mut items: BTreeMap<String, LayerItem>,
-    mut members: BTreeMap<String, Membership>,
+/// What reading a corrections file gave.
+struct CorrectionsRead {
+    /// What its lines were read as.
+    counts: Counts,
+    /// What was kept in memory while they went past.
+    #[cfg_attr(not(test), allow(dead_code))]
+    kept: Kept,
+    /// Set when the file was not read (over `limit`).
+    skipped: Option<Skipped>,
+}
+
+/// Apply the corrections file at `path` to `items`, feeding `hash` every
+/// byte read. A file over `limit` bytes is not read: nothing is applied,
+/// `skipped` says why, and `hash` takes its size instead of its bytes.
+/// The file is streamed twice ([`correction_lines::read`]), the same
+/// bytes both times or an error; no line is kept in memory.
+fn read_corrections_file(
+    path: &Path,
+    limit: u64,
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &mut BTreeMap<String, Membership>,
+    lasting: bool,
+    hash: &mut Sha1,
+) -> Result<CorrectionsRead> {
+    let mut out = CorrectionsRead {
+        counts: Counts::default(),
+        kept: Kept::default(),
+        skipped: None,
+    };
+    let (mut file, len) = match correction_lines::open(path, limit)? {
+        Opened::Missing => return Ok(out),
+        Opened::TooLarge(skipped) => {
+            correction_lines::hash_skipped(hash, &skipped);
+            out.skipped = Some(skipped);
+            return Ok(out);
+        }
+        Opened::File(file, len) => (file, len),
+    };
+    let mut passes: Vec<Sha1> = Vec::new();
+    out.kept = correction_lines::read(
+        |each| -> std::io::Result<()> {
+            let mut h = hash.clone();
+            let r = correction_lines::rewound(&mut file, len)?;
+            split_lines(r, MAX_LINE_BYTES, &mut h, |l| match l {
+                Line::Text(t) => each(Some(t)),
+                Line::Bad => each(None),
+            })?;
+            passes.push(h);
+            Ok(())
+        },
+        |m| apply_correction(items, members, lasting, m),
+        |r| out.counts.add(r),
+    )
+    .with_context(|| format!("read {}", path.display()))?;
+    correction_lines::same_bytes(path, &passes[0], &passes[1])?;
+    *hash = passes.swap_remove(1);
+    Ok(out)
+}
+
+/// What every reader of the layer does once the corrections are applied:
+/// the event names filled and, with records, every item's events
+/// resolved.
+fn finish(
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &BTreeMap<String, Membership>,
     records: Option<&EventSet>,
-    lines: &[Option<&str>],
-) -> (BTreeMap<String, LayerItem>, Vec<LineRead>) {
-    let read = apply_corrections(&mut items, &mut members, records.is_some(), lines);
-    fill_event_names(&mut items);
+) {
+    fill_event_names(items);
     if let Some(set) = records {
-        resolve_events(&mut items, &members, set);
+        resolve_events(items, members, set);
     }
-    (items, read)
 }
 
 /// The tag rows and the event records of one corpus, read once, for the
@@ -488,19 +566,23 @@ impl TagSource {
         &self,
         text: &[u8],
     ) -> (BTreeMap<String, LayerItem>, Vec<LineRead>) {
-        let mut lines: Vec<Option<String>> = Vec::new();
+        let mut items = self.rows.items.clone();
+        let mut members = self.rows.members.clone();
+        let lasting = self.records.is_some();
+        let mut read = Vec::new();
         // Reading from memory does not fail.
-        let _ = split_lines(text, MAX_LINE_BYTES, &mut Sha1::new(), |l| match l {
-            Line::Text(t) => lines.push(Some(t.to_string())),
-            Line::Bad => lines.push(None),
-        });
-        let lines: Vec<Option<&str>> = lines.iter().map(Option::as_deref).collect();
-        correct(
-            self.rows.items.clone(),
-            self.rows.members.clone(),
-            self.records.as_ref(),
-            &lines,
-        )
+        let _ = correction_lines::read(
+            |each| {
+                split_lines(text, MAX_LINE_BYTES, &mut Sha1::new(), |l| match l {
+                    Line::Text(t) => each(Some(t)),
+                    Line::Bad => each(None),
+                })
+            },
+            |m| apply_correction(&mut items, &mut members, lasting, m),
+            |r| read.push(r),
+        );
+        finish(&mut items, &members, self.records.as_ref());
+        (items, read)
     }
 }
 
@@ -603,99 +685,6 @@ fn add_layer_line(
     true
 }
 
-/// What one non-blank line of the corrections file was read as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LineRead {
-    /// Applied to its item.
-    Applied,
-    /// Its key has no tag row; not applied.
-    UnknownKey,
-    /// Not a JSON object, no `key`, a wrongly typed field, over the line
-    /// cap, not UTF-8, or an undo line that names no line to take back.
-    Bad,
-    /// An undo line that took an earlier line back.
-    Undo,
-    /// A numbered line an undo line took back; not applied.
-    Undone,
-}
-
-/// The number of a numbered correction's id: `c` and six to nine digits.
-pub(crate) fn correction_number(id: &str) -> Option<u64> {
-    let digits = id.strip_prefix('c')?;
-    ((6..=9).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| digits.parse().ok())
-        .flatten()
-}
-
-/// The id of a numbered line, when `m` is one.
-fn numbered(m: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
-    m.get("id")
-        .and_then(|v| v.as_str())
-        .filter(|id| correction_number(id).is_some())
-}
-
-/// Apply the lines of a corrections file, in order (`None`: a line that
-/// is not valid UTF-8 or is over the cap). Undo lines are found first, so
-/// a line taken back is never applied (see the module notes).
-fn apply_corrections(
-    items: &mut BTreeMap<String, LayerItem>,
-    members: &mut BTreeMap<String, Membership>,
-    lasting: bool,
-    lines: &[Option<&str>],
-) -> Vec<LineRead> {
-    let parsed: Vec<Option<serde_json::Map<String, serde_json::Value>>> = lines
-        .iter()
-        .map(|l| match serde_json::from_str::<serde_json::Value>((*l)?) {
-            Ok(serde_json::Value::Object(m)) => Some(m),
-            _ => None,
-        })
-        .collect();
-    type Object = serde_json::Map<String, serde_json::Value>;
-    fn key_of(m: &Object) -> Option<&str> {
-        m.get("key").and_then(|k| k.as_str()).map(str::trim)
-    }
-    fn is_undo(m: &Object) -> bool {
-        numbered(m).is_some() && m.contains_key("undoes")
-    }
-    // Numbered lines that are not undo lines, by id and key.
-    let mut by_id: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
-    for (i, m) in parsed.iter().enumerate() {
-        if let Some(m) = m.as_ref().filter(|m| !is_undo(m)) {
-            if let (Some(id), Some(key)) = (numbered(m), key_of(m)) {
-                by_id.entry((id, key)).or_default().push(i);
-            }
-        }
-    }
-    let mut read: Vec<Option<LineRead>> = vec![None; lines.len()];
-    for (j, m) in parsed.iter().enumerate() {
-        let Some(m) = m.as_ref().filter(|m| is_undo(m)) else {
-            continue;
-        };
-        let target = m
-            .get("undoes")
-            .and_then(|v| v.as_str())
-            .filter(|id| correction_number(id).is_some());
-        let mut found = false;
-        if let (Some(target), Some(key)) = (target, key_of(m)) {
-            let earlier = by_id.get(&(target, key)).map(Vec::as_slice);
-            for &i in earlier.unwrap_or_default().iter().filter(|i| **i < j) {
-                read[i] = Some(LineRead::Undone);
-                found = true;
-            }
-        }
-        read[j] = Some(if found { LineRead::Undo } else { LineRead::Bad });
-    }
-    parsed
-        .iter()
-        .zip(read)
-        .map(|(m, known)| match (known, m) {
-            (Some(known), _) => known,
-            (None, None) => LineRead::Bad,
-            (None, Some(m)) => apply_correction(items, members, lasting, m),
-        })
-        .collect()
-}
-
 /// Add to and take from a list of names under [`fold`]: additions first
 /// (a name the list has is not added again), then removals (every name
 /// equal under the fold).
@@ -712,7 +701,9 @@ fn patch_names(list: &mut Vec<String>, add: &[String], remove: &[String]) {
     }
 }
 
-/// Apply one corrections line, already parsed. `event_add` /
+/// Apply one corrections line, already parsed: a hand-written line, or a
+/// numbered correction [`correction_lines`] found valid and not undone
+/// (its only caller is [`correction_lines::read`]). `event_add` /
 /// `event_remove` are fields only when `lasting` (the corpus has a records
 /// folder), and `theme_add` / `theme_remove` / `entity_add` /
 /// `entity_remove` only on a numbered line; otherwise they are unknown
@@ -946,6 +937,15 @@ pub struct TopicReport {
     /// 0).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub corrections_undone: usize,
+    /// Present when the corrections file was NOT READ (it is over the
+    /// size limit): no correction was applied by this build. Says why,
+    /// with the file's size and the limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corrections_skipped: Option<Skipped>,
+    /// How many things about the layer files need his attention (present
+    /// when not 0): 1 for a corrections file that was not read.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub warnings: usize,
     /// False when the layer and the documents were unchanged since the last
     /// build, so the stored copy was kept.
     pub reloaded: bool,
@@ -1058,6 +1058,8 @@ pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicRep
         corrections_unmatched: layer.corrections_unmatched,
         corrections_bad_lines: layer.corrections_bad_lines,
         corrections_undone: layer.corrections_undone,
+        corrections_skipped: layer.corrections_skipped.clone(),
+        warnings: usize::from(layer.corrections_skipped.is_some()),
         reloaded: true,
         events: layer.events.as_ref().map(EventSet::report),
     }))
@@ -1177,5 +1179,126 @@ mod tests {
         assert!(parse_ai("Yes").unwrap());
         assert!(!parse_ai("false").unwrap());
         assert!(parse_ai("maybe").is_err());
+    }
+
+    fn item(key: &str) -> (String, LayerItem) {
+        let info = TopicInfo {
+            key: key.to_string(),
+            ..TopicInfo::default()
+        };
+        let it = LayerItem {
+            path: None,
+            date: None,
+            info,
+        };
+        (key.to_string(), it)
+    }
+
+    fn read_file(path: &Path, limit: u64) -> (BTreeMap<String, LayerItem>, CorrectionsRead) {
+        let mut items = BTreeMap::from([item("x:1")]);
+        let mut members = BTreeMap::new();
+        let read = read_corrections_file(
+            path,
+            limit,
+            &mut items,
+            &mut members,
+            false,
+            &mut Sha1::new(),
+        )
+        .unwrap();
+        (items, read)
+    }
+
+    /// A million lines that are not corrections, with four numbered lines
+    /// among them: every line is counted, and what the reader kept in
+    /// memory is the four numbered lines' worth, not the million.
+    #[test]
+    fn a_million_lines_that_are_not_corrections_are_counted_and_not_kept() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("corrections.jsonl");
+        let numbered = |n: u32, change: &str| {
+            format!(
+                "{{\"id\":\"c{n:06}\",\"at\":\"t\",\"date\":\"d\",\"by\":\"dominik\",\"key\":\"x:1\",{change}}}\n"
+            )
+        };
+        {
+            let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+            let junk = "{}\n".repeat(1000);
+            for block in 0..1000 {
+                f.write_all(junk.as_bytes()).unwrap();
+                match block {
+                    10 => f.write_all(numbered(1, "\"theme_add\":[\"A\"]").as_bytes()),
+                    20 => f.write_all(numbered(2, "\"theme_add\":[\"B\"]").as_bytes()),
+                    30 => f.write_all(
+                        numbered(3, "\"entity_add\":[\"E\"],\"entity_type\":\"person\"").as_bytes(),
+                    ),
+                    40 => f.write_all(numbered(4, "\"undoes\":\"c000001\"").as_bytes()),
+                    _ => Ok(()),
+                }
+                .unwrap();
+            }
+            f.flush().unwrap();
+        }
+        let (items, read) = read_file(&path, correction_lines::MAX_FILE_BYTES);
+        assert_eq!(
+            read.counts,
+            Counts {
+                applied: 2,
+                unknown_key: 0,
+                bad: 1_000_000,
+                undo: 1,
+                undone: 1,
+            }
+        );
+        assert!(read.skipped.is_none());
+        // The whole of what was kept while 1,000,004 lines went past.
+        assert_eq!(
+            read.kept,
+            Kept {
+                corrections: 3,
+                undone: 1
+            }
+        );
+        assert_eq!(items["x:1"].info.themes, ["B"]);
+        assert_eq!(items["x:1"].info.entities, ["E"]);
+
+        // Only lines that are not corrections: nothing is kept at all.
+        std::fs::write(&path, "{}\n".repeat(1_000_000)).unwrap();
+        let (items, read) = read_file(&path, correction_lines::MAX_FILE_BYTES);
+        assert_eq!(read.counts.bad, 1_000_000);
+        assert_eq!(read.counts.applied + read.counts.unknown_key, 0);
+        assert_eq!(read.kept, Kept::default());
+        assert!(items["x:1"].info.corrected.is_empty());
+    }
+
+    /// The reader's limit is the writer's, one constant; a file one byte
+    /// over it is not read, and one at it is.
+    #[test]
+    fn a_corrections_file_over_the_limit_is_not_read_and_one_at_it_is() {
+        assert_eq!(
+            correction_lines::MAX_FILE_BYTES,
+            crate::corrections::MAX_FILE_BYTES
+        );
+        assert_eq!(correction_lines::MAX_FILE_BYTES, 64 << 20);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("corrections.jsonl");
+        let line = "{\"key\":\"x:1\",\"themes\":[\"Fixed\"]}\n";
+        std::fs::write(&path, line).unwrap();
+        let len = line.len() as u64;
+        let (items, read) = read_file(&path, len);
+        assert_eq!((read.counts.applied, &read.skipped), (1, &None));
+        assert_eq!(items["x:1"].info.themes, ["Fixed"]);
+        let (items, read) = read_file(&path, len - 1);
+        assert_eq!(read.counts, Counts::default());
+        assert!(items["x:1"].info.themes.is_empty());
+        let skipped = read.skipped.unwrap();
+        assert_eq!((skipped.bytes, skipped.limit), (len, len - 1));
+        assert!(
+            skipped.reason.contains(&format!("{len} bytes"))
+                && skipped.reason.contains("NO correction was applied"),
+            "{}",
+            skipped.reason
+        );
     }
 }

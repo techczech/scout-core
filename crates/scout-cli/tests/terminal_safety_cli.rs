@@ -201,3 +201,100 @@ fn a_name_with_an_escape_is_shown_safe_in_text_and_escaped_in_json() {
         );
     }
 }
+
+/// An argument is one line of an error at most: a line feed, a carriage
+/// return or a direction override in a path or an id starts no line of
+/// its own and reorders nothing on stderr.
+#[test]
+fn an_argument_with_a_line_feed_makes_one_line_of_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data) = fixture(tmp.path());
+    let path = format!(
+        "{}/missing\nFAKE-LINE: all is well\rover\u{202e}txt",
+        tmp.path().display()
+    );
+    let shown = format!("missing{FFFD}FAKE-LINE: all is well{FFFD}over{FFFD}txt");
+    let id = "no\nFAKE-LINE\u{2066}such";
+    let cases: [(&[&str], &str); 6] = [
+        (
+            &["correct", "list", "--key", "x:1", "--archive", &path],
+            &shown,
+        ),
+        (
+            &[
+                "correct",
+                "theme-add",
+                "T",
+                "--key",
+                "x:1",
+                "--archive",
+                &path,
+            ],
+            &shown,
+        ),
+        (&["events", "check", "--archive", &path], &shown),
+        (&["events", "seed", "--archive", &path], &shown),
+        (&["topics", "themes", "--in", id], "FAKE-LINE"),
+        (&["search", "proof", "--in", id], "FAKE-LINE"),
+    ];
+    for (args, want) in cases {
+        let o = scout(&cfg, &data, args);
+        assert_ne!(o.status.code(), Some(0), "{args:?}");
+        assert_eq!(String::from_utf8(o.stdout).unwrap(), "", "{args:?}");
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(err.starts_with("scout: "), "{args:?}: {err:?}");
+        assert!(err.contains(want), "{args:?}: want {want:?} in {err:?}");
+        assert_eq!(err.lines().count(), 1, "{args:?}: {err:?}");
+        assert!(err.ends_with('\n') && !err.contains('\r'), "{args:?}");
+        assert!(
+            !err.contains('\u{202e}') && !err.contains('\u{2066}'),
+            "{args:?}: {err:?}"
+        );
+        assert_safe(&err, "an error");
+    }
+}
+
+/// A corrections file over the size limit is not read; the build goes
+/// through, and its text output says in a line of its own that no
+/// correction was applied.
+#[test]
+fn a_build_that_did_not_read_the_corrections_says_so_in_its_text_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data) = fixture(tmp.path());
+    let file = tmp.path().join("archive/analysis/topics/corrections.jsonl");
+    fs::write(&file, "{\"key\":\"x:1\",\"themes\":[\"Fixed\"]}\n").unwrap();
+    let limit = scout_corpus::corrections::MAX_FILE_BYTES;
+    // One byte over, as a sparse tail.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_len(limit + 1)
+        .unwrap();
+    let o = scout(&cfg, &data, &["index", "build"]);
+    assert!(o.status.success(), "{o:?}");
+    let text = String::from_utf8(o.stdout).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.contains("WARNING"))
+        .unwrap_or_else(|| panic!("no warning line in {text}"));
+    assert_eq!(
+        line.trim(),
+        format!(
+            "WARNING: corrections NOT applied: the corrections file is {} bytes, larger than the limit of {limit} bytes; it was not read and NO correction was applied",
+            limit + 1
+        )
+    );
+    // The JSON report of an unchanged build still carries it.
+    let o = scout(&cfg, &data, &["index", "build", "--json"]);
+    assert!(o.status.success(), "{o:?}");
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let topics = &v["reports"][0]["topics"];
+    assert_eq!(topics["corrections_skipped"]["bytes"], limit + 1, "{v}");
+    assert_eq!(topics["corrections_skipped"]["limit"], limit);
+    assert_eq!(topics["warnings"], 1);
+    assert_eq!(topics["corrections"], 0);
+    // And the theme the file would have set is not there.
+    let o = scout(&cfg, &data, &["topics", "themes"]);
+    assert!(!String::from_utf8(o.stdout).unwrap().contains("Fixed"));
+}

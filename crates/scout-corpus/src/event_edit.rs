@@ -518,13 +518,8 @@ impl EventEditor {
         let mut expected = snap.set.aliases.clone();
         expected.insert(fold(&record.id), record.id.clone());
         snap.verify(&[&record], &expected)?;
-        preflight_names(&self.dir, std::iter::once(record.id.as_str())).map_err(|e| {
-            anyhow::anyhow!(
-                "{}",
-                e.to_string()
-                    .replace("\nnothing was written", "\nnothing was changed")
-            )
-        })?;
+        preflight_names(&self.dir, std::iter::once(record.id.as_str()))
+            .map_err(store::nothing_changed)?;
         self.step(Step::Read)?;
         store::create(&self.dir, &record, text.as_bytes())?;
         self.step(Step::Written(&format!("{}.md", record.id)))?;

@@ -20,6 +20,7 @@ pub mod cite;
 pub mod clean;
 pub mod colloc;
 pub mod concord;
+pub mod correction_lines;
 pub mod corrections;
 pub mod event_edit;
 pub mod event_list;
@@ -46,6 +47,23 @@ pub mod topic_facets;
 pub mod topics;
 pub mod tweets;
 pub mod verify;
+
+/// An error of several lines: each string is one line, and the breaks
+/// between them are the only line breaks the error means. Its text is
+/// the lines joined by line feeds. A program that shows it to a person
+/// treats each line on its own (a path or a name inside a line may hold
+/// anything, a line feed too), as `scout` does. Every other error of this
+/// crate is one line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorLines(pub Vec<String>);
+
+impl std::fmt::Display for ErrorLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.join("\n"))
+    }
+}
+
+impl std::error::Error for ErrorLines {}
 
 pub use api::{Engine, Outcome, Reply};
 pub use clean::{CleanOptions, CleanReport};

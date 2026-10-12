@@ -66,11 +66,14 @@
 //!   file handling of the merge log: no-follow, a plain file, UTF-8,
 //!   every line a JSON object ended by a newline, within the limits
 //!   below) and refuses to go on when the reader does not read one of its
-//!   lines, or when a numbered line is not as this module writes them
-//!   (keys, one name per line, ids ascending, an `undoes` that names an
-//!   earlier correction of the same key not yet undone). The reader
-//!   itself stays tolerant: it skips such lines. The writer does not
-//!   append after them;
+//!   lines. For a numbered line that is one judgement, made in one place
+//!   for the reader and for this module
+//!   ([`crate::correction_lines::Sequence::judge`]: the keys written
+//!   here and no other, one name per line, an id greater than every
+//!   earlier numbered id, an `undoes` that names an earlier correction of
+//!   the same key not yet undone). The reader skips and counts a line
+//!   that fails it; this module does not append after one, and names the
+//!   line and the same reason;
 //! - reads the tag rows and the event records with the reader
 //!   ([`topics::TagSource`]) and asks it what it makes of the file as it
 //!   is (the item's tags in effect), and of the file with the new line.
@@ -84,7 +87,9 @@
 //! append without following a link; on the open descriptor it must be a
 //! regular file with one hard link, the file that was read, at the length
 //! read; the line with its newline is at most 1 MiB (the reader's line
-//! limit, [`topics::MAX_LINE_BYTES`]) and the file with it at most 64 MiB;
+//! limit, [`topics::MAX_LINE_BYTES`]) and the file with it at most 64 MiB
+//! ([`MAX_FILE_BYTES`], the limit over which the reader does not read the
+//! file: one constant for both);
 //! the line goes out in one `write` call and the file is synced. A file
 //! that is not there is created create-new with the default mode of a new
 //! file (the umask applies). Nothing is rewritten or removed.
@@ -107,13 +112,14 @@
 //! link added to the corrections file in the instant between the check on
 //! its descriptor and the write.
 
+use crate::correction_lines::{numbered, LineRead, Numbered, Sequence};
 use crate::event_edit::log::{Caps, Jsonl};
 use crate::event_edit::store::read_plain;
 use crate::event_seed::{refuse_parent_dir, resolve_out_dir};
 use crate::normalize::fold;
-use crate::topics::{self, correction_number, LayerItem, LineRead, TagSource, TopicInfo};
+use crate::topics::{self, LayerItem, TagSource, TopicInfo};
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -124,58 +130,19 @@ pub const TOPICS_DIR: &str = "analysis/topics";
 pub const CORRECTIONS_NAME: &str = "corrections.jsonl";
 /// The tagger's theme list, relative to the archive.
 pub const THEMES_FILE: &str = "analysis/context/themes.json";
-/// Largest corrections file read, and the largest an append may leave.
-pub const MAX_FILE_BYTES: u64 = 64 << 20;
+pub use crate::correction_lines::{Op, ENTITY_TYPES, MAX_FILE_BYTES};
 /// Largest theme list read.
 const MAX_THEMES_BYTES: u64 = 16 << 20;
 /// Largest number of a correction id (`c999999999`).
 pub const MAX_ID: u64 = 999_999_999;
 /// Longest entity name, in characters.
 pub const MAX_NAME_CHARS: usize = 200;
-/// The entity types of the topic layer (`entities_typed[].type`).
-pub const ENTITY_TYPES: &[&str] = &[
-    "person", "org", "model", "product", "work", "event", "place", "other",
-];
-
 const CAPS: Caps = Caps {
     file: MAX_FILE_BYTES,
     line: topics::MAX_LINE_BYTES as u64,
 };
 
-/// What one correction does. Its name is the key the line carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Op {
-    ThemeAdd,
-    ThemeRemove,
-    EntityAdd,
-    EntityRemove,
-    EventAdd,
-    EventRemove,
-}
-
-const OPS: [Op; 6] = [
-    Op::ThemeAdd,
-    Op::ThemeRemove,
-    Op::EntityAdd,
-    Op::EntityRemove,
-    Op::EventAdd,
-    Op::EventRemove,
-];
-
 impl Op {
-    /// The key of the line, and the op's name in every report.
-    pub fn name(self) -> &'static str {
-        match self {
-            Op::ThemeAdd => "theme_add",
-            Op::ThemeRemove => "theme_remove",
-            Op::EntityAdd => "entity_add",
-            Op::EntityRemove => "entity_remove",
-            Op::EventAdd => "event_add",
-            Op::EventRemove => "event_remove",
-        }
-    }
-
     fn field(self) -> Field {
         match self {
             Op::ThemeAdd | Op::ThemeRemove => Field::Themes,
@@ -624,73 +591,6 @@ impl UndoPlan {
     }
 }
 
-/// A string value of a numbered line that must be there.
-fn required<'a>(m: &'a serde_json::Map<String, Value>, k: &str) -> Result<&'a str, String> {
-    m.get(k)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("a numbered line without a text {k:?}"))
-}
-
-/// A numbered line as this module writes one, or why it is not one.
-fn numbered_line(m: &serde_json::Map<String, Value>) -> Result<What, String> {
-    for k in ["at", "date", "by", "key"] {
-        required(m, k)?;
-    }
-    let mut found: Option<What> = None;
-    let mut put = |w: What| match found.replace(w) {
-        None => Ok(()),
-        Some(_) => Err("a numbered line with more than one change".to_string()),
-    };
-    for (k, v) in m {
-        match k.as_str() {
-            "id" | "at" | "date" | "by" | "key" | "entity_type" => {}
-            "undoes" => {
-                let id = v
-                    .as_str()
-                    .filter(|id| correction_number(id).is_some())
-                    .ok_or("`undoes` is not a correction id")?;
-                put(What::Undo { undoes: id.into() })?;
-            }
-            other => {
-                let Some(op) = OPS.into_iter().find(|op| op.name() == other) else {
-                    return Err(format!(
-                        "a numbered line with the key {other:?}, which `scout correct` does not write"
-                    ));
-                };
-                let value = match v.as_array().map(Vec::as_slice) {
-                    Some([Value::String(s)]) if !s.trim().is_empty() => s.clone(),
-                    _ => return Err(format!("{other:?} is not a list of one name")),
-                };
-                put(What::Change {
-                    op,
-                    value,
-                    entity_type: None,
-                })?;
-            }
-        }
-    }
-    let etype = match m.get("entity_type") {
-        None => None,
-        Some(Value::String(t)) if ENTITY_TYPES.contains(&t.as_str()) => Some(t.clone()),
-        Some(_) => return Err("`entity_type` is not an entity type".into()),
-    };
-    match found {
-        None => Err("a numbered line with no change and no `undoes`".into()),
-        Some(What::Change { op, value, .. }) => {
-            if (op == Op::EntityAdd) != etype.is_some() {
-                return Err("`entity_type` goes with `entity_add`, and only with it".into());
-            }
-            Ok(What::Change {
-                op,
-                value,
-                entity_type: etype,
-            })
-        }
-        Some(_) if etype.is_some() => Err("an undo line with an `entity_type`".into()),
-        Some(w) => Ok(w),
-    }
-}
-
 impl CorrectionEditor {
     /// The topics folder of `archive`, `<archive>/analysis/topics`, under
     /// the seed's path rules: no `..` component, and the folder itself a
@@ -768,18 +668,14 @@ impl CorrectionEditor {
                 state.file.values.len()
             );
         }
-        // The key of every correction read so far, by its id.
-        let mut changes: BTreeMap<String, String> = BTreeMap::new();
+        // The one judge of numbered lines, the reader's too.
+        let mut seq = Sequence::default();
         for i in 0..state.file.values.len() {
             let line = i + 1;
             let Some(m) = state.file.values[i].as_object().cloned() else {
                 return Err(state.bad_line(line, "not a JSON object"));
             };
-            let id = m
-                .get("id")
-                .and_then(|v| v.as_str())
-                .filter(|id| correction_number(id).is_some())
-                .map(String::from);
+            let id = numbered(&m).map(String::from);
             let key = m
                 .get("key")
                 .and_then(|v| v.as_str())
@@ -805,43 +701,23 @@ impl CorrectionEditor {
                             .collect(),
                     }
                 }
-                Some(id) => {
-                    let what = numbered_line(&m).map_err(|why| state.bad_line(line, &why))?;
-                    let n = correction_number(id).unwrap_or(0);
-                    if n <= state.last {
-                        return Err(state.bad_line(
-                            line,
-                            &format!("id {id:?} is not greater than the numbered line before"),
-                        ));
-                    }
-                    state.last = n;
-                    if let (What::Change { .. }, Some(key)) = (&what, &key) {
-                        changes.insert(id.clone(), key.clone());
-                    }
-                    if let What::Undo { undoes } = &what {
-                        // Ids ascend, so an id names at most one line.
-                        let target = changes
-                            .get(undoes.as_str())
-                            .filter(|k| Some(*k) == key.as_ref());
-                        if target.is_none() {
-                            return Err(state.bad_line(
-                                line,
-                                &format!(
-                                    "undoes {undoes:?}, which no earlier correction of its key is"
-                                ),
-                            ));
-                        }
-                        if state.undone.contains_key(undoes) {
-                            return Err(
-                                state.bad_line(line, &format!("undoes {undoes:?} a second time"))
-                            );
-                        }
-                        state.undone.insert(undoes.clone(), id.clone());
-                    }
+                Some(_) => {
+                    let what = seq.judge(&m).map_err(|why| state.bad_line(line, &why))?;
                     if verdict == LineRead::Bad {
                         return Err(state.bad_line(line, "the reader does not read it"));
                     }
-                    what
+                    match what {
+                        Numbered::Change {
+                            op,
+                            value,
+                            entity_type,
+                        } => What::Change {
+                            op,
+                            value,
+                            entity_type,
+                        },
+                        Numbered::Undo { undoes } => What::Undo { undoes },
+                    }
                 }
             };
             let text = |k: &str| m.get(k).and_then(|v| v.as_str()).map(String::from);
@@ -857,6 +733,8 @@ impl CorrectionEditor {
                 raw: m,
             });
         }
+        state.last = seq.last();
+        state.undone = seq.undone_ids();
         Ok(state)
     }
 
@@ -1229,93 +1107,6 @@ fn nothing_changed(e: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn obj(v: Value) -> serde_json::Map<String, Value> {
-        v.as_object().unwrap().clone()
-    }
-
-    #[test]
-    fn a_numbered_line_is_one_change_with_every_key_of_its_kind() {
-        let base = serde_json::json!({"id": "c000001", "at": "t", "date": "d", "by": "dominik", "key": "x:1"});
-        let with = |extra: Value| {
-            let mut m = obj(base.clone());
-            m.extend(obj(extra));
-            numbered_line(&m)
-        };
-        assert_eq!(
-            with(serde_json::json!({"theme_add": ["T"]})).unwrap(),
-            What::Change {
-                op: Op::ThemeAdd,
-                value: "T".into(),
-                entity_type: None
-            }
-        );
-        assert!(with(serde_json::json!({"entity_add": ["E"], "entity_type": "person"})).is_ok());
-        assert_eq!(
-            with(serde_json::json!({"undoes": "c000001"})).unwrap(),
-            What::Undo {
-                undoes: "c000001".into()
-            }
-        );
-        for (extra, why) in [
-            (serde_json::json!({}), "no change and no `undoes`"),
-            (
-                serde_json::json!({"theme_add": ["A", "B"]}),
-                "not a list of one name",
-            ),
-            (
-                serde_json::json!({"theme_add": "A"}),
-                "not a list of one name",
-            ),
-            (
-                serde_json::json!({"theme_add": [" "]}),
-                "not a list of one name",
-            ),
-            (
-                serde_json::json!({"theme_add": ["A"], "theme_remove": ["B"]}),
-                "more than one change",
-            ),
-            (
-                serde_json::json!({"theme_add": ["A"], "undoes": "c000001"}),
-                "more than one change",
-            ),
-            (serde_json::json!({"themes": ["A"]}), "does not write"),
-            (
-                serde_json::json!({"note": "x", "theme_add": ["A"]}),
-                "does not write",
-            ),
-            (
-                serde_json::json!({"undoes": "m000001"}),
-                "not a correction id",
-            ),
-            (
-                serde_json::json!({"entity_add": ["E"]}),
-                "goes with `entity_add`",
-            ),
-            (
-                serde_json::json!({"entity_add": ["E"], "entity_type": "thing"}),
-                "not an entity type",
-            ),
-            (
-                serde_json::json!({"theme_add": ["A"], "entity_type": "person"}),
-                "goes with `entity_add`",
-            ),
-            (
-                serde_json::json!({"undoes": "c000001", "entity_type": "person"}),
-                "an undo line with",
-            ),
-        ] {
-            let e = with(extra.clone()).unwrap_err();
-            assert!(e.contains(why), "{extra}: {e}");
-        }
-        for missing in ["at", "date", "by", "key"] {
-            let mut m = obj(base.clone());
-            m.extend(obj(serde_json::json!({"theme_add": ["T"]})));
-            m.remove(missing);
-            let e = numbered_line(&m).unwrap_err();
-            assert!(e.contains(missing), "{missing}: {e}");
-        }
-    }
 
     #[test]
     fn an_append_never_leaves_a_file_over_its_limit() {

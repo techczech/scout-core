@@ -356,7 +356,7 @@ pub(crate) fn fail_with(mut faults: Vec<String>) -> Result<()> {
         faults.push(format!("and {more} more"));
     }
     faults.push("nothing was written".into());
-    bail!("{}", faults.join("\n"));
+    Err(crate::ErrorLines(faults).into())
 }
 
 /// The records already in `dir`, as the reader has them, and the names in
@@ -395,7 +395,7 @@ fn read_existing(dir: &Path) -> Result<Existing> {
                 n => format!("these {n} records are"),
             }
         ));
-        bail!("{}", lines.join("\n"));
+        return Err(crate::ErrorLines(lines).into());
     }
     // A `merged_into` not in effect: the file still names a record that
     // is not there (this run might create one of that id, and the old
@@ -414,7 +414,7 @@ fn read_existing(dir: &Path) -> Result<Existing> {
             })
             .collect();
         lines.push("nothing was written".into());
-        bail!("{}", lines.join("\n"));
+        return Err(crate::ErrorLines(lines).into());
     }
     taken.append(&mut names_in_use(dir, &set)?);
     Ok(Existing {
