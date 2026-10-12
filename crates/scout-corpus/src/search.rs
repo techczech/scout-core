@@ -270,6 +270,14 @@ impl Plan {
         plan
     }
 
+    /// The plan without its `ai:` term: what the `ai` facet is counted
+    /// under.
+    pub(crate) fn without_ai(&self) -> Plan {
+        let mut plan = self.clone();
+        plan.filter.ai = None;
+        plan
+    }
+
     /// Anything that selects passages without a positive term.
     pub(crate) fn has_selector(&self) -> bool {
         !self.filter.is_empty()

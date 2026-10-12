@@ -252,14 +252,23 @@ struct LayerLine {
     ai_related: Option<bool>,
     themes: Option<Vec<String>>,
     entities: Option<Vec<String>>,
-    /// `[{"name": …, "type": …}]`; read leniently (any JSON), so that a
-    /// row that was a row before types were read still is one.
-    entities_typed: Option<serde_json::Value>,
     event: Option<String>,
     event_name: Option<String>,
     confidence: Option<String>,
     run_id: Option<String>,
     prompt_version: Option<String>,
+}
+
+/// A tag row's `entities_typed`, read from the line a second time and
+/// apart from [`LayerLine`], which does not name the key: whether a line
+/// is a row is decided without it, exactly as before types were read
+/// (the key is skipped unread there, like any unknown key). This read may
+/// fail (a number out of range or nesting past serde_json's depth inside
+/// the value, the key written twice); the row then has no types and
+/// stands.
+#[derive(Deserialize)]
+struct TypedEntities {
+    entities_typed: Option<serde_json::Value>,
 }
 
 /// A tag row's further events, read from the line a second time and only
@@ -696,7 +705,13 @@ fn add_layer_line(
     }
     let month = month_of(l.date.as_deref(), l.month.as_deref());
     let entities = l.entities.unwrap_or_default();
-    let entity_types = typed_entities(l.entities_typed.as_ref(), &entities);
+    // No part of this read can make the line a bad line: the row is
+    // already accepted.
+    let typed = (!entities.is_empty())
+        .then(|| serde_json::from_str::<TypedEntities>(line).ok())
+        .flatten()
+        .and_then(|t| t.entities_typed);
+    let entity_types = typed_entities(typed.as_ref(), &entities);
     let info = TopicInfo {
         key: key.clone(),
         themes: l.themes.unwrap_or_default(),
@@ -726,9 +741,11 @@ fn add_layer_line(
 /// The types a tag row's `entities_typed` gives the names of its
 /// `entities`: each `{"name", "type"}` object with a non-blank text for
 /// both, whose name is one of `entities` under [`fold`]; the type trimmed,
-/// as written. A later object of the same name wins. Anything else in the
-/// value (not a list, an item of another shape, a name the row does not
-/// list) is passed over.
+/// as written. A later object of the same name wins. Each item is judged
+/// alone: an item of another shape (not an object, a `name` or `type`
+/// that is not text or is blank, a name the row does not list) gives no
+/// type and the well-formed items beside it still count. A value that is
+/// not a list gives none.
 fn typed_entities(
     typed: Option<&serde_json::Value>,
     entities: &[String],
@@ -1241,6 +1258,170 @@ pub fn load(conn: &Connection) -> Result<BTreeMap<String, TopicInfo>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tag row as it was read before `entities_typed` was: the fields
+    /// of [`LayerLine`] on `main`, to which `entities_typed` is an
+    /// unknown key.
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct RowBeforeTypes {
+        key: String,
+        path: Option<String>,
+        date: Option<String>,
+        month: Option<String>,
+        ai_related: Option<bool>,
+        themes: Option<Vec<String>>,
+        entities: Option<Vec<String>>,
+        event: Option<String>,
+        event_name: Option<String>,
+        confidence: Option<String>,
+        run_id: Option<String>,
+        prompt_version: Option<String>,
+    }
+
+    fn one_row(line: &str) -> Option<TopicInfo> {
+        let (mut items, mut members) = (BTreeMap::new(), BTreeMap::new());
+        let ok = add_layer_line(&mut items, &mut members, false, line);
+        assert_eq!(ok, items.len() == 1, "{line}");
+        items.into_values().next().map(|i| i.info)
+    }
+
+    /// Whatever `entities_typed` holds, a line is a row exactly when it
+    /// was one before the key was read, with the same themes, entities
+    /// and event; the value only ever decides the types.
+    #[test]
+    fn an_odd_entities_typed_never_decides_whether_a_line_is_a_row() {
+        let deep = |open: &str, close: &str| format!("{}{}", open.repeat(150), close.repeat(150));
+        let tao = r#"{"name":"Tao","type":"person"}"#;
+        // (the value as written, the types it gives the good row)
+        let person = vec![("tao", "person")];
+        let values: Vec<(String, Vec<(&str, &str)>)> = vec![
+            // Not readable as a value of the field: no types.
+            ("1e400".into(), vec![]),
+            ("-1e400".into(), vec![]),
+            (deep("[", "]"), vec![]),
+            (
+                deep(r#"{"a":"#, "}").replace(r#"{"a":}"#, r#"{"a":1}"#),
+                vec![],
+            ),
+            (format!("[{tao},1e400]"), vec![]),
+            (format!("[{tao},{}]", deep("[", "]")), vec![]),
+            (
+                format!(
+                    r#"[{{"name":"Tao","type":"person","x":{}}}]"#,
+                    deep("[", "]")
+                ),
+                vec![],
+            ),
+            // (Half a surrogate pair: skipped unread it passes, read it
+            // does not.)
+            (r#""\ud800""#.into(), vec![]),
+            // Written twice: no types.
+            (format!(r#"1,"entities_typed":[{tao}]"#), vec![]),
+            (format!(r#"[{tao}],"entities_typed":[{tao}]"#), vec![]),
+            // Not a list: no types.
+            ("null".into(), vec![]),
+            ("true".into(), vec![]),
+            ("7".into(), vec![]),
+            ("-0.5e-3".into(), vec![]),
+            (r#""person""#.into(), vec![]),
+            ("{}".into(), vec![]),
+            (tao.into(), vec![]),
+            // A list: each item alone.
+            ("[]".into(), vec![]),
+            (r#"[1,"x",null,[],{}]"#.into(), vec![]),
+            (r#"[{"name":"Tao"}]"#.into(), vec![]),
+            (r#"[{"type":"person"}]"#.into(), vec![]),
+            (r#"[{"name":"Tao","type":7}]"#.into(), vec![]),
+            (r#"[{"name":7,"type":"person"}]"#.into(), vec![]),
+            (r#"[{"name":"Tao","type":" "}]"#.into(), vec![]),
+            (r#"[{"name":"Nobody","type":"person"}]"#.into(), vec![]),
+            (format!("[{tao}]"), person.clone()),
+            (
+                format!(r#"[7,{tao},{{"name":"Astra","type":null}},"x"]"#),
+                person.clone(),
+            ),
+            (
+                format!(r#"[{tao},{{"name":"ASTRA","type":" model "}},{{"name":"Astra"}}]"#),
+                vec![("astra", "model"), ("tao", "person")],
+            ),
+            (
+                r#"[{"name":"Tao","type":"org"},{"name":"tao","type":"person"}]"#.into(),
+                person,
+            ),
+            // Not JSON: the line was never a row.
+            ("[".into(), vec![]),
+            ("01".into(), vec![]),
+            ("1e".into(), vec![]),
+            ("".into(), vec![]),
+        ];
+        // (the rest of the line, is it a row without the key)
+        let rests = [
+            (
+                r#""key":"x:1","path":"a.md","themes":["Maths"],"entities":["Tao","Astra"],"event":"2026-02/E01""#,
+                true,
+            ),
+            (
+                r#""key":"x:1","themes":["Maths"],"entities":["Tao","Astra"],"event":null,"other":1e400"#,
+                true,
+            ),
+            (r#""key":"x:1","themes":["Maths"]"#, true),
+            (r#""key":"x:1","themes":"Maths","entities":["Tao"]"#, false),
+            (r#""key":" ","themes":["Maths"],"entities":["Tao"]"#, false),
+            (r#""themes":["Maths"],"entities":["Tao"]"#, false),
+        ];
+        let mut rows = 0;
+        for (rest, is_row) in rests {
+            let bare = one_row(&format!("{{{rest}}}"));
+            assert_eq!(bare.is_some(), is_row, "{rest}");
+            for (value, types) in &values {
+                for line in [
+                    format!(r#"{{{rest},"entities_typed":{value}}}"#),
+                    format!(r#"{{"entities_typed":{value},{rest}}}"#),
+                ] {
+                    let got = one_row(&line);
+                    // As the reader before types: the same lines are rows.
+                    let before = serde_json::from_str::<RowBeforeTypes>(&line)
+                        .is_ok_and(|r| !r.key.trim().is_empty());
+                    assert_eq!(got.is_some(), before, "{line}");
+                    let Some(got) = got else { continue };
+                    rows += 1;
+                    // And the row is the row without the key, types apart.
+                    let bare = bare.clone().expect(&line);
+                    assert_eq!(
+                        (
+                            &got.themes,
+                            &got.entities,
+                            &got.event,
+                            &got.month,
+                            got.ai_related
+                        ),
+                        (
+                            &bare.themes,
+                            &bare.entities,
+                            &bare.event,
+                            &bare.month,
+                            bare.ai_related
+                        ),
+                        "{line}"
+                    );
+                    let want: BTreeMap<String, String> = if bare.entities.len() == 2 {
+                        types
+                            .iter()
+                            .map(|(n, t)| (n.to_string(), t.to_string()))
+                            .collect()
+                    } else {
+                        BTreeMap::new()
+                    };
+                    assert_eq!(got.entity_types, want, "{line}");
+                    assert!(bare.entity_types.is_empty());
+                }
+            }
+        }
+        // Three rests are rows, with each of the 29 values the reader
+        // before types passed over, in both places.
+        assert_eq!(rows, 3 * 29 * 2);
+    }
 
     #[test]
     fn months_and_ai_values() {

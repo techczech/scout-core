@@ -418,9 +418,25 @@ fn counts_are_search_totals(fx: &Fx, rest: &str, months: &[&str], in_: &[&str]) 
     for it in &f.facets.event.items {
         assert_eq!(it.count, with("event", it), "{what} event {}", it.value);
     }
-    if !base.contains("ai:") {
-        assert_eq!(f.facets.ai.yes, total(fx, &format!("{base} ai:true"), in_));
-        assert_eq!(f.facets.ai.no, total(fx, &format!("{base} ai:false"), in_));
+    // `ai`: the last `ai:` term wins, so picking a value replaces the
+    // query's own. A value's count is the search with that value as the
+    // `ai:` term: appended (it is then the last), and equally with the
+    // query's own `ai:` terms taken out first.
+    let no_ai = base
+        .split(' ')
+        .filter(|t| !t.starts_with("ai:"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (count, value) in [(f.facets.ai.yes, "true"), (f.facets.ai.no, "false")] {
+        let appended = total(fx, &format!("{base} ai:{value}"), in_);
+        assert_eq!(count, appended, "{what} ai:{value}");
+        let replaced = total(fx, &format!("{no_ai} ai:{value}"), in_);
+        assert_eq!(count, replaced, "{what} ai:{value} replacing");
+    }
+    // The `ai` counts are the same whichever value the query has picked.
+    for value in ["true", "false"] {
+        let picked = facets(fx, &format!("{no_ai} ai:{value}"), in_);
+        assert_eq!(picked.facets.ai, f.facets.ai, "{what} with ai:{value}");
     }
     // Months: under the rest of the query, without the months picked. So a
     // month's count is the search of the rest with that month alone …
@@ -467,6 +483,11 @@ fn every_facet_count_is_the_total_of_the_search_with_that_value_added() {
         "event:2026-02/E01",
         "in:hl event:2026-02-declaration event:2026-03-launch",
         "ai:true theme:coding",
+        "ai:true",
+        "ai:false",
+        "ai:false proof",
+        "ai:true ai:false",
+        "ai:false theme:Maths ai:true",
         "au:A theme:Maths",
     ];
     let picks: [&[&str]; 6] = [
@@ -511,6 +532,40 @@ fn every_facet_count_is_the_total_of_the_search_with_that_value_added() {
         .map(|i| (i.value.as_str(), i.count))
         .collect();
     assert_eq!(themes, [("Maths", 2), ("Coding", 1)]);
+}
+
+/// The reported case: with `ai:true` in the query the facet still says
+/// how many documents `ai:false` would give, and search gives that many.
+#[test]
+fn the_ai_facet_counts_each_value_as_the_search_that_picks_it() {
+    let fx = fixture();
+    let open = facets(&fx, "", &[]).facets.ai;
+    assert!(open.yes > 0 && open.no > 0, "{open:?}");
+    for q in [
+        "ai:true",
+        "ai:false",
+        "ai:true ai:false",
+        "ai:false ai:true",
+    ] {
+        let f = facets(&fx, q, &[]);
+        assert_eq!(f.facets.ai, open, "{q}");
+        assert_eq!(f.facets.ai.yes, total(&fx, &format!("{q} ai:true"), &[]));
+        assert_eq!(f.facets.ai.no, total(&fx, &format!("{q} ai:false"), &[]));
+    }
+    // The totals and the other facets stay the whole query's.
+    let f = facets(&fx, "ai:true", &[]);
+    assert_eq!(f.total_documents, total(&fx, "ai:true", &[]));
+    assert_eq!(f.total_documents, open.yes);
+    assert_eq!(total(&fx, "ai:true ai:false", &[]), open.no);
+    // With months picked too: each facet is counted without its own field
+    // and with the other's terms.
+    let f = facets(&fx, "ai:true month:2026-02", &[]);
+    assert_eq!(f.facets.ai.no, total(&fx, "month:2026-02 ai:false", &[]));
+    assert_eq!(f.facets.ai.yes, total(&fx, "month:2026-02 ai:true", &[]));
+    for it in &f.facets.month.items {
+        let alone = total(&fx, &format!("ai:true month:{}", it.value), &[]);
+        assert_eq!(it.count, alone, "month {}", it.value);
+    }
 }
 
 #[test]

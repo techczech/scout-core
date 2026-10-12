@@ -985,10 +985,13 @@ impl Engine {
     ///
     /// - A bare query (empty, or `in:` alone) counts every tagged
     ///   document with an indexed passage ([`search::counted_docs`]).
-    /// - Themes, entities, events and `ai` are counted under the whole
-    ///   query. The month facet is counted under the query WITHOUT its
-    ///   `month:` terms (months are ORed, so each month's count is what
-    ///   that month holds under the rest of the query, selected or not).
+    /// - One rule for which documents a facet is counted over. A field
+    ///   whose further term NARROWS (theme, entity, event: terms are
+    ///   ANDed) is counted under the whole query. A field whose further
+    ///   term widens or replaces (month: terms are ORed; `ai`: the last
+    ///   term wins) is counted under the query WITHOUT that field's own
+    ///   terms. Either way a value's count is the total of the search
+    ///   the query becomes when that value is picked.
     /// - Every count comes from the one selection search runs.
     pub fn facets(&self, q: &FacetsQuery) -> Result<Reply<FacetsResults>> {
         let mut notes = vec![];
@@ -1006,6 +1009,9 @@ impl Engine {
         // The month facet's own counter, when the query picks months.
         let months_plan = (!plan.filter.month.is_empty()).then(|| plan.without_months());
         let mut months = FacetCounter::default();
+        // And the `ai` facet's, when the query has an `ai:` term.
+        let ai_plan = plan.filter.ai.is_some().then(|| plan.without_ai());
+        let mut ai = FacetCounter::default();
         let mut searched = Vec::new();
         for c in &corpora {
             if named.is_empty() || named.iter().any(|n| n == c.id()) {
@@ -1023,6 +1029,11 @@ impl Engine {
             if let Some(p) = &months_plan {
                 for d in &search::counted_docs(conn, p)? {
                     months.add(d);
+                }
+            }
+            if let Some(p) = &ai_plan {
+                for d in &search::counted_docs(conn, p)? {
+                    ai.add(d);
                 }
             }
             counter.add_event_records(&crate::events::load(conn)?);
@@ -1047,6 +1058,9 @@ impl Engine {
         let mut facets = counter.facets(q.top);
         if months_plan.is_some() {
             facets.month = months.facets(0).month;
+        }
+        if ai_plan.is_some() {
+            facets.ai = ai.facets(0).ai;
         }
         Ok(Reply {
             body: FacetsResults {

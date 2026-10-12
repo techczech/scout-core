@@ -1255,6 +1255,34 @@ fn every_kind_of_rejected_numbered_line_is_judged_alike_by_the_reader_and_the_wr
             "`entity_type` is not an entity type",
         ),
         (
+            "an entity type that is a number",
+            numbered("c000003", "x:4", r#""entity_add":["E"],"entity_type":7"#),
+            None,
+            "`entity_type` is not an entity type",
+        ),
+        (
+            "an entity type that is null",
+            numbered("c000003", "x:4", r#""entity_add":["E"],"entity_type":null"#),
+            None,
+            "`entity_type` is not an entity type",
+        ),
+        (
+            "an entity type in a list",
+            numbered(
+                "c000003",
+                "x:4",
+                r#""entity_add":["E"],"entity_type":["person"]"#,
+            ),
+            None,
+            "`entity_type` is not an entity type",
+        ),
+        (
+            "a wrongly typed entity type on another change",
+            numbered("c000003", "x:4", r#""theme_add":["B"],"entity_type":7"#),
+            None,
+            "`entity_type` is not an entity type",
+        ),
+        (
             "an entity without its type",
             numbered("c000003", "x:4", r#""entity_add":["E"]"#),
             None,
