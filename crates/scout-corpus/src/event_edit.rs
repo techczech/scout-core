@@ -1,5 +1,6 @@
 //! `scout events set | merge | unmerge | apply-proposals | decide |
-//! proposals | remove | restore | create | check | merges`: the edits of lasting
+//! proposals | remove | restore | create | check | merges |
+//! unmerge-preview`: the edits of lasting
 //! event records (spec
 //! `archive-scout/docs/specs/2026-10-11-lasting-events-spec.md`, "What he
 //! can do to an event" and "Where lasting events come from", step 2).
@@ -130,8 +131,9 @@ pub(crate) mod log;
 mod merge;
 mod merges;
 mod proposals;
-mod unmerge_check;
 pub(crate) mod store;
+mod unmerge_check;
+mod unmerge_preview;
 
 use crate::event_seed::naming;
 use crate::event_seed::render::{body_text, render_record};
@@ -150,6 +152,7 @@ pub use merges::{MergeInfo, MergeList, MergeSide};
 pub use proposals::{
     ApplyReport, Decided, PlannedMerge, SkippedPair, WaitingPair, WaitingReport, PROPOSALS_DIR,
 };
+pub use unmerge_preview::{PreviewEvent, UnmergePreview};
 
 /// A point of an operation a test hook is called at ([`EventEditor::with_hook`]).
 #[doc(hidden)]

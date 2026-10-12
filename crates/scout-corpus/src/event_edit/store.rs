@@ -164,17 +164,10 @@ impl Snapshot {
         })
     }
 
-    /// The folder as it would be: the records as their files have them,
-    /// each of `changed` in place of the record of its id (or added). The
-    /// reader must read every record, follow every `merged_into`, warn
-    /// about nothing it does not warn about now, and its id table must be
-    /// exactly `expected` (what the operation means to change, worked out
-    /// from the table as it is now).
-    pub fn verify(
-        &self,
-        changed: &[&EventRecord],
-        expected: &BTreeMap<String, String>,
-    ) -> Result<()> {
+    /// The folder as it would be, read by the reader: the records as
+    /// their files have them, each of `changed` in place of the record of
+    /// its id (or added).
+    pub fn with(&self, changed: &[&EventRecord]) -> EventSet {
         let mut all: BTreeMap<String, EventRecord> = self
             .set
             .as_on_disk()
@@ -189,7 +182,20 @@ impl Snapshot {
             }
         }
         let records = all.into_values().chain(extra).collect();
-        let after = EventSet::from_records(self.dir.clone(), records);
+        EventSet::from_records(self.dir.clone(), records)
+    }
+
+    /// The folder as it would be ([`Snapshot::with`]). The
+    /// reader must read every record, follow every `merged_into`, warn
+    /// about nothing it does not warn about now, and its id table must be
+    /// exactly `expected` (what the operation means to change, worked out
+    /// from the table as it is now).
+    pub fn verify(
+        &self,
+        changed: &[&EventRecord],
+        expected: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        let after = self.with(changed);
         let mut faults: Vec<String> = after
             .refused
             .iter()

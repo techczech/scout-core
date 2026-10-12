@@ -193,7 +193,8 @@ pub(super) struct UnmergePlan {
 
 /// Every check of `scout events unmerge <log_id>`, with no write, over
 /// the folder and the log as read: the line is there and not undone,
-/// record `a` is merged into its `b` (or into nothing: withdrawn), `a`'s
+/// record `a` is merged into its `b` (or into nothing: withdrawn), `a`
+/// does not carry `removed`, `a`'s
 /// file can be rewritten, the reader reads the folder as meant with `a`
 /// unmerged ([`Folder::without_merge`]), the log has an id left and can
 /// take the undo line (`at` is its time). `folder` is the read of the
@@ -230,6 +231,14 @@ pub(super) fn unmerge_plan(
     let mut new_a = a.clone();
     let mut write = None;
     if !withdrawn {
+        // Merged away, `removed` has no effect; split off, the record
+        // would be a removed event and every item of it in no event.
+        if let Some(removed) = &a.removed {
+            bail!(
+                "{log_id}: {} carries removed {removed}; split off it would be a removed event and its items would be in no event; run `scout events restore {}` first (nothing was changed)",
+                a.id, a.id
+            );
+        }
         new_a.merged_into = None;
         let wa = snap.rewrite(&new_a, false)?;
         folder.without_merge(a)?;
@@ -388,7 +397,10 @@ impl EventEditor {
     ///
     /// Refused, with nothing changed: no such merge line; already undone;
     /// record `a` is gone; `a` is merged into a record other than `b`
-    /// (`merged_into` was changed by other means); the reader would not
+    /// (`merged_into` was changed by other means); `a` carries `removed`
+    /// (by a hand edit: `remove` refuses a merged record; split off it
+    /// would be a removed event and its items in no event; `restore` it
+    /// first); the reader would not
     /// read the folder as meant with `a` unmerged (for one, a monthly id
     /// that `a` and another record of the event both list, by a hand
     /// edit); the log cannot take the undo line.

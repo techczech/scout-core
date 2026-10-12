@@ -80,6 +80,17 @@ pub enum EventsCmd {
         #[arg(long)]
         archive: PathBuf,
     },
+    /// Say what `unmerge` of one merge-log line would leave: the event
+    /// that returns, the event that stays and how many items each then
+    /// has. Reads only.
+    UnmergePreview {
+        log_id: String,
+        #[arg(long)]
+        archive: PathBuf,
+        /// Accepted; the output is always one JSON line.
+        #[arg(long)]
+        json: bool,
+    },
     /// Merge every pair a proposals file judges same and confident.
     /// Without --apply nothing is written.
     ApplyProposals {
@@ -221,6 +232,9 @@ pub fn run(cmd: EventsCmd) -> Result<ExitCode> {
         EventsCmd::Unmerge { log_id, archive } => {
             line(&EventEditor::open(&archive)?.unmerge(&log_id)?)
         }
+        EventsCmd::UnmergePreview {
+            log_id, archive, ..
+        } => line(&EventEditor::open(&archive)?.unmerge_preview(&log_id)?),
         EventsCmd::ApplyProposals {
             file,
             archive,

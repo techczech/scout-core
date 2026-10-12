@@ -436,6 +436,57 @@ fn merges_prints_the_merges_in_effect_and_with_all_the_undone_ones() {
 }
 
 #[test]
+fn unmerge_preview_prints_what_the_undo_would_leave_and_writes_nothing() {
+    let fx = Fx::new();
+    fx.ok(&["create", "--name", "Alpha story", "--start", "2026-09-05"]);
+    fx.ok(&[
+        "create",
+        "--name",
+        "Beta",
+        "--start",
+        "2026-10-02",
+        "--end",
+        "2026-10-09",
+    ]);
+    // Three tag rows: one of Beta, one of Alpha, one of Beta that a
+    // correction also puts in Alpha.
+    let topics = fx.archive.join("analysis/topics");
+    fs::create_dir_all(&topics).unwrap();
+    let rows = [("x:1", BETA), ("x:2", ALPHA), ("x:3", BETA)];
+    let layer: String = rows
+        .iter()
+        .map(|(key, event)| format!("{}\n", json!({"key": key, "event": event})))
+        .collect();
+    fs::write(topics.join("current.jsonl"), layer).unwrap();
+    fs::write(
+        topics.join("corrections.jsonl"),
+        format!("{}\n", json!({"key": "x:3", "event_add": [ALPHA]})),
+    )
+    .unwrap();
+    fx.ok(&["merge", BETA, ALPHA]);
+
+    let before = fx.tree();
+    let p = fx.ok(&["unmerge-preview", "m000001"]);
+    assert_eq!(
+        p,
+        json!({
+            "log_id": "m000001",
+            "returning": {"id": BETA, "name": "Beta"},
+            "kept": {"id": ALPHA, "name": "Alpha story"},
+            "undoable": true,
+            "start": "2026-10-02", "end": "2026-10-09",
+            "returning_items": 2, "kept_items": 2, "in_both": 1, "kept_items_now": 3,
+        })
+    );
+    assert_eq!(fx.ok(&["unmerge-preview", "m000001", "--json"]), p);
+    assert!(fx.tree() == before, "the preview wrote");
+    // No merge in effect of that id: exit 2 in `unmerge`'s words.
+    fx.refused(&["unmerge-preview", "m000007"], "m000007: no such merge");
+    fx.ok(&["unmerge", "m000001"]);
+    fx.refused(&["unmerge-preview", "m000001"], "m000001: already undone");
+}
+
+#[test]
 fn the_archive_is_required_and_its_path_is_checked() {
     let fx = Fx::new();
     let scout = |args: &[&str]| {

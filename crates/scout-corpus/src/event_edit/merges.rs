@@ -38,15 +38,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The records folder and its merge log as they are now.
-struct Live {
-    snap: Snapshot,
-    log: MergeLog,
+pub(super) struct Live {
+    pub snap: Snapshot,
+    pub log: MergeLog,
 }
 
 impl Live {
     /// Is `line` in effect: is the record its `a` names merged into its
     /// `b` in the folder?
-    fn holds(&self, line: &MergeLine) -> bool {
+    pub(super) fn holds(&self, line: &MergeLine) -> bool {
         state_of(self.snap.record(&line.a).ok(), line) == LineState::InEffect
     }
 

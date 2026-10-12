@@ -988,42 +988,60 @@ fn fill_event_names(items: &mut BTreeMap<String, LayerItem>) {
     }
 }
 
-/// Work out every item's events (see the module notes). Called only for a
+/// The events one item is in, under the records of `set`: the one
+/// statement of it (see "Events" in the module notes). `event` is the
+/// item's `event` with the corrections applied, `m` what its tag row
+/// lists and the corrections add and remove. Returns the event `event`
+/// resolves to, and every event of the item, in order.
+///
+/// Every id is resolved through `set` as it is met, the ids of the
+/// corrections too: an `event_add` / `event_remove` names the event its
+/// id resolves to in `set`, whatever it resolved to when the line was
+/// written. A removed event is no event of any item.
+fn item_events(
+    event: Option<&str>,
+    m: Option<&Membership>,
+    set: &EventSet,
+) -> (Option<String>, Vec<String>) {
+    let resolve = |id: &str| -> String { set.resolve(id).unwrap_or(id.trim()).to_string() };
+    let first = event.map(resolve);
+    let listed = m.and_then(|m| m.listed.as_deref()).unwrap_or_default();
+    let mut ids = crate::events::dedup(
+        first
+            .iter()
+            .cloned()
+            .chain(listed.iter().map(|e| resolve(e))),
+    );
+    for (id, add) in m.map(|m| m.ops.as_slice()).unwrap_or_default() {
+        let id = resolve(id);
+        let f = fold(&id);
+        if f.is_empty() {
+            continue;
+        }
+        let at = ids.iter().position(|e| fold(e) == f);
+        match (add, at) {
+            (true, None) => ids.push(id),
+            (false, Some(i)) => {
+                ids.remove(i);
+            }
+            _ => {}
+        }
+    }
+    // A removed event is no event of any item, whoever put it there.
+    ids.retain(|e| !set.is_removed(e));
+    (first, ids)
+}
+
+/// Work out every item's events ([`item_events`]). Called only for a
 /// corpus with a records folder (`set`); every item then gets `events`.
 fn resolve_events(
     items: &mut BTreeMap<String, LayerItem>,
     members: &BTreeMap<String, Membership>,
     set: &EventSet,
 ) {
-    let resolve = |id: &str| -> String { set.resolve(id).unwrap_or(id.trim()).to_string() };
     for (key, it) in items.iter_mut() {
-        let m = members.get(key);
         let t = &mut it.info;
-        let first = t.event.as_deref().map(resolve);
-        let listed = m.and_then(|m| m.listed.as_deref()).unwrap_or_default();
-        let mut ids = crate::events::dedup(
-            first
-                .iter()
-                .cloned()
-                .chain(listed.iter().map(|e| resolve(e))),
-        );
-        for (id, add) in m.map(|m| m.ops.as_slice()).unwrap_or_default() {
-            let id = resolve(id);
-            let f = fold(&id);
-            if f.is_empty() {
-                continue;
-            }
-            let at = ids.iter().position(|e| fold(e) == f);
-            match (add, at) {
-                (true, None) => ids.push(id),
-                (false, Some(i)) => {
-                    ids.remove(i);
-                }
-                _ => {}
-            }
-        }
-        // A removed event is no event of any item, whoever put it there.
-        ids.retain(|e| !set.is_removed(e));
+        let (first, ids) = item_events(t.event.as_deref(), members.get(key), set);
         // Taken out of its tag row's event: `event` no longer names it.
         // (A removed event is not a correction of the item.)
         if let Some(first) = first.as_deref() {
@@ -1039,6 +1057,58 @@ fn resolve_events(
             }
         }
         t.events = Some(ids);
+    }
+}
+
+/// Which events every tag row of a corpus is in, for a reader that is not
+/// the build and asks it of records that are not the folder's as it is
+/// (`scout events unmerge-preview`: the records as an undo would leave
+/// them). The tag rows and the corrections are read by the build's own
+/// functions ([`read_tag_rows_hashed`], [`read_corrections_file`]), as
+/// the build reads them in a corpus with a records folder, and each
+/// item's events are worked out by [`item_events`], the function the
+/// build stores them from. So what this says of a set of records is what
+/// an index build over those records stores.
+pub(crate) struct EventMembers {
+    /// The last valid row of each key, corrections applied, events not
+    /// yet resolved.
+    items: BTreeMap<String, LayerItem>,
+    members: BTreeMap<String, Membership>,
+}
+
+impl EventMembers {
+    /// Read `analysis/topics/current.jsonl` and `corrections.jsonl` of
+    /// the corpus at `root`: the layer file streamed once, the
+    /// corrections file by its reader (line by line, twice). No other
+    /// file is opened. A corpus without a layer file has no items.
+    pub(crate) fn read(root: &Path) -> Result<EventMembers> {
+        let mut h = Sha1::new();
+        let Some(mut rows) = read_tag_rows_hashed(root, true, &mut h)? else {
+            return Ok(EventMembers {
+                items: BTreeMap::new(),
+                members: BTreeMap::new(),
+            });
+        };
+        read_corrections_file(
+            &root.join(CORRECTIONS_FILE),
+            correction_lines::MAX_FILE_BYTES,
+            &mut rows.items,
+            &mut rows.members,
+            true,
+            &mut h,
+        )?;
+        Ok(EventMembers {
+            items: rows.items,
+            members: rows.members,
+        })
+    }
+
+    /// The events of each item under the records of `set`, items in key
+    /// order (the same order for every `set`).
+    pub(crate) fn under<'a>(&'a self, set: &'a EventSet) -> impl Iterator<Item = Vec<String>> + 'a {
+        self.items.iter().map(move |(key, it)| {
+            item_events(it.info.event.as_deref(), self.members.get(key), set).1
+        })
     }
 }
 

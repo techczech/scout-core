@@ -55,3 +55,10 @@ Impact: scout-corpus `event_edit`; CLI JSON doc (`docs/cli-json.md`); version v0
 1. **Typed refusal from engine writes.** A validation refusal returns "refused, nothing changed" as a distinct result, so a client keeps its editor open and does not run the "archive may have changed" re-index path. Interface change to every write result: Opus build, review.
 2. **Item day on search hits.** Read path.
 3. **Multi-month sums in the engine** (Themes over time, event month strip) instead of in the app. Read path.
+
+## As built (2026-10-13)
+
+- Counts are tag rows resolved through the records, not listed documents: a tag row that joins no indexed document is counted here and not in `scout events`. A client that shows an event's item count from the index prints the preview's numbers only when `kept_items_now` equals that count, and no numbers otherwise.
+- Corrections are streamed twice (the existing reader's design: the first pass finds undo lines).
+- Row 4: a correction's id is resolved through the records as they are after the split. `event_remove: [B]` → the item is in A again; `event_remove: [A]` (or A's monthly id) → the item stays out of both.
+- Version: the engine's version is the tag and the `docs/cli-json.md` heading (manifests stay 0.1.0), as for v0.4.1.

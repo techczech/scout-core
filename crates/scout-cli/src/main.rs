@@ -147,7 +147,8 @@ enum Cmd {
     /// creates the record files, and `events set`, `merge`, `unmerge`,
     /// `apply-proposals`, `proposals`, `decide`, `remove`, `restore`,
     /// `create` and `check` edit them; `events merges` lists the merges
-    /// in effect.
+    /// in effect and `events unmerge-preview` says what undoing one
+    /// would leave.
     #[command(args_conflicts_with_subcommands = true)]
     Events {
         #[command(subcommand)]
