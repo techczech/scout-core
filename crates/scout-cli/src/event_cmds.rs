@@ -142,6 +142,18 @@ pub enum EventsCmd {
         #[arg(long)]
         archive: PathBuf,
     },
+    /// List the merges in effect, newest first, each with the log id
+    /// `unmerge` takes. Reads only.
+    Merges {
+        #[arg(long)]
+        archive: PathBuf,
+        /// Also list the merges that were undone.
+        #[arg(long)]
+        all: bool,
+        /// Accepted; the output is always one JSON line.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn line<T: serde::Serialize>(report: &T) -> Result<ExitCode> {
@@ -255,6 +267,9 @@ pub fn run(cmd: EventsCmd) -> Result<ExitCode> {
             start,
             end,
         })?),
+        EventsCmd::Merges { archive, all, .. } => {
+            line(&EventEditor::open(&archive)?.merge_list(all)?)
+        }
         EventsCmd::Check { archive } => {
             let r = EventEditor::open(&archive)?.check()?;
             println!("{}", serde_json::to_string(&r)?);

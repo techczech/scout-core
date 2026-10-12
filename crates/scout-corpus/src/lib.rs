@@ -48,6 +48,7 @@ pub mod topic_facets;
 pub mod topics;
 pub mod tweets;
 pub mod verify;
+pub(crate) mod works;
 
 /// An error of several lines: each string is one line, and the breaks
 /// between them are the only line breaks the error means. Its text is

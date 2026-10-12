@@ -142,6 +142,17 @@ pub struct TopicInfo {
     pub confidence: Option<String>,
     pub run_id: Option<String>,
     pub prompt_version: Option<String>,
+    /// The tag row's `mentioned_works`: the layer keys of the works of the
+    /// archive the item mentions, as written ([`crate::works`]). Absent
+    /// when the row names none (an index built before engine 14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_works: Vec<String>,
+    /// The tag row's `date` as a calendar day (`YYYY-MM-DD`), when it is
+    /// one and it is the date that gave `month`. Kept in the index and
+    /// shown in no reply as a key of its own: `scout events` gives each
+    /// month's first and last day from it.
+    #[serde(default, skip_serializing)]
+    pub day: Option<String>,
     /// Fields a correction overrode, in [`CORRECTABLE`] order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrected: Vec<String>,
@@ -241,6 +252,23 @@ fn month_of(date: Option<&str>, layer_month: Option<&str>) -> Option<String> {
     };
     date.and_then(cut)
         .or_else(|| layer_month.filter(|m| m.trim().len() == 7).and_then(cut))
+}
+
+/// The day of a tag row's `date`: its first ten bytes when they are a
+/// calendar date of `month` (the month [`month_of`] took from it).
+fn day_of(date: Option<&str>, month: Option<&str>) -> Option<String> {
+    let day = date?.trim().get(..10)?;
+    (crate::events::is_date(day) && month == day.get(..7)).then(|| day.to_string())
+}
+
+/// A document's tags as the index stores them: [`TopicInfo`] as every
+/// reply writes it, plus the `day` no reply shows.
+#[derive(Serialize)]
+struct StoredInfo<'a> {
+    #[serde(flatten)]
+    info: &'a TopicInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    day: &'a Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -712,6 +740,7 @@ fn add_layer_line(
         .flatten()
         .and_then(|t| t.entities_typed);
     let entity_types = typed_entities(typed.as_ref(), &entities);
+    let day = day_of(l.date.as_deref(), month.as_deref());
     let info = TopicInfo {
         key: key.clone(),
         themes: l.themes.unwrap_or_default(),
@@ -725,6 +754,9 @@ fn add_layer_line(
         confidence: l.confidence,
         run_id: l.run_id,
         prompt_version: l.prompt_version,
+        // Like the types: read apart, after the row is accepted.
+        mentioned_works: crate::works::read_mentioned(line),
+        day,
         corrected: vec![],
     };
     items.insert(
@@ -1076,6 +1108,37 @@ const REPORT_KEY: &str = "topic_report";
 /// The records report of a corpus that has no layer file.
 const EVENTS_REPORT_KEY: &str = "events_report";
 
+/// Layer key → the documents that have it, and every document key.
+pub(crate) type KeyedDocuments = (HashMap<String, Vec<String>>, BTreeSet<String>);
+
+/// The documents of an index by layer key (`<source>:<source_id>`, each
+/// trimmed), and every document key. The one statement of which document
+/// a layer key names: the join of tag rows ([`apply`]) and the look-up of
+/// a mentioned work ([`crate::works`]) both read it here.
+pub(crate) fn documents_by_source_key(conn: &Connection) -> Result<KeyedDocuments> {
+    let mut by_key: HashMap<String, Vec<String>> = HashMap::new();
+    let mut paths: BTreeSet<String> = BTreeSet::new();
+    let mut st = conn.prepare("SELECT rel_path, source, source_id FROM documents")?;
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (rel, source, id) = row?;
+        if let (Some(s), Some(i)) = (source, id) {
+            by_key
+                .entry(format!("{}:{}", s.trim(), i.trim()))
+                .or_default()
+                .push(rel.clone());
+        }
+        paths.insert(rel);
+    }
+    Ok((by_key, paths))
+}
+
 /// Copy a layer into the index's `topic_docs`, joined to its documents,
 /// and its event records into the index's copy of them. `None` empties
 /// both; a build then stores the records of a corpus without a layer file
@@ -1086,28 +1149,7 @@ pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicRep
     let Some(layer) = layer else {
         return Ok(None);
     };
-    let mut by_key: HashMap<String, Vec<String>> = HashMap::new();
-    let mut paths: BTreeSet<String> = BTreeSet::new();
-    {
-        let mut st = conn.prepare("SELECT rel_path, source, source_id FROM documents")?;
-        let rows = st.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<String>>(2)?,
-            ))
-        })?;
-        for row in rows {
-            let (rel, source, id) = row?;
-            if let (Some(s), Some(i)) = (source, id) {
-                by_key
-                    .entry(format!("{}:{}", s.trim(), i.trim()))
-                    .or_default()
-                    .push(rel.clone());
-            }
-            paths.insert(rel);
-        }
-    }
+    let (by_key, paths) = documents_by_source_key(conn)?;
     // Key matches first, so a path match never displaces one.
     let mut rows: BTreeMap<String, (&str, &'static str, &TopicInfo)> = BTreeMap::new();
     let (mut by_k, mut by_p) = (0usize, 0usize);
@@ -1137,7 +1179,11 @@ pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicRep
         "INSERT INTO topic_docs (rel_path, key, matched_by, info) VALUES (?1, ?2, ?3, ?4)",
     )?;
     for (rel, (key, how, info)) in &rows {
-        ins.execute(params![rel, key, how, serde_json::to_string(info)?])?;
+        let stored = StoredInfo {
+            info,
+            day: &info.day,
+        };
+        ins.execute(params![rel, key, how, serde_json::to_string(&stored)?])?;
     }
     unmatched.sort();
     Ok(Some(TopicReport {
@@ -1421,6 +1467,122 @@ mod tests {
         // Three rests are rows, with each of the 29 values the reader
         // before types passed over, in both places.
         assert_eq!(rows, 3 * 29 * 2);
+    }
+
+    /// Whatever `mentioned_works` holds, a line is a row exactly when it
+    /// was one before the key was read, with the same tags; the value
+    /// only ever decides the works.
+    #[test]
+    fn an_odd_mentioned_works_never_decides_whether_a_line_is_a_row() {
+        let deep = |open: &str, close: &str| format!("{}{}", open.repeat(150), close.repeat(150));
+        // (the value as written, the works it gives a row)
+        let values: Vec<(String, Vec<&str>)> = vec![
+            (r#"["rw:1","x:2"]"#.into(), vec!["rw:1", "x:2"]),
+            (r#"[" rw:1 ","RW:1"]"#.into(), vec!["rw:1"]),
+            ("[]".into(), vec![]),
+            // Items of another shape are passed over, one by one.
+            (
+                r#"[1,null,true,"rw:1",{"key":"x:2"},["x:3"],""]"#.into(),
+                vec!["rw:1"],
+            ),
+            (r#"[{"key":"rw:1","title":"T"}]"#.into(), vec![]),
+            // Not a list: none.
+            ("null".into(), vec![]),
+            ("7".into(), vec![]),
+            (r#""rw:1""#.into(), vec![]),
+            (r#"{"rw:1":1}"#.into(), vec![]),
+            // Not readable as a value of the field: none.
+            ("1e400".into(), vec![]),
+            (r#"["rw:1",1e400]"#.into(), vec![]),
+            (deep("[", "]"), vec![]),
+            (format!(r#"["rw:1",{}]"#, deep("[", "]")), vec![]),
+            // The key a second time: none.
+            (r#"["rw:1"],"mentioned_works":["x:2"]"#.into(), vec![]),
+            (r#"1,"mentioned_works":["x:2"]"#.into(), vec![]),
+            // Not JSON: the line was never a row.
+            ("[".into(), vec![]),
+            ("01".into(), vec![]),
+            ("".into(), vec![]),
+        ];
+        let rests = [
+            (
+                r#""key":"x:1","path":"a.md","date":"2026-02-03","themes":["Maths"],"entities":["Tao"],"entities_typed":[{"name":"Tao","type":"person"}],"event":"2026-02/E01""#,
+                true,
+            ),
+            (r#""key":"x:1","themes":["Maths"],"other":1e400"#, true),
+            (r#""key":"x:1","themes":"Maths""#, false),
+            (r#""key":" ","themes":["Maths"]"#, false),
+            (r#""themes":["Maths"]"#, false),
+        ];
+        let mut rows = 0;
+        for (rest, is_row) in rests {
+            let bare = one_row(&format!("{{{rest}}}"));
+            assert_eq!(bare.is_some(), is_row, "{rest}");
+            for (value, works) in &values {
+                for line in [
+                    format!(r#"{{{rest},"mentioned_works":{value}}}"#),
+                    format!(r#"{{"mentioned_works":{value},{rest}}}"#),
+                ] {
+                    let got = one_row(&line);
+                    // As the reader before the field: the same lines are rows.
+                    let before = serde_json::from_str::<RowBeforeTypes>(&line)
+                        .is_ok_and(|r| !r.key.trim().is_empty());
+                    assert_eq!(got.is_some(), before, "{line}");
+                    let Some(got) = got else { continue };
+                    rows += 1;
+                    // And the row is the row without the key, works apart.
+                    let bare = bare.clone().expect(&line);
+                    assert!(bare.mentioned_works.is_empty());
+                    assert_eq!(got.mentioned_works, *works, "{line}");
+                    assert_eq!(
+                        got,
+                        TopicInfo {
+                            mentioned_works: got.mentioned_works.clone(),
+                            ..bare
+                        },
+                        "{line}"
+                    );
+                }
+            }
+        }
+        // Two rests are rows, with each of the 15 values the reader
+        // before the field passed over, in both places.
+        assert_eq!(rows, 2 * 15 * 2);
+    }
+
+    #[test]
+    fn a_row_has_a_day_when_its_date_is_one_and_gave_the_month() {
+        let day = |rest: &str| one_row(&format!(r#"{{"key":"x:1",{rest}}}"#)).unwrap().day;
+        assert_eq!(day(r#""date":"2026-09-06""#).as_deref(), Some("2026-09-06"));
+        assert_eq!(
+            day(r#""date":"2026-09-06T10:00:00Z""#).as_deref(),
+            Some("2026-09-06")
+        );
+        // A date that is no day gives the month and no day; the layer's
+        // own month gives none.
+        for none in [
+            r#""date":"2026-09""#,
+            r#""date":"2026-09-31""#,
+            r#""month":"2026-09""#,
+            r#""date":"soon","month":"2026-09""#,
+            r#""themes":[]"#,
+        ] {
+            assert_eq!(day(none), None, "{none}");
+        }
+        // The day is kept in the index's copy and written in no reply.
+        let row = one_row(r#"{"key":"x:1","date":"2026-09-06"}"#).unwrap();
+        let shown = serde_json::to_string(&row).unwrap();
+        assert!(
+            !shown.contains("day") && !shown.contains("mentioned_works"),
+            "{shown}"
+        );
+        let stored = serde_json::to_string(&StoredInfo {
+            info: &row,
+            day: &row.day,
+        })
+        .unwrap();
+        assert_eq!(serde_json::from_str::<TopicInfo>(&stored).unwrap(), row);
+        assert_eq!(serde_json::from_str::<TopicInfo>(&shown).unwrap().day, None);
     }
 
     #[test]

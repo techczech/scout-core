@@ -508,9 +508,17 @@ fn the_events_listing_gives_records_counts_and_months() {
             "end": null,
             "items": 3,
             "months": [{"month": "2026-09", "count": 2}, {"month": "2026-10", "count": 1}],
+            // Engine 14: each month's first and last day, from the rows' dates.
+            "month_spans": {
+                "2026-09": {"first": "2026-09-01", "last": "2026-09-02"},
+                "2026-10": {"first": "2026-10-03", "last": "2026-10-03"},
+            },
             "members": ["2026-09/E21"],
             // Its own alias, then the name of the record merged into it.
             "aliases": ["Fields declaration", "Declaration follow-up"],
+            // Engine 14: the record's own, since a merged name was added.
+            "own_aliases": ["Fields declaration"],
+            // Merged by a hand-written `merged_into`: no log line, no `merge_id`.
             "merged_from": [{"id": FOLLOW, "name": "Declaration follow-up"}],
             "themes": ["T"],
             "origin": "dominik",
@@ -525,6 +533,7 @@ fn the_events_listing_gives_records_counts_and_months() {
             "corpus": "highlights", "id": "2026-11/E01", "name": "Unrecorded", "record": false,
             "start": null, "end": null, "items": 1,
             "months": [{"month": "2026-11", "count": 1}],
+            "month_spans": {"2026-11": {"first": "2026-11-05", "last": "2026-11-05"}},
             "members": [], "aliases": [], "themes": [], "origin": null, "edited": null,
             "merged_into": null, "description": ""
         })

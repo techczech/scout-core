@@ -146,7 +146,8 @@ enum Cmd {
     /// month (lasting events where the corpus has records); `events seed`
     /// creates the record files, and `events set`, `merge`, `unmerge`,
     /// `apply-proposals`, `proposals`, `decide`, `remove`, `restore`,
-    /// `create` and `check` edit them.
+    /// `create` and `check` edit them; `events merges` lists the merges
+    /// in effect.
     #[command(args_conflicts_with_subcommands = true)]
     Events {
         #[command(subcommand)]

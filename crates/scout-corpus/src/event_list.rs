@@ -7,14 +7,17 @@
 //!
 //! A record that others are merged into is listed as the combined event
 //! ([`events::combined`]): `start` / `end` cover the merged records,
-//! `aliases` take in their names and aliases, `merged_from` names them,
-//! and `own_start` / `own_end` give the record's own date where the
-//! combined one differs. `members`, `themes`, `origin`, `edited` and the
+//! `aliases` take in their names and aliases, `merged_from` names them
+//! (each with the `merge_id` of the merge-log line in effect for it, when
+//! there is one: the log is read by its one reader, in the corpus's
+//! records folder, and only for a corpus that has a merged record), and
+//! `own_start` / `own_end` / `own_aliases` give the record's own value
+//! where the combined one differs. `members`, `themes`, `origin`, `edited` and the
 //! description are the record's own. A record merged away (listed with
 //! `merged`) is listed with its own values only.
 
 use crate::api::{Engine, Outcome, Reply};
-use crate::events::{self, EventRecord, MergedFrom};
+use crate::events::{self, EventRecord, MergedFrom, EVENTS_DIR};
 use crate::index;
 use crate::normalize::fold;
 use crate::topics::valid_month;
@@ -63,6 +66,13 @@ pub struct MonthCount {
     pub count: usize,
 }
 
+/// The earliest and the latest day of an event's items in one month.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MonthSpan {
+    pub first: String,
+    pub last: String,
+}
+
 /// One event of one corpus.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct EventListing {
@@ -91,12 +101,28 @@ pub struct EventListing {
     /// Items per layer month, chronological; an item without a month is in
     /// `items` only.
     pub months: Vec<MonthCount>,
+    /// By month of `months`: the earliest and the latest day
+    /// (`YYYY-MM-DD`) of the event's items in that month, from each
+    /// item's tag-row date ([`crate::topics::TopicInfo::day`]). A month
+    /// none of whose items has a day has no entry; the key is absent when
+    /// no month has one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub month_spans: BTreeMap<String, MonthSpan>,
+    /// The items that have no layer month: in `items`, in no month of
+    /// `months`. The key is absent when there are none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undated_items: Option<usize>,
     /// The record's own members (the monthly ids of the records merged
     /// into it are in their records).
     pub members: Vec<String>,
     /// The record's own aliases, then the names and aliases of the
     /// records merged into it.
     pub aliases: Vec<String>,
+    /// The record's own aliases (the ones `set --remove-alias` can
+    /// remove), only when `aliases` differs from them; the key is absent
+    /// otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub own_aliases: Option<Vec<String>>,
     /// The records merged into this one, directly or through a chain, in
     /// id order; the key is absent when there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -138,6 +164,8 @@ struct Tally {
     spelling: String,
     items: usize,
     months: BTreeMap<String, usize>,
+    /// Month → (earliest, latest) day of its items that have one.
+    spans: BTreeMap<String, (String, String)>,
     names: BTreeMap<String, usize>,
 }
 
@@ -162,6 +190,21 @@ impl Engine {
             let conn = index::open_existing(&c.config, c.index_path())?;
             let records = events::load(&conn)?;
             let merged_in = events::merged_in(&records);
+            // The merge line of each record merged in: read only where
+            // there is one to show, by the log's own reader. A log that
+            // cannot be read costs the ids, never the listing.
+            let merge_ids = if merged_in.is_empty() {
+                BTreeMap::new()
+            } else {
+                let dir = c.config.root().join(EVENTS_DIR);
+                crate::event_edit::live_merge_ids(&dir, &records).unwrap_or_else(|e| {
+                    notes.push(format!(
+                        "scout: note: no merge_id for {}: the merge log was not read ({e:#})",
+                        c.id()
+                    ));
+                    BTreeMap::new()
+                })
+            };
             let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
             for d in crate::filter::load_docs(&conn)?.values() {
                 let Some(t) = d.topic.as_ref().filter(|_| d.tokens > 0) else {
@@ -172,6 +215,18 @@ impl Engine {
                     e.items += 1;
                     if let Some(m) = &t.month {
                         *e.months.entry(m.clone()).or_default() += 1;
+                        if let Some(day) = t.day.as_ref().filter(|d| d.starts_with(m.as_str())) {
+                            let span = e
+                                .spans
+                                .entry(m.clone())
+                                .or_insert_with(|| (day.clone(), day.clone()));
+                            if *day < span.0 {
+                                span.0 = day.clone();
+                            }
+                            if *day > span.1 {
+                                span.1 = day.clone();
+                            }
+                        }
                     }
                     // The layer's name belongs to the tag row's own id.
                     if let (Some(own), Some(n)) = (&t.event, &t.event_name) {
@@ -206,7 +261,7 @@ impl Engine {
                     continue;
                 }
                 let merged = merged_in.get(&k).map_or(&[][..], Vec::as_slice);
-                out.push(listing(c.id(), record, merged, t, month_items));
+                out.push(listing(c.id(), record, merged, &merge_ids, t, month_items));
             }
         }
         out.sort_by(|a, b| {
@@ -239,6 +294,7 @@ fn listing(
     corpus: &str,
     record: Option<&EventRecord>,
     merged: &[&EventRecord],
+    merge_ids: &BTreeMap<String, String>,
     t: Tally,
     month_items: Option<usize>,
 ) -> EventListing {
@@ -253,7 +309,11 @@ fn listing(
     let r = record.cloned().unwrap_or_default();
     // A record merged away is listed as itself.
     let merged = if r.merged_into.is_some() { &[] } else { merged };
-    let all = events::combined(&r, merged);
+    let mut all = events::combined(&r, merged);
+    for m in all.merged_from.iter_mut() {
+        m.merge_id = merge_ids.get(&fold(&m.id)).cloned();
+    }
+    let dated: usize = t.months.values().sum();
     let own = |own: &Option<String>, shown: &Option<String>| (own != shown).then(|| own.clone());
     EventListing {
         corpus: corpus.to_string(),
@@ -274,7 +334,14 @@ fn listing(
                 count: *count,
             })
             .collect(),
+        month_spans: t
+            .spans
+            .into_iter()
+            .map(|(month, (first, last))| (month, MonthSpan { first, last }))
+            .collect(),
+        undated_items: (t.items > dated).then(|| t.items - dated),
         members: r.members,
+        own_aliases: (r.aliases != all.aliases).then(|| r.aliases.clone()),
         aliases: all.aliases,
         merged_from: all.merged_from,
         themes: r.themes,

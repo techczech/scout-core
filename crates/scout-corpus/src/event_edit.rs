@@ -1,5 +1,5 @@
 //! `scout events set | merge | unmerge | apply-proposals | decide |
-//! proposals | remove | restore | create | check`: the edits of lasting
+//! proposals | remove | restore | create | check | merges`: the edits of lasting
 //! event records (spec
 //! `archive-scout/docs/specs/2026-10-11-lasting-events-spec.md`, "What he
 //! can do to an event" and "Where lasting events come from", step 2).
@@ -128,6 +128,7 @@
 
 pub(crate) mod log;
 mod merge;
+mod merges;
 mod proposals;
 pub(crate) mod store;
 
@@ -143,6 +144,8 @@ use store::Snapshot;
 
 pub use log::{By, Decision, DecisionLine, MergeLine, UndoLine, DECISIONS_LOG, MERGE_LOG};
 pub use merge::{CheckReport, Merged, Problem, Unmerged};
+pub(crate) use merges::live_merge_ids;
+pub use merges::{MergeInfo, MergeList, MergeSide};
 pub use proposals::{
     ApplyReport, Decided, PlannedMerge, SkippedPair, WaitingPair, WaitingReport, PROPOSALS_DIR,
 };

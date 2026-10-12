@@ -169,7 +169,7 @@ pub(super) fn merged_record(
 
 /// The state of a merge line, told from record `a` as it is.
 #[derive(Debug, PartialEq, Eq)]
-enum LineState {
+pub(super) enum LineState {
     /// `a` is merged into `b`.
     InEffect,
     /// `a` is merged into nothing.
@@ -178,8 +178,12 @@ enum LineState {
     Other(String),
 }
 
-fn line_state(snap: &Snapshot, line: &MergeLine) -> LineState {
-    let Ok(a) = snap.record(&line.a) else {
+/// The state of `line`, with `a` the record its `a` names (`None`: no
+/// such record). The one statement of when a merge line is in effect:
+/// `merge`, `unmerge`, `check`, `merges` and the `merge_id` of `scout
+/// events` all ask here.
+pub(super) fn state_of(a: Option<&EventRecord>, line: &MergeLine) -> LineState {
+    let Some(a) = a else {
         return LineState::Other(format!("the record {} is no longer there", line.a));
     };
     match &a.merged_into {
@@ -187,6 +191,10 @@ fn line_state(snap: &Snapshot, line: &MergeLine) -> LineState {
         Some(into) => LineState::Other(format!("{} is now merged into {into}", a.id)),
         None => LineState::NotApplied,
     }
+}
+
+fn line_state(snap: &Snapshot, line: &MergeLine) -> LineState {
+    state_of(snap.record(&line.a).ok(), line)
 }
 
 /// A merge of `a` that is in the log, not undone and not applied: a run

@@ -15,7 +15,7 @@
 use crate::clean::{self, CleanOptions, CleanReport};
 use crate::colloc::{self, CollocRequest, CollocResults, CompareResults};
 use crate::concord::{self, Distribution, KwicRequest, KwicResults, Near, Profile, ProfileOptions};
-pub use crate::event_list::{EventListing, EventsQuery, EventsResults, MonthCount};
+pub use crate::event_list::{EventListing, EventsQuery, EventsResults, MonthCount, MonthSpan};
 use crate::filter::{DocFilter, SliceSpec};
 use crate::index::{self, BuildReport, IndexStatus, NoIndexedCorpus};
 use crate::keyness::{self, KeynessRequest, KeynessResults};
@@ -33,6 +33,7 @@ use crate::verify::{self, VerifyResult};
 use crate::{search_all, Corpus, Slice};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1014,18 +1015,30 @@ impl Engine {
         let ai_plan = plan.filter.ai.is_some().then(|| plan.without_ai());
         let mut ai = FacetCounter::default();
         let mut searched = Vec::new();
+        // Folded work key → the first searched corpus a counted document
+        // of which mentions it (the corpus whose layer wrote the key),
+        // and the key as that corpus's documents write it.
+        let mut mentioned_in: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
         for c in &corpora {
             if named.is_empty() || named.iter().any(|n| n == c.id()) {
                 searched.push((c, index::open_existing(&c.config, c.index_path())?));
             }
         }
         let per_corpus = events_are_per_corpus(searched.iter().map(|(_, conn)| conn))?;
-        for (c, conn) in &searched {
+        for (at, (c, conn)) in searched.iter().enumerate() {
             if per_corpus {
                 counter.corpus(c.id());
             }
             for d in &search::counted_docs(conn, &plan)? {
                 counter.add(d);
+                for w in d.topic.iter().flat_map(|t| &t.mentioned_works) {
+                    let e = mentioned_in
+                        .entry(crate::topics::fold(w))
+                        .or_insert_with(|| (at, BTreeSet::new()));
+                    if e.0 == at {
+                        e.1.insert(w.trim().to_string());
+                    }
+                }
             }
             if let Some(p) = &months_plan {
                 for d in &search::counted_docs(conn, p)? {
@@ -1062,6 +1075,40 @@ impl Engine {
         }
         if ai_plan.is_some() {
             facets.ai = ai.facets(0).ai;
+        }
+        // A work's value is a layer key: name the document it is, where
+        // the corpus whose layer wrote it has one.
+        if let Some(works) = &mut facets.works {
+            let mut lookups: BTreeMap<usize, crate::works::Lookup> = BTreeMap::new();
+            for it in works.items.iter_mut() {
+                let Some((at, written)) = mentioned_in.get(&crate::topics::fold(&it.value)) else {
+                    continue;
+                };
+                let at = *at;
+                let (c, conn) = &searched[at];
+                let lookup = match lookups.entry(at) {
+                    std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(crate::works::Lookup::open(conn)?)
+                    }
+                };
+                // Keys are compared as the build compares them, exactly:
+                // the value shown first, then the other spellings.
+                let mut named = None;
+                for key in std::iter::once(&it.value).chain(written) {
+                    if let Some(doc) = lookup.document(key)? {
+                        named = Some((key.clone(), doc));
+                        break;
+                    }
+                }
+                if let Some((key, doc)) = named {
+                    it.key = Some(key);
+                    it.title = Some(doc.title);
+                    it.corpus = Some(c.id().to_string());
+                    it.path = Some(c.config.source_path(&doc.rel_path).display().to_string());
+                    it.rel_path = Some(doc.rel_path);
+                }
+            }
         }
         Ok(Reply {
             body: FacetsResults {

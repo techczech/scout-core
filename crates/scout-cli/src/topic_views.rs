@@ -29,7 +29,8 @@ fn rows(items: &[FacetItem]) {
             .as_deref()
             .map(|c| format!("  [{}]", safe(c)))
             .unwrap_or_default();
-        match &i.name {
+        // An event has a name; a work that is a document has its title.
+        match i.name.as_ref().or(i.title.as_ref()) {
             Some(n) => println!("  {:>w$}  {}  {}{corpus}", i.count, safe(&i.value), safe(n)),
             None => println!("  {:>w$}  {}{corpus}", i.count, safe(&i.value)),
         }
@@ -61,6 +62,9 @@ pub fn print_facets(r: &FacetsResults) {
     section("entities", &f.entity);
     section("events", &f.event);
     section("months", &f.month);
+    if let Some(works) = &f.works {
+        section("works mentioned", works);
+    }
     if r.tagged_documents > 0 {
         println!("ai: {} true · {} false", f.ai.yes, f.ai.no);
     }
@@ -154,8 +158,12 @@ pub fn print_events(r: &EventsResults) {
             .month_items
             .map(|n| format!("  [{n} in month]"))
             .unwrap_or_default();
+        let undated = e
+            .undated_items
+            .map(|n| format!("  [{n} without a month]"))
+            .unwrap_or_default();
         println!(
-            "  {:>w$}  {}  {}{span}{in_month}{merged}{removed}",
+            "  {:>w$}  {}  {}{span}{in_month}{undated}{merged}{removed}",
             e.items,
             safe(&e.id),
             safe(e.name.as_deref().unwrap_or(""))

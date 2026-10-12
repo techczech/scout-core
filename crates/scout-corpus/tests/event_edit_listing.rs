@@ -8,7 +8,7 @@
 
 mod event_edit_support;
 use event_edit_support::*;
-use scout_corpus::api::{EventsQuery, FacetsQuery, MonthCount};
+use scout_corpus::api::{EventsQuery, FacetsQuery, MonthCount, MonthSpan};
 use scout_corpus::event_seed::{seed, SeedOptions};
 use scout_corpus::registry::{CorpusConfig, CorpusKind, DocumentUnit, FieldMap};
 use scout_corpus::{topics, Corpus, Engine, Registry, SearchRequest};
@@ -189,9 +189,10 @@ fn a_merged_event_lists_the_span_and_aliases_of_all_its_records() {
             strs(&[BETA])
         )
     );
+    // With the line that merged it in (engine 14).
     assert_eq!(
         row["merged_from"],
-        json!([{"id": BETA, "name": "Beta follow-up"}])
+        json!([{"id": BETA, "name": "Beta follow-up", "merge_id": m1}])
     );
     // The rest is alpha's own record: the monthly ids of beta are in
     // beta's record, and resolve to alpha through it.
@@ -403,6 +404,10 @@ struct Before {
     end: Option<String>,
     items: usize,
     months: Vec<MonthCount>,
+    /// Since engine 14, where an item's tag row has a day (every row of
+    /// this fixture has; `event_page_reads.rs` lists rows that have none
+    /// in the shape without this key).
+    month_spans: std::collections::BTreeMap<String, MonthSpan>,
     members: Vec<String>,
     aliases: Vec<String>,
     themes: Vec<String>,
@@ -438,6 +443,7 @@ fn a_folder_with_no_merged_record_lists_as_it_did_before() {
                 end: r.end,
                 items: l.items,
                 months: l.months.clone(),
+                month_spans: l.month_spans.clone(),
                 members: r.members,
                 aliases: r.aliases,
                 themes: r.themes,
@@ -450,7 +456,13 @@ fn a_folder_with_no_merged_record_lists_as_it_did_before() {
         .collect();
     assert_eq!(before.len(), 4);
     assert_eq!(now, serde_json::to_string(&before).unwrap());
-    for key in ["own_start", "own_end", "merged_from"] {
+    for key in [
+        "own_start",
+        "own_end",
+        "merged_from",
+        "own_aliases",
+        "undated_items",
+    ] {
         assert!(!now.contains(key), "{key}");
     }
 }

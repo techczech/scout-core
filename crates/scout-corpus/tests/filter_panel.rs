@@ -646,7 +646,7 @@ fn facets_on_an_empty_query_count_every_tagged_document() {
 #[test]
 fn entity_types_go_from_the_rows_and_corrections_to_hits_and_the_entity_facet() {
     let fx = fixture();
-    assert_eq!(scout_corpus::index::ENGINE_VERSION, "scout-corpus/13");
+    assert_eq!(scout_corpus::index::ENGINE_VERSION, "scout-corpus/14");
     let r = search(&fx, "in:notes", &[], Sort::Oldest, 100);
     let info = |file: &str| -> TopicInfo {
         r.results

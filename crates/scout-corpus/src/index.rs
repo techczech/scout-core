@@ -19,7 +19,7 @@ use std::time::Instant;
 
 /// Bumped whenever normalisation, tokenisation, passage splitting or the
 /// schema changes; a mismatch forces a full rebuild.
-pub const ENGINE_VERSION: &str = "scout-corpus/13";
+pub const ENGINE_VERSION: &str = "scout-corpus/14";
 
 /// FTS5 column content is our own tokens joined by spaces; the FTS tokenizer
 /// keeps the in-word characters UAX #29 allows so it re-splits only on spaces.

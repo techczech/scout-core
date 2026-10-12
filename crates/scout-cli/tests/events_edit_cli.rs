@@ -375,6 +375,67 @@ fn every_edit_prints_one_json_line_and_a_refusal_exits_2_with_nothing_changed() 
 }
 
 #[test]
+fn merges_prints_the_merges_in_effect_and_with_all_the_undone_ones() {
+    let fx = Fx::new();
+    fx.ok(&["create", "--name", "Alpha story", "--start", "2026-09-05"]);
+    fx.ok(&["create", "--name", "Beta", "--start", "2026-10-02"]);
+    let dir = fx.dir.display().to_string();
+    // No log yet: an empty list, and `--json` changes nothing.
+    let none = fx.ok(&["merges"]);
+    assert_eq!(
+        (&none["tool"], &none["dir"], &none["merges"]),
+        (&json!("scout events merges"), &json!(dir), &json!([]))
+    );
+    assert!(none.get("all").is_none());
+    assert_eq!(fx.ok(&["merges", "--json"])["merges"], json!([]));
+
+    let m = fx.ok(&["merge", BETA, ALPHA, "--reason", "one story"]);
+    let before = fx.tree();
+    let live = fx.ok(&["merges", "--json"]);
+    assert_eq!(
+        live["merges"],
+        json!([{
+            "id": "m000001", "at": m["at"], "by": "dominik", "reason": "one story",
+            "a": {"id": BETA, "name": "Beta"}, "b": {"id": ALPHA, "name": "Alpha story"},
+        }])
+    );
+    assert_eq!(fx.ok(&["merges", "--all"])["merges"], live["merges"]);
+
+    let u = fx.ok(&["unmerge", "m000001"]);
+    assert_eq!(fx.ok(&["merges"])["merges"], json!([]));
+    let all = fx.ok(&["merges", "--all"]);
+    assert_eq!(all["all"], json!(true));
+    assert_eq!(
+        all["merges"],
+        json!([{
+            "id": "m000001", "at": m["at"], "by": "dominik", "reason": "one story",
+            "a": {"id": BETA, "name": "Beta"}, "b": {"id": ALPHA, "name": "Alpha story"},
+            "undone_by": "m000002", "undone_at": u["at"],
+        }])
+    );
+    // Merged again: the new line is first, the undone one after it.
+    fx.ok(&["merge", BETA, ALPHA]);
+    let ids = |v: &Value| -> Vec<String> {
+        v["merges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(ids(&fx.ok(&["merges"])), ["m000003"]);
+    assert_eq!(ids(&fx.ok(&["merges", "--all"])), ["m000003", "m000001"]);
+    // Reading writes nothing.
+    fx.ok(&["unmerge", "m000003"]);
+    let state = fx.tree();
+    fx.ok(&["merges", "--all"]);
+    assert!(fx.tree() == state && state != before);
+    // A malformed log stops it like every command that reads the log.
+    fs::write(fx.dir.join("merge-log.jsonl"), "not json\n").unwrap();
+    fx.refused(&["merges"], "merge-log.jsonl: line 1: not JSON");
+}
+
+#[test]
 fn the_archive_is_required_and_its_path_is_checked() {
     let fx = Fx::new();
     let scout = |args: &[&str]| {

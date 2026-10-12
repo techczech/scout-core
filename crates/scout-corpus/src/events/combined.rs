@@ -15,6 +15,12 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct MergedFrom {
     pub id: String,
     pub name: String,
+    /// The id of the merge-log line in effect that merged this record in
+    /// (`scout events unmerge <merge_id>` takes it out again). Set by
+    /// `scout events`, which reads the log; absent for a record merged by
+    /// hand, with no line in effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_id: Option<String>,
 }
 
 /// What an event shows of its own record and the records merged into it.
@@ -129,6 +135,7 @@ pub fn combined(own: &EventRecord, merged: &[&EventRecord]) -> Combined {
             .map(|r| MergedFrom {
                 id: r.id.clone(),
                 name: r.name.clone(),
+                merge_id: None,
             })
             .collect(),
     }

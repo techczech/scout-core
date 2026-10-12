@@ -25,8 +25,22 @@ pub struct FacetItem {
     /// Events, and only when more than one corpus was searched and any of
     /// them has a records folder: the corpus the event belongs to (the
     /// same id in two corpora is then two values).
+    ///
+    /// Works: the corpus of the document the key names, when one does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corpus: Option<String>,
+    /// Works, and only when the value (a layer key) names a document of a
+    /// searched corpus: that key, the document's title, its key in the
+    /// corpus (`rel_path`) and its file (`path`), as a search result has
+    /// them. A key that names no indexed document has none of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -51,6 +65,12 @@ pub struct Facets {
     pub event: Facet,
     pub month: Facet,
     pub ai: AiCounts,
+    /// The works the counted documents mention (`mentioned_works`), each
+    /// a layer key with the documents mentioning it. Informational: no
+    /// query field selects by it. The key is absent when no counted
+    /// document mentions a work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub works: Option<Facet>,
 }
 
 /// Which facet a listing asks for.
@@ -118,6 +138,10 @@ impl ValueCounts {
                     kind: None,
                     name: None,
                     corpus: None,
+                    key: None,
+                    title: None,
+                    rel_path: None,
+                    path: None,
                 }
             })
             .collect();
@@ -173,6 +197,8 @@ pub struct FacetCounter {
     /// Folded entity name -> (type -> documents giving it that type).
     entity_kinds: BTreeMap<String, BTreeMap<String, usize>>,
     month: ValueCounts,
+    /// Mentioned works, by layer key.
+    work: ValueCounts,
     /// One entry per corpus fed, in feeding order.
     events: Vec<CorpusEvents>,
     /// The entry of the corpus being fed.
@@ -226,6 +252,7 @@ impl FacetCounter {
             }
         }
         self.month.add_doc(t.layer_month().map(String::from).iter());
+        self.work.add_doc(&t.mentioned_works);
         let ev = self.current();
         ev.counts.add_doc(t.event_ids());
         // The layer's name belongs to the tag row's own event id; it names
@@ -325,10 +352,12 @@ impl FacetCounter {
         f
     }
 
-    /// All four facets; `top` cuts themes, entities and events (0 = all);
-    /// months are all listed, chronologically.
+    /// All the facets; `top` cuts themes, entities, events and works
+    /// (0 = all); months are all listed, chronologically.
     pub fn facets(&self, top: usize) -> Facets {
+        let works = self.work.facet(top, false, |_| true);
         Facets {
+            works: (works.distinct > 0).then_some(works),
             theme: self.theme.facet(top, false, |_| true),
             entity: self.entity_facet(top),
             event: self.event_facet(top),
