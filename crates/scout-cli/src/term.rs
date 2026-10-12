@@ -75,6 +75,14 @@ pub fn safe(s: &str) -> Cow<'_, str> {
     }
 }
 
+/// `s` in double quotes for a terminal: through [`safe`] first, then
+/// quoted as Rust quotes a string (a `"` or a `\` in it escaped). How a
+/// view shows a query, a term or a pattern it was given: no view writes
+/// `{:?}` of a string itself.
+pub fn quoted(s: &str) -> String {
+    format!("{:?}", safe(s))
+}
+
 /// [`safe`] on each line of a text that is a document of several lines: a
 /// citation (a quote keeps its paragraphs) and a registry entry (`corpora
 /// show`). The line feeds stay, every line between them goes through
@@ -113,6 +121,27 @@ mod tests {
     use super::*;
 
     const FFFD: &str = "\u{fffd}";
+
+    #[test]
+    fn a_quoted_string_is_safe_first_and_then_in_quotes() {
+        assert_eq!(quoted("proof"), "\"proof\"");
+        assert_eq!(quoted(""), "\"\"");
+        assert_eq!(quoted("naïve 日本語"), "\"naïve 日本語\"");
+        // Its own quotes and backslashes are escaped, so it reads as one.
+        assert_eq!(quoted("a \"b\" \\c"), "\"a \\\"b\\\" \\\\c\"");
+        // What `safe` replaces is replaced, not written as an escape.
+        for (s, want) in [
+            ("a\u{1b}[31mb", format!("\"a{FFFD}[31mb\"")),
+            ("a\nb\rc", format!("\"a{FFFD}b{FFFD}c\"")),
+            ("a\u{202e}b\u{200b}c", format!("\"a{FFFD}b{FFFD}c\"")),
+            ("a\u{9b}2Jb\u{7f}", format!("\"a{FFFD}2Jb{FFFD}\"")),
+        ] {
+            let q = quoted(s);
+            assert_eq!(q, want);
+            assert!(!q.chars().any(acts), "{q:?}");
+            assert!(!q.contains("\\u{") && !q.contains("\\n"), "{q}");
+        }
+    }
 
     #[test]
     fn controls_are_replaced_one_for_one_and_everything_else_is_kept() {

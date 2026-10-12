@@ -50,8 +50,11 @@
 //! the file that was read at the length read, whether it opens for
 //! append.
 //!
-//! Ids of the merge log are `m` and six to nine digits, so at most
-//! `m999999999` ([`MAX_ID`]). A line with any other id is malformed. When
+//! Ids of the merge log are canonical numbered ids
+//! ([`crate::numbered_id`]): `m` and the number written with at least six
+//! digits and no more than it needs, so at most `m999999999`
+//! ([`MAX_ID`]), and one spelling per number (`m0000001` is not an id). A
+//! line with any other id is malformed. When
 //! the last line holds the largest id, no further line can be written and
 //! `merge` and `unmerge` refuse.
 
@@ -69,7 +72,7 @@ pub(super) const MAX_LOG_BYTES: u64 = 256 << 20;
 /// Largest line, with its newline, read or written.
 pub(super) const MAX_LINE_BYTES: u64 = 4 << 20;
 /// Largest number of a merge-log id.
-pub(super) const MAX_ID: u64 = 999_999_999;
+pub(super) const MAX_ID: u64 = crate::numbered_id::MAX;
 
 /// The size limits of one append-only file.
 #[derive(Debug, Clone, Copy)]
@@ -426,13 +429,10 @@ impl Ready {
     }
 }
 
-/// The number of an id: `m` and six to nine digits.
+/// The number of an id: the canonical spelling only, as for a numbered
+/// correction ([`crate::numbered_id`]).
 fn number(id: &str) -> Option<u64> {
-    let digits = id.strip_prefix('m')?;
-    ((6..=9).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| digits.parse().ok())
-        .flatten()
-        .filter(|n| *n <= MAX_ID)
+    crate::numbered_id::number('m', id)
 }
 
 /// `merge-log.jsonl`, read and checked.
@@ -445,8 +445,8 @@ pub(super) struct MergeLog {
 }
 
 impl MergeLog {
-    /// Read the log. Besides the line format: ids are `m` and six to nine
-    /// digits, each greater than the one before, a merge line's
+    /// Read the log. Besides the line format: ids are canonical
+    /// numbered ids, each greater than the one before, a merge line's
     /// `a_merged_into_before` is null, and an undo line names an earlier
     /// merge line that no earlier line has undone.
     pub fn read(dir: &Path) -> Result<MergeLog> {
@@ -476,7 +476,7 @@ impl MergeLog {
             };
             let Some(n) = number(id).filter(|n| *n > log.last) else {
                 return Err(bad(format!(
-                    "id {id:?} is not `m` and six to nine digits, or is not greater than the line before"
+                    "id {id:?} is not `m` and its number in six digits or more with no zero too many, or is not greater than the line before"
                 )));
             };
             if let LogLine::Merge(m) = &line {
@@ -512,7 +512,7 @@ impl MergeLog {
     /// largest id.
     pub fn next_id(&self) -> Result<String> {
         match self.last.checked_add(1).filter(|n| *n <= MAX_ID) {
-            Some(n) => Ok(format!("m{n:06}")),
+            Some(n) => Ok(crate::numbered_id::write('m', n)),
             None => bail!(
                 "{}: the last line has the largest id there is (m{MAX_ID}); move the file away by hand to start a new one; nothing was changed",
                 self.file.path.display()
@@ -529,7 +529,7 @@ impl MergeLog {
             .and_then(|n| n.checked_add(1))
             .filter(|n| *n <= MAX_ID)
         {
-            Some(n) => Ok(format!("m{n:06}")),
+            Some(n) => Ok(crate::numbered_id::write('m', n)),
             None => self.next_id().and_then(|_| {
                 bail!(
                     "{}: the merges before this one use the last id there is (m{MAX_ID}); nothing was changed",
@@ -827,12 +827,17 @@ mod tests {
     }
 
     #[test]
-    fn an_id_is_m_and_six_to_nine_digits() {
+    fn an_id_is_m_and_its_number_in_the_one_canonical_spelling() {
         assert_eq!(number("m000001"), Some(1));
         assert_eq!(number("m999999999"), Some(MAX_ID));
+        assert_eq!(number("m1000000"), Some(1_000_000));
         for bad in [
             "m1",
             "m00001",
+            "m000000",
+            "m0000001",
+            "m000000001",
+            "m0999999",
             "m1000000000",
             "m0000000001",
             "m18446744073709551615",

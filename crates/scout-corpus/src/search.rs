@@ -834,18 +834,36 @@ fn collect_rows(
 /// `scout facets` counts over these.
 pub fn matching_docs(conn: &Connection, query: &str) -> Result<(Plan, Vec<DocInfo>)> {
     let plan = Plan::parse(query)?;
+    let out = plan_docs(conn, &plan)?;
+    Ok((plan, out))
+}
+
+/// The documents a parsed query matches in one corpus: the selection of
+/// [`matching_docs`], and the only one. `scout facets` and the cells of
+/// `scout topics theme-months` both count over what this returns.
+fn plan_docs(conn: &Connection, plan: &Plan) -> Result<Vec<DocInfo>> {
     if !plan.has_positive() && !plan.has_selector() {
-        return Ok((plan, vec![]));
+        return Ok(vec![]);
     }
     let terms = plan.terms();
     let docs = crate::filter::filtered_docs(conn, &plan.filter)?;
-    let rows = collect_rows(conn, &plan, &terms, &docs)?;
+    let rows = collect_rows(conn, plan, &terms, &docs)?;
     let keys: BTreeSet<&str> = rows.iter().map(|r| r.rel_path.as_str()).collect();
-    let out = keys
+    Ok(keys
         .into_iter()
         .filter_map(|k| docs.get(k).cloned())
-        .collect();
-    Ok((plan, out))
+        .collect())
+}
+
+/// The documents [`matching_docs`] returns for `plan`'s query with
+/// `month:<month>` added: the plan with that month as its `month:`
+/// filter, through the same selection. (A `month:` field changes nothing
+/// of a parsed query but that filter.)
+pub(crate) fn month_docs(conn: &Connection, plan: &Plan, month: &str) -> Result<Vec<DocInfo>> {
+    let mut plan = plan.clone();
+    plan.filter.month = Some(month.to_string());
+    plan.filter.validate()?;
+    plan_docs(conn, &plan)
 }
 
 /// A passage row as the index stores it, for building a hit.

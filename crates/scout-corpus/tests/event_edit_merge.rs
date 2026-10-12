@@ -433,11 +433,20 @@ fn a_malformed_merge_log_stops_every_command_before_any_write() {
         ),
         (
             format!("{good}{good}"),
-            "line 2: id \"m000001\" is not `m` and six to nine digits, or is not greater",
+            "line 2: id \"m000001\" is not `m` and its number in six digits or more with no zero too many, or is not greater",
         ),
         (
             good.replace("\"m000001\"", "\"m1\""),
-            "line 1: id \"m1\" is not `m` and six to nine digits",
+            "line 1: id \"m1\" is not `m` and its number in six digits or more with no zero too many",
+        ),
+        // One spelling per number: a zero too many is not an id.
+        (
+            good.replace("\"m000001\"", "\"m0000001\""),
+            "line 1: id \"m0000001\" is not `m` and its number in six digits or more with no zero too many",
+        ),
+        (
+            good.replace("\"m000001\"", "\"m000000\""),
+            "line 1: id \"m000000\" is not `m` and its number in six digits or more with no zero too many",
         ),
         (
             format!("{good}{}", undo("m000002", "m000007")),

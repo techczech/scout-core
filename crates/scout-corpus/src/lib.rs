@@ -34,6 +34,7 @@ pub mod keyness;
 pub mod markdown;
 pub mod ngrams;
 pub mod normalize;
+pub(crate) mod numbered_id;
 pub mod profile;
 pub mod register;
 pub mod registry;

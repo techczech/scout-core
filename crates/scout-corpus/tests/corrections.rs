@@ -1279,6 +1279,24 @@ fn every_kind_of_rejected_numbered_line_is_judged_alike_by_the_reader_and_the_wr
             "`undoes` is not a correction id",
         ),
         (
+            "an `undoes` spelt with a zero too many",
+            numbered("c000003", "x:4", r#""undoes":"c0000002""#),
+            None,
+            "`undoes` is not a correction id",
+        ),
+        (
+            "an `undoes` spelt without its zeros",
+            numbered("c000003", "x:4", r#""undoes":"c2""#),
+            None,
+            "`undoes` is not a correction id",
+        ),
+        (
+            "an `undoes` spelt with a capital",
+            numbered("c000003", "x:4", r#""undoes":"C000002""#),
+            None,
+            "`undoes` is not a correction id",
+        ),
+        (
             "an undo of no line",
             numbered("c000003", "x:4", r#""undoes":"c000001""#),
             None,
@@ -1357,9 +1375,19 @@ fn every_kind_of_rejected_numbered_line_is_judged_alike_by_the_reader_and_the_wr
     // An `id` of another form makes no numbered line: both read it as a
     // hand-written line, on which the patch keys are not read.
     let fx = fixture(true);
-    for (n, id) in ["c1", "c0000000001", "C000003", "x000003"]
-        .iter()
-        .enumerate()
+    for (n, id) in [
+        "c1",
+        "c0000000001",
+        "C000003",
+        "x000003",
+        // A number has one spelling: these are no ids either.
+        "c0000003",
+        "c000000003",
+        "c0999999",
+        "c000000",
+    ]
+    .iter()
+    .enumerate()
     {
         let hand = numbered(id, "x:4", r#""theme_add":["B"]"#);
         write(
@@ -1384,6 +1412,104 @@ fn every_kind_of_rejected_numbered_line_is_judged_alike_by_the_reader_and_the_wr
             fx.agreed(4, 2, &c);
         }
     }
+}
+
+/// The review's reproduction: `c0000001`, then `c0000002` undoing it.
+/// Neither id is the one spelling of its number, so neither line is a
+/// numbered line, for the reader and for the writer alike: two
+/// hand-written lines, nothing applied, nothing undone, and the listing
+/// says the same. The same two lines under their canonical ids are a
+/// correction and its undo, for both; so are ids past six digits.
+#[test]
+fn a_numbered_id_has_one_spelling_for_the_reader_the_writer_and_the_listing() {
+    // (first id, second id, the id the second line's `undoes` names,
+    // are they numbered lines)
+    let cases = [
+        ("c0000001", "c0000002", "c0000001", false),
+        ("c00000001", "c00000002", "c00000001", false),
+        ("c1", "c2", "c1", false),
+        ("C000001", "C000002", "C000001", false),
+        ("c000001", "c000002", "c000001", true),
+        ("c999999", "c1000000", "c999999", true),
+        ("c1000000", "c1000001", "c1000000", true),
+        ("c999999998", "c999999999", "c999999998", true),
+    ];
+    for (first, second, undoes, numbered_lines) in cases {
+        let fx = fixture(true);
+        let text = format!(
+            "{}\n{}\n",
+            numbered(first, "x:4", r#""theme_add":["AI and mathematics"]"#),
+            numbered(second, "x:4", &format!(r#""undoes":"{undoes}""#)),
+        );
+        write(fx.root(), topics::CORRECTIONS_FILE, &text);
+        // The reader.
+        let build = fx.corpus.build_index(false).unwrap().topics.unwrap();
+        let read = (
+            build.corrections,
+            build.corrections_bad_lines,
+            build.corrections_unmatched,
+            build.corrections_undone,
+        );
+        let four = fx.reader(4);
+        assert!(four.themes.is_empty(), "{first}: {four:?}");
+        assert!(four.corrected.is_empty(), "{first}: {four:?}");
+        // The writer's listing: newest first.
+        let l = fx.editor().list("x:4").unwrap();
+        assert_eq!(l.effective, four, "{first}");
+        let rows: Vec<_> = l
+            .corrections
+            .iter()
+            .map(|c| {
+                (
+                    c.op.as_str(),
+                    c.id.as_deref(),
+                    c.undoes.as_deref(),
+                    c.undone_by.as_deref(),
+                    c.undoable,
+                )
+            })
+            .collect();
+        if numbered_lines {
+            // A correction and its undo: the reader took the correction
+            // back, and the listing names the undo line on it.
+            assert_eq!(read, (0, 0, 0, 1), "{first}");
+            assert_eq!(
+                rows,
+                [
+                    ("undo", Some(second), Some(first), None, false),
+                    ("theme_add", Some(first), None, Some(second), false),
+                ],
+                "{first}"
+            );
+        } else {
+            // Two hand-written lines: the reader undid nothing, and the
+            // listing shows no undo and nothing undone.
+            assert_eq!(read, (2, 0, 0, 0), "{first}");
+            assert_eq!(
+                rows,
+                [
+                    ("hand-written", None, None, None, false),
+                    ("hand-written", None, None, None, false),
+                ],
+                "{first}"
+            );
+            // And `undo` does not take the spelling.
+            let e = fx.editor();
+            fx.refused("no such correction", || e.undo(first));
+            // The next line the writer adds is the first numbered one.
+            let c = e.add_theme("x:4", MATHS).unwrap();
+            assert_eq!(c.id, "c000001", "{first}");
+            fx.agreed(4, 2, &c);
+        }
+    }
+    // A canonical id is not found under another spelling of its number.
+    let fx = fixture(true);
+    let e = fx.editor();
+    assert_eq!(e.add_theme("x:4", MATHS).unwrap().id, "c000001");
+    for other in ["c0000001", "c1", "C000001"] {
+        fx.refused("no such correction", || e.undo(other));
+    }
+    e.undo("c000001").unwrap();
 }
 
 /// A corrections file over the limit the writer keeps it under is not

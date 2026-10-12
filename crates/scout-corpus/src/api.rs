@@ -1034,12 +1034,16 @@ impl Engine {
     }
 
     /// The theme × month matrix: documents per theme and layer month, in
-    /// one call. The documents are the tagged ones `search` can return
-    /// (as [`Engine::topics`]), or, with a query, the tagged ones among
-    /// those the query matches (as [`Engine::facets`]); a document counts
-    /// in the month of its tags (`month:`), once per theme it carries. So
-    /// a cell is the count `facets` gives that theme for the same query
-    /// with `month:YYYY-MM` added.
+    /// one call. A month's documents are the ones [`Engine::facets`]
+    /// counts for the same query with `month:YYYY-MM` added, chosen by
+    /// the same function ([`search::month_docs`]: the query's plan with
+    /// that month as its filter), whatever the query is: none, a corpus
+    /// alone (`in:`), fields, terms. A document counts once per theme it
+    /// carries. So a cell is the count `facets` gives that theme for the
+    /// same query with `month:YYYY-MM` added.
+    ///
+    /// A bound is a month `YYYY-MM` or is absent; an absent one is the
+    /// documents' own first or last month. A blank bound is not absent.
     ///
     /// A query with a `month:` field is refused (as the engine's own
     /// parser reads the query, [`search::Plan::parse`]: the field, not
@@ -1052,8 +1056,8 @@ impl Engine {
     /// theme facet's are.
     pub fn theme_months(&self, q: &ThemeMonthsQuery) -> Result<Reply<ThemeMonthsResults>> {
         let bound = |what: &str, v: &Option<String>| -> Result<Option<String>> {
-            match v.as_deref().map(str::trim) {
-                None | Some("") => Ok(None),
+            match v.as_deref() {
+                None => Ok(None),
                 Some(m) if m.len() == 7 && crate::topics::valid_month(m) => Ok(Some(m.to_string())),
                 Some(m) => bail!("--{what} {m:?} is not a month YYYY-MM"),
             }
@@ -1072,7 +1076,7 @@ impl Engine {
                 "month:{m} in the query: theme-months counts every month of its range, so a query does not pick one; use --from and --to"
             );
         }
-        let named = plan.corpora;
+        let named = plan.corpora.clone();
         let ids = if q.in_.is_empty() {
             named.clone()
         } else {
@@ -1087,23 +1091,23 @@ impl Engine {
                 continue;
             }
             let conn = index::open_existing(&c.config, c.index_path())?;
-            let matched: Vec<crate::filter::DocInfo> = if query.is_empty() {
-                crate::filter::load_docs(&conn)?
-                    .into_values()
-                    .filter(|d| d.tokens > 0)
-                    .collect()
-            } else {
-                search::matching_docs(&conn, query)?.1
-            };
-            for d in matched {
-                let Some(t) = d.topic else { continue };
-                let Some(month) = t.month else { continue };
-                if from.as_ref().is_some_and(|f| month < *f)
-                    || to.as_ref().is_some_and(|t| month > *t)
-                {
-                    continue;
+            // The months to ask for: those some document of the corpus
+            // has, within the bounds. (No other month has a document
+            // under any query: `month:` is equality with it.)
+            let months: std::collections::BTreeSet<String> = crate::filter::load_docs(&conn)?
+                .into_values()
+                .filter_map(|d| d.topic.and_then(|t| t.month))
+                .filter(|m| m.len() == 7 && crate::topics::valid_month(m))
+                .filter(|m| {
+                    !(from.as_ref().is_some_and(|f| m < f) || to.as_ref().is_some_and(|t| m > t))
+                })
+                .collect();
+            for month in months {
+                for d in search::month_docs(&conn, &plan, &month)? {
+                    // `month:` keeps tagged documents only.
+                    let themes = d.topic.map(|t| t.themes).unwrap_or_default();
+                    docs.push((month.clone(), themes));
                 }
-                docs.push((month, t.themes));
             }
             used.push(c.id().to_string());
         }

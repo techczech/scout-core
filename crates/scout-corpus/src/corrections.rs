@@ -134,7 +134,7 @@ pub use crate::correction_lines::{Op, ENTITY_TYPES, MAX_FILE_BYTES};
 /// Largest theme list read.
 const MAX_THEMES_BYTES: u64 = 16 << 20;
 /// Largest number of a correction id (`c999999999`).
-pub const MAX_ID: u64 = 999_999_999;
+pub const MAX_ID: u64 = crate::numbered_id::MAX;
 /// Longest entity name, in characters.
 pub const MAX_NAME_CHARS: usize = 200;
 const CAPS: Caps = Caps {
@@ -472,7 +472,7 @@ impl State {
 
     fn next_id(&self) -> Result<String> {
         match self.last.checked_add(1).filter(|n| *n <= MAX_ID) {
-            Some(n) => Ok(format!("c{n:06}")),
+            Some(n) => Ok(crate::correction_lines::correction_id(n)),
             None => bail!(
                 "{}: the last correction has the largest id there is (c{MAX_ID}); move the file away by hand to start a new one; nothing was changed",
                 self.file.path.display()

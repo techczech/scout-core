@@ -1,8 +1,11 @@
 //! Numbered lines of `corrections.jsonl`: the ONE judgement of them, and
 //! the reading of the file line by line.
 //!
-//! A numbered line is one whose `id` is `c` and six to nine digits (the
-//! lines `scout correct` writes). Whether such a line is valid is decided
+//! A numbered line is one whose `id` is a canonical numbered id: `c` and
+//! the number (1 to 999,999,999) written with at least six digits and no
+//! more than it needs (`c000001`, `c1000000`), as [`correction_number`]
+//! reads it and `scout correct` writes it. The reader, the writer and
+//! `scout correct list` all tell a numbered line by that one function. Whether such a line is valid is decided
 //! here and nowhere else ([`Sequence::judge`]): the reader
 //! ([`crate::topics`]) skips and counts a line this function rejects, and
 //! the writer ([`crate::corrections`]) refuses to append to a file that
@@ -25,7 +28,8 @@
 //! - an `undoes` names an earlier VALID correction (not an undo line) of
 //!   the same `key` that no earlier line has undone.
 //!
-//! A line whose `id` is absent or of another form is not a numbered line:
+//! A line whose `id` is absent or of another form (`c1`, `C000001`, and
+//! `c0000001` with a zero too many) is not a numbered line:
 //! it is a hand-written line, read as before numbered lines existed, and
 //! nothing here judges it.
 //!
@@ -91,12 +95,15 @@ impl Op {
     }
 }
 
-/// The number of a numbered correction's id: `c` and six to nine digits.
+/// The number of a numbered correction's id: the canonical spelling
+/// only ([`crate::numbered_id`]), so one id per number.
 pub(crate) fn correction_number(id: &str) -> Option<u64> {
-    let digits = id.strip_prefix('c')?;
-    ((6..=9).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| digits.parse().ok())
-        .flatten()
+    crate::numbered_id::number('c', id)
+}
+
+/// The id of the numbered correction `n`.
+pub(crate) fn correction_id(n: u64) -> String {
+    crate::numbered_id::write('c', n)
 }
 
 /// The id of a numbered line, when `m` is one.
@@ -247,7 +254,7 @@ impl Sequence {
 
     /// Correction id → the id of the undo line that took it back.
     pub(crate) fn undone_ids(&self) -> BTreeMap<String, String> {
-        let id = |n: &u64| format!("c{n:06}");
+        let id = |n: &u64| correction_id(*n);
         self.undone.iter().map(|(c, u)| (id(c), id(u))).collect()
     }
 

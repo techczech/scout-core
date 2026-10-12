@@ -298,3 +298,63 @@ fn a_build_that_did_not_read_the_corrections_says_so_in_its_text_output() {
     let o = scout(&cfg, &data, &["topics", "themes"]);
     assert!(!String::from_utf8(o.stdout).unwrap().contains("Fixed"));
 }
+
+/// A query, a term or a node the views show in quotes comes from an
+/// argument: it goes through the same replacement as every other string,
+/// not through an escape of its own. Each view prints U+FFFD where the
+/// argument has ESC, a bidirectional override or a zero width space, and
+/// nothing a terminal acts on.
+#[test]
+fn a_query_shown_in_quotes_is_shown_safe_in_every_text_view() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data) = fixture(tmp.path());
+    assert!(scout(&cfg, &data, &["index", "build"]).status.success());
+    let odd = format!("zq{ESC}[2Jzq\u{202e}x\u{200b}y");
+    let shown = format!("zq{FFFD}[2Jzq{FFFD}x{FFFD}y");
+    let query = format!("proof -{odd}");
+    let views: [(&[&str], String); 8] = [
+        (&["facets", &query], format!("for \"proof -{shown}\" in ")),
+        (&["search", &query], format!("for \"proof -{shown}\" in ")),
+        (&["kwic", &odd], format!("for \"{shown}\" in ")),
+        (
+            // `--near` takes one word, so it holds no such character;
+            // it is shown through the same function.
+            &["kwic", "proof", "--near", "models"],
+            "for \"proof\" near \"models\" (±".to_string(),
+        ),
+        (
+            &["dist", &odd, "--by", "year"],
+            format!("for \"{shown}\" by "),
+        ),
+        (
+            &["collocates", &odd],
+            format!("collocates of \"{shown}\" in "),
+        ),
+        (
+            &["collocates", &odd, "--compare", "after:2020"],
+            format!("collocates of \"{shown}\" · ±"),
+        ),
+        (&["profile", &odd], format!("\"{shown}\" in ")),
+    ];
+    for (args, want) in views {
+        let o = scout(&cfg, &data, args);
+        let what = args[..args.len().min(2)].join(" ");
+        let text = String::from_utf8(o.stdout).unwrap();
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(
+            text.contains(&want),
+            "{what}: want {want:?} in {text:?} ({err:?})"
+        );
+        assert_safe(&text, &what);
+        assert_safe(&err, &what);
+        // Replaced, not written as an escape of the character.
+        assert!(
+            !text.contains("\\u{") && !text.contains("\\x"),
+            "{what}: {text}"
+        );
+    }
+    // A quote in the query is still one quoted string.
+    let o = scout(&cfg, &data, &["facets", "\"A proof\""]);
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(text.contains("for \"\\\"A proof\\\"\" in "), "{text}");
+}

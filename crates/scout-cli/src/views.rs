@@ -4,10 +4,12 @@
 //! Every string printed here that is not a number or a word of this file
 //! goes through [`crate::term::safe`] (a text of several lines through
 //! `safe_lines`), so nothing from an archive file, the registry or an
-//! argument reaches the terminal as a control sequence. A `{:?}` value is
-//! left to Rust's own escaping of control characters.
+//! argument reaches the terminal as a control sequence. A string shown in
+//! quotes (a query, a term, a pattern) goes through
+//! [`crate::term::quoted`], which is `safe` and then the quotes; no view
+//! writes `{:?}` of a string.
 
-use crate::term::{safe, safe_lines};
+use crate::term::{quoted, safe, safe_lines};
 use scout_corpus::api::{
     CorporaList, CorpusShow, IndexBuildReport, IndexStatusReport, InitDefaults, Removed,
 };
@@ -75,13 +77,13 @@ pub fn print_kwic(r: &KwicResults) {
     let near = r
         .near
         .as_ref()
-        .map(|n| format!(" near {:?} (±{})", n.word, n.window))
+        .map(|n| format!(" near {} (±{})", quoted(&n.word), n.window))
         .unwrap_or_default();
     println!(
-        "{} lines in {} pieces for {:?}{near} in {} · sort {} · showing {}",
+        "{} lines in {} pieces for {}{near} in {} · sort {} · showing {}",
         r.total,
         r.pieces,
-        r.term,
+        quoted(&r.term),
         list(&r.corpora, ", "),
         safe(&r.sort),
         r.returned
@@ -107,10 +109,10 @@ pub fn print_kwic(r: &KwicResults) {
 
 pub fn print_dist(d: &Distribution) {
     println!(
-        "{} hits in {} pieces for {:?} by {} in {}",
+        "{} hits in {} pieces for {} by {} in {}",
         d.total,
         d.pieces,
-        d.term,
+        quoted(&d.term),
         serde_json::to_value(d.by)
             .ok()
             .and_then(|v| v.as_str().map(String::from))
@@ -221,9 +223,9 @@ fn opt3(x: Option<f64>) -> String {
 
 pub fn print_collocates(r: &CollocResults) {
     println!(
-        "{} collocates of {:?} in {} (f={} of {} tokens · ±{} · {} · min {}{}) · showing {}",
+        "{} collocates of {} in {} (f={} of {} tokens · ±{} · {} · min {}{}) · showing {}",
         r.candidates,
-        r.node,
+        quoted(&r.node),
         list(&r.corpora, ", "),
         r.node_freq,
         r.total_tokens,
@@ -269,8 +271,8 @@ pub fn print_collocates(r: &CollocResults) {
 
 pub fn print_compare(r: &CompareResults) {
     println!(
-        "collocates of {:?} · ±{} · {} · min {} · showing {} of {}",
-        r.node,
+        "collocates of {} · ±{} · {} · min {} · showing {} of {}",
+        quoted(&r.node),
         r.window,
         r.score,
         r.min_freq,
@@ -394,7 +396,7 @@ pub fn print_keyness(r: &KeynessResults) {
 }
 
 pub fn print_profile(p: &Profile) {
-    println!("{:?} in {}", p.word, list(&p.corpora, ", "));
+    println!("{} in {}", quoted(&p.word), list(&p.corpora, ", "));
     println!(
         "  frequency   {}  ({:.1} per million of {} tokens)",
         p.frequency, p.per_million, p.total_tokens
@@ -487,10 +489,10 @@ pub fn print_verify(v: &VerifyResult) {
 
 pub fn print_hits(res: &scout_corpus::SearchResults) {
     println!(
-        "{} documents, {} passages for {:?} in {}{}",
+        "{} documents, {} passages for {} in {}{}",
         res.total_documents,
         res.total_passages,
-        res.query,
+        quoted(&res.query),
         list(&res.corpora, ", "),
         res.mode
             .as_deref()
@@ -795,10 +797,10 @@ pub fn print_clean_report(r: &CleanReport) {
             }
             for p in ps {
                 println!(
-                    "    rule {} ({}) {:?}: {} lines dropped in {} passages",
+                    "    rule {} ({}) {}: {} lines dropped in {} passages",
                     p.n,
                     safe(&p.origin),
-                    p.regex,
+                    quoted(&p.regex),
                     p.lines,
                     p.passages
                 );

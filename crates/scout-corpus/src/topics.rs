@@ -18,7 +18,8 @@
 //!   applied. In a corpus with a records folder, `event_add` /
 //!   `event_remove` (lists of event ids) put the item in further events or
 //!   take it out of one; see "Events" below.
-//! - Numbered corrections: a line whose `id` is `c` and six to nine digits
+//! - Numbered corrections: a line whose `id` is a canonical numbered id (`c` and the number in
+//!   at least six digits and no more than it needs)
 //!   (the lines `scout correct` writes, [`crate::corrections`]) is read as
 //!   above, and three things more are read on it and on no other line:
 //!   `theme_add` / `theme_remove` and `entity_add` / `entity_remove`

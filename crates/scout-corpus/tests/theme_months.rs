@@ -287,6 +287,25 @@ fn several_corpora_are_added_up_and_a_theme_is_its_name() {
         },
     );
     equals_facets(&fx, &q, "proof", &[]);
+    // A query that only selects a corpus counts that corpus's documents,
+    // as `facets` does once the month is added (the review's
+    // reproduction: one February document with the theme, `in:one`).
+    let feb = matrix(
+        &fx,
+        ThemeMonthsQuery {
+            from: Some("2026-02".into()),
+            to: Some("2026-02".into()),
+            query: "in:one".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(feb.corpora, ["one"]);
+    assert_eq!((feb.documents, feb.month_totals.clone()), (2, vec![2]));
+    assert_eq!(
+        (feb.themes.clone(), feb.counts.clone()),
+        (vec!["Coding".to_string()], vec![vec![1]])
+    );
+    equals_facets(&fx, &feb, "in:one", &[]);
     // `in:` in the query selects the corpus, as in facets.
     let two = matrix(
         &fx,
@@ -432,4 +451,143 @@ fn a_query_with_a_month_field_is_refused_and_every_other_field_keeps_the_equalit
     // At least one of them counted something in more than one month.
     let m = matrix(&fx, q("theme:Coding", &["one"]));
     assert_eq!(m.month_totals, [1, 1, 0, 1, 1]);
+}
+
+/// The equality with `facets` for queries that are empty, that only
+/// select corpora (`in:`), and that select corpora and give a field or a
+/// term; over one corpus and two, with `--in` and without, with bounds
+/// and without. Each matrix is compared cell by cell, and its total is
+/// the count known from the fixture, so an empty matrix does not pass.
+#[test]
+fn an_empty_query_a_corpus_only_query_and_a_corpus_with_a_field_all_equal_facets() {
+    let fx = fixture();
+    // (query, --in, documents counted over the whole range)
+    let cases: [(&str, &[&str], usize); 16] = [
+        ("", &["one"], 6),
+        ("", &["two"], 3),
+        ("", &[], 9),
+        ("", &["one", "two"], 9),
+        ("in:one", &[], 6),
+        ("in:two", &[], 3),
+        ("in:one,two", &[], 9),
+        ("in:one", &["one"], 6),
+        ("in:one", &["one", "two"], 6),
+        ("in:two", &["one", "two"], 3),
+        ("in:one theme:Maths", &[], 3),
+        ("in:two theme:Maths", &[], 1),
+        ("in:one,two theme:Maths", &[], 4),
+        ("in:one ai:true", &[], 6),
+        ("in:one proof", &[], 4),
+        ("in:one,two -proof", &[], 3),
+    ];
+    for (query, in_, documents) in cases {
+        let in_v: Vec<String> = in_.iter().map(|s| s.to_string()).collect();
+        // Without bounds: the range is the counted documents' own.
+        let m = matrix(
+            &fx,
+            ThemeMonthsQuery {
+                in_: in_v.clone(),
+                query: query.into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(m.documents, documents, "{query:?} in {in_:?}");
+        assert!(!m.months.is_empty(), "{query:?} in {in_:?}");
+        equals_facets(&fx, &m, query, in_);
+        // With bounds wider than the documents: every month asked for.
+        let b = matrix(
+            &fx,
+            ThemeMonthsQuery {
+                in_: in_v.clone(),
+                from: Some("2024-05".into()),
+                to: Some("2026-04".into()),
+                query: query.into(),
+            },
+        );
+        assert_eq!(b.months.len(), 24, "{query:?}");
+        assert_eq!(b.documents, documents, "{query:?} in {in_:?}");
+        assert_eq!(b.themes, m.themes, "{query:?}");
+        assert_eq!(b.theme_totals, m.theme_totals, "{query:?}");
+        equals_facets(&fx, &b, query, in_);
+        // One month of the range.
+        let feb = matrix(
+            &fx,
+            ThemeMonthsQuery {
+                in_: in_v,
+                from: Some("2026-02".into()),
+                to: Some("2026-02".into()),
+                query: query.into(),
+            },
+        );
+        assert_eq!(feb.months, ["2026-02"], "{query:?}");
+        equals_facets(&fx, &feb, query, in_);
+    }
+    // The corpus-only query is the matrix of that corpus with no query.
+    let named = matrix(
+        &fx,
+        ThemeMonthsQuery {
+            query: "in:one".into(),
+            ..Default::default()
+        },
+    );
+    let chosen = matrix(
+        &fx,
+        ThemeMonthsQuery {
+            in_: vec!["one".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        (
+            &named.months,
+            &named.themes,
+            &named.counts,
+            &named.month_totals
+        ),
+        (
+            &chosen.months,
+            &chosen.themes,
+            &chosen.counts,
+            &chosen.month_totals
+        )
+    );
+    assert!(named.documents == 6 && named.corpora == ["one"]);
+}
+
+/// A bound is a month or is absent. A blank one is not absent: it is
+/// refused like any other text that is not `YYYY-MM`, padded months too.
+#[test]
+fn a_blank_or_padded_bound_is_refused_and_only_an_absent_one_is_inferred() {
+    let fx = fixture();
+    for bad in [
+        "", " ", "  ", "\t", " 2026-02", "2026-02 ", "2026", "2026-2",
+    ] {
+        for from in [true, false] {
+            let mut q = ThemeMonthsQuery {
+                in_: vec!["one".into()],
+                ..Default::default()
+            };
+            let what = if from {
+                q.from = Some(bad.into());
+                "from"
+            } else {
+                q.to = Some(bad.into());
+                "to"
+            };
+            let e = fx.engine.theme_months(&q).unwrap_err().to_string();
+            assert_eq!(e, format!("--{what} {bad:?} is not a month YYYY-MM"));
+        }
+    }
+    // Absent: the documents' own first and last month.
+    let m = matrix(
+        &fx,
+        ThemeMonthsQuery {
+            in_: vec!["one".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        (m.from.as_deref(), m.to.as_deref()),
+        (Some("2025-11"), Some("2026-03"))
+    );
 }

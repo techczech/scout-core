@@ -4,7 +4,7 @@
 //! Every name, id, date and path printed here comes from an archive file
 //! or an argument, and goes through [`crate::term::safe`].
 
-use crate::term::safe;
+use crate::term::{quoted, safe};
 use scout_corpus::api::{
     EventsResults, FacetItem, FacetsResults, ThemeMonthsResults, TopicsResults,
 };
@@ -50,10 +50,10 @@ fn section(title: &str, f: &Facet) {
 
 pub fn print_facets(r: &FacetsResults) {
     println!(
-        "{} documents ({} tagged) for {:?} in {}",
+        "{} documents ({} tagged) for {} in {}",
         r.total_documents,
         r.tagged_documents,
-        r.query,
+        quoted(&r.query),
         list(&r.corpora)
     );
     let f = &r.facets;

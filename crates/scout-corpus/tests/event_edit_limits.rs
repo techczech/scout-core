@@ -136,13 +136,15 @@ fn an_id_past_the_last_is_malformed_and_the_last_id_stops_merge_and_unmerge() {
         "m18446744073709551616",
         "m1000000000",
         "m0000000001",
+        "m0000001",
+        "m000000001",
     ] {
         fs::write(
             fx.dir.join(MERGE_LOG),
             good.replace("\"m000001\"", &format!("\"{id}\"")),
         )
         .unwrap();
-        let why = format!("line 1: id {id:?} is not `m` and six to nine digits");
+        let why = format!("line 1: id {id:?} is not `m` and its number in six digits or more with no zero too many");
         refused(&fx, &why, || e.merge(&merge_req(GAMMA, DELTA, By::Dominik)));
         refused(&fx, &why, || e.unmerge(id));
         refused(&fx, &why, || e.check());

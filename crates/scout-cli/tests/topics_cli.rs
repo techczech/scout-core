@@ -236,6 +236,12 @@ fn facets_and_topics_match_the_facade_and_build_reports_the_join() {
     assert!(o.contains("  2  AI and mathematics  2026-09:2"), "{o}");
     for bad in [
         vec!["topics", "theme-months", "--from", "2026"],
+        // A blank bound is not an absent one.
+        vec!["topics", "theme-months", "--from", ""],
+        vec!["topics", "theme-months", "--to", "  "],
+        vec!["topics", "theme-months", "--from", "", "--json"],
+        vec!["topics", "theme-months", "--from", "2026-09", "--to", ""],
+        vec!["topics", "theme-months", "--to", " 2026-09"],
         vec!["topics", "theme-months", "--month", "2026-09"],
         vec!["topics", "themes", "--from", "2026-09"],
         vec!["topics", "themes", "a-query"],
