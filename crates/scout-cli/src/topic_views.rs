@@ -1,7 +1,9 @@
 //! Human output for the topic-layer commands (`facets`, `topics`) and the
 //! topic line of `index build`. Formatting only.
 
-use scout_corpus::api::{EventsResults, FacetItem, FacetsResults, TopicsResults};
+use scout_corpus::api::{
+    EventsResults, FacetItem, FacetsResults, ThemeMonthsResults, TopicsResults,
+};
 use scout_corpus::events::EventsReport;
 use scout_corpus::topics::{Facet, TopicReport};
 
@@ -72,6 +74,37 @@ pub fn print_topics(r: &TopicsResults) {
         r.corpora.join(", ")
     );
     rows(&r.items);
+}
+
+pub fn print_theme_months(r: &ThemeMonthsResults) {
+    let span = match (&r.from, &r.to) {
+        (Some(a), Some(b)) => format!(" from {a} to {b}"),
+        _ => String::new(),
+    };
+    println!(
+        "{} themes over {} months{span}, {} tagged documents ({})",
+        r.themes.len(),
+        r.months.len(),
+        r.documents,
+        r.corpora.join(", ")
+    );
+    let w = r
+        .theme_totals
+        .iter()
+        .map(|n| n.to_string().len())
+        .max()
+        .unwrap_or(1);
+    for (i, theme) in r.themes.iter().enumerate() {
+        // The months with a count, so a row stays one readable line.
+        let cells: Vec<String> = r
+            .months
+            .iter()
+            .zip(&r.counts[i])
+            .filter(|(_, n)| **n > 0)
+            .map(|(m, n)| format!("{m}:{n}"))
+            .collect();
+        println!("  {:>w$}  {theme}  {}", r.theme_totals[i], cells.join(" "));
+    }
 }
 
 pub fn print_events(r: &EventsResults) {
@@ -145,6 +178,9 @@ pub fn print_topic_report(t: &TopicReport) {
             "{} corrections ({} unmatched, {} bad)",
             t.corrections, t.corrections_unmatched, t.corrections_bad_lines
         ));
+    }
+    if t.corrections_undone > 0 {
+        extra.push(format!("{} corrections undone", t.corrections_undone));
     }
     if !t.reloaded {
         extra.push("unchanged".into());

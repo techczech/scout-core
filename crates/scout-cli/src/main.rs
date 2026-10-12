@@ -4,6 +4,7 @@
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
+mod correct_cmds;
 mod event_cmds;
 mod topic_views;
 mod views;
@@ -101,10 +102,28 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// List topic-layer values with document counts.
+    /// Fix one item's tags: add or remove a theme or an entity, put the
+    /// item in an event or take it out, undo a correction, list them.
+    /// Each appends one line to <archive>/analysis/topics/corrections.jsonl
+    /// (run `scout index build` afterwards).
+    Correct {
+        #[command(subcommand)]
+        cmd: correct_cmds::CorrectCmd,
+    },
+    /// List topic-layer values with document counts; `theme-months` gives
+    /// the documents per theme and month in one table.
     Topics {
-        /// themes, entities, events or months.
+        /// themes, entities, events, months or theme-months.
         field: String,
+        /// theme-months only: narrows the documents (the grammar of
+        /// `scout search`).
+        query: Vec<String>,
+        /// theme-months only: the first month (YYYY-MM).
+        #[arg(long)]
+        from: Option<String>,
+        /// theme-months only: the last month (YYYY-MM).
+        #[arg(long)]
+        to: Option<String>,
         /// Only this layer month (YYYY-MM or YYYY).
         #[arg(long)]
         month: Option<String>,
@@ -557,6 +576,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         // The seed and the record edits work on an archive folder, not on
         // the registry or an index.
         Cmd::Events { cmd: Some(cmd), .. } => return event_cmds::run(cmd),
+        // So do the corrections of an item's tags.
+        Cmd::Correct { cmd } => return correct_cmds::run(cmd),
         cmd => Cli { cmd },
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
@@ -612,13 +633,36 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             out(engine.facets(&q), json, topic_views::print_facets)
         }
+        Cmd::Correct { .. } => unreachable!("handled before the engine loads"),
         Cmd::Topics {
             field,
+            query,
+            from,
+            to,
             month,
             in_,
             top,
             json,
         } => {
+            if matches!(field.trim(), "theme-months" | "theme_months") {
+                if month.is_some() {
+                    anyhow::bail!("theme-months takes --from and --to, not --month");
+                }
+                let q = ThemeMonthsQuery {
+                    in_,
+                    from,
+                    to,
+                    query: query.join(" "),
+                };
+                return out(
+                    engine.theme_months(&q),
+                    json,
+                    topic_views::print_theme_months,
+                );
+            }
+            if !query.is_empty() || from.is_some() || to.is_some() {
+                anyhow::bail!("a query, --from and --to go with `scout topics theme-months` only");
+            }
             let q = TopicsQuery {
                 field,
                 month,

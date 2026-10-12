@@ -28,8 +28,10 @@
 //! - A malformed record (a control character anywhere in the file, no
 //!   frontmatter, bad YAML, no `id`, an `id` that is not the file stem, a
 //!   repeated id, a wrongly typed field, YAML nested deeper than
-//!   [`MAX_YAML_DEPTH`]) is skipped with a warning naming its file; the
-//!   rest is read.
+//!   [`MAX_YAML_DEPTH`], an `origin` other than `model` or `dominik`, a
+//!   `start`, `end`, `edited` or `removed` that is not a date
+//!   `YYYY-MM-DD`, an `end` before its `start`) is skipped with a warning
+//!   naming its file; the rest is read.
 //! - Nothing here recurses over record content. One file's bytes are
 //!   parsed in `events/record.rs` (the frontmatter is pulled one parser
 //!   event at a time and the pull stops at the first value that nests too
@@ -59,6 +61,7 @@ pub use combined::{combined, cover, merged_in, Combined, MergedFrom};
 use record::TOO_LARGE;
 pub use record::{
     is_record_control, parse_bytes, parse_record, record_stem, MAX_RECORD_BYTES, MAX_YAML_DEPTH,
+    ORIGINS,
 };
 
 /// The records folder, relative to the corpus root.

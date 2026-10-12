@@ -7,6 +7,7 @@
 //! pulling parser events one at a time ([`read_flat`]) and the pull stops
 //! at the first value that nests too deep.
 
+use super::combined::is_date;
 use super::EventRecord;
 use std::collections::BTreeMap;
 use yaml_rust2::parser::{Event, Parser};
@@ -138,6 +139,9 @@ impl Flat {
     }
 }
 
+/// The values `origin` may have, when it has one.
+pub const ORIGINS: [&str; 2] = ["model", "dominik"];
+
 /// Why a record holding one of these characters is skipped.
 pub(super) const CONTROL: &str = "control character in record";
 
@@ -247,6 +251,11 @@ fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
 /// whole file, body included, is refused when it holds a control character
 /// ([`has_control`]); that is looked at first, before the frontmatter is
 /// found or any YAML is read.
+///
+/// Values: `origin` is empty or one of [`ORIGINS`]; `start`, `end`,
+/// `edited` and `removed` are each empty or a calendar date `YYYY-MM-DD`;
+/// `end` is not before `start` when the record has both. A record with
+/// any other value in one of these is refused.
 pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, String> {
     if has_control(text) {
         return Err(CONTROL.into());
@@ -275,6 +284,24 @@ pub fn parse_record(text: &str, stem: &str) -> std::result::Result<EventRecord, 
     let (origin, edited) = (scalar("origin")?, scalar("edited")?);
     let merged_into = scalar("merged_into")?;
     let removed = scalar("removed")?;
+    if let Some(o) = origin.as_deref().filter(|o| !ORIGINS.contains(o)) {
+        return Err(format!("origin {o:?} is not model or dominik"));
+    }
+    for (k, v) in [
+        ("start", &start),
+        ("end", &end),
+        ("edited", &edited),
+        ("removed", &removed),
+    ] {
+        if let Some(v) = v.as_deref().filter(|v| !is_date(v)) {
+            return Err(format!("{k} {v:?} is not a date YYYY-MM-DD"));
+        }
+    }
+    if let (Some(start), Some(end)) = (&start, &end) {
+        if end < start {
+            return Err(format!("end {end} is before start {start}"));
+        }
+    }
     let mut list = |k: &str| match map.remove(k) {
         None | Some(Val::Null) => Ok(Vec::new()),
         Some(Val::List(l)) => Ok(l

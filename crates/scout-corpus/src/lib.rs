@@ -20,6 +20,7 @@ pub mod cite;
 pub mod clean;
 pub mod colloc;
 pub mod concord;
+pub mod corrections;
 pub mod event_edit;
 pub mod event_list;
 pub mod event_seed;

@@ -236,7 +236,7 @@ pub(super) fn refuse(faults: Vec<String>) -> Result<()> {
 }
 
 /// What reading a plain file gave.
-pub(super) struct Plain {
+pub(crate) struct Plain {
     pub bytes: Vec<u8>,
     /// Device and inode of the file read (0, 0 off unix).
     pub ident: (u64, u64),
@@ -285,7 +285,7 @@ fn mode_of(meta: &std::fs::Metadata) -> u32 {
 
 /// Set the permission bits of the open file, whatever the umask (nothing
 /// off unix).
-pub(super) fn set_mode(file: &std::fs::File, mode: u32) -> std::io::Result<()> {
+fn set_mode(file: &std::fs::File, mode: u32) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -312,7 +312,7 @@ pub(super) fn no_follow(open: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOp
 /// The whole of a plain file of at most `cap` bytes; `None` when nothing
 /// is at `path`. A symlink (dangling or not), a folder or any other
 /// non-regular file is refused, as is a larger file.
-pub(super) fn read_plain(path: &Path, cap: u64) -> Result<Option<Plain>> {
+pub(crate) fn read_plain(path: &Path, cap: u64) -> Result<Option<Plain>> {
     use std::io::Read;
     let at = path.display();
     match std::fs::symlink_metadata(path) {
@@ -469,13 +469,12 @@ pub(super) fn replace(dir: &Path, w: &Rewrite, hook: Hook) -> Result<()> {
 }
 
 /// Create the record `record` as `<dir>/<id>.md` through the seed's
-/// create-exclusive, no-follow open; the mode is set to 0644 on the
-/// descriptor (whatever the umask) and the bytes are synced.
+/// create-exclusive, no-follow open (the default mode of a new file, so
+/// the umask applies; no mode is set afterwards); the bytes are synced.
 pub(super) fn create(dir: &Path, record: &EventRecord, bytes: &[u8]) -> Result<()> {
     let name = format!("{}.md", record.id);
     let at = dir.join(&name);
     let made = event_seed::create_exclusive(dir, &name, |f| {
-        set_mode(f, 0o644)?;
         f.write_all(bytes)?;
         f.sync_all()
     })

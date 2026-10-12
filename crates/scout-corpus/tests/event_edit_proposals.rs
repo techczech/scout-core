@@ -568,3 +568,142 @@ fn a_run_cut_short_keeps_its_whole_merges_and_a_second_run_makes_the_rest() {
     assert!(e.check().unwrap().ok);
     assert_eq!(fx.set().resolve("2026-12/E09"), Some(ALPHA));
 }
+
+/// Three events that start the same day, so the item counts decide who
+/// survives: a (5 items), b (4) and c (7). The file pairs a with b, then
+/// b with c.
+fn tied() -> (Fx, PathBuf) {
+    let fx = fixture();
+    for (id, member) in [
+        ("2027-01-a", "2027-01/E01"),
+        ("2027-01-b", "2027-01/E02"),
+        ("2027-01-c", "2027-01/E03"),
+    ] {
+        put(
+            &fx.dir,
+            &rec(id, id, ("2027-01-05", "2027-01-06"), &[member]),
+        );
+    }
+    let folder = fx.dir.join(PROPOSALS_DIR);
+    fs::create_dir(&folder).unwrap();
+    let file = folder.join(FILE);
+    let lines = [
+        line("2027-01-a", "2027-01-b", "same", "confident", "r1", (5, 4)),
+        line("2027-01-b", "2027-01-c", "same", "confident", "r2", (4, 7)),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(&file, text).unwrap();
+    (fx, file)
+}
+
+#[test]
+fn a_run_taken_up_again_picks_the_survivor_one_run_would() {
+    // One run: b goes into a (5 over 4); the event a holds then has 9
+    // items, so c (7) goes into a.
+    let (fx, file) = tied();
+    let whole = fx.editor().apply_proposals(&file, true).unwrap();
+    let plan = vec![("2027-01-b", "2027-01-a", 1), ("2027-01-c", "2027-01-a", 2)];
+    assert_eq!(pairs(&whole.merges), plan);
+    let one_run = fx.set().aliases;
+
+    // Two sessions: the first is cut short after its first merge. The
+    // second finds b in a already, and counts a's event as 5 + 4, not as
+    // a's own 5 (which c's 7 would beat).
+    let (fx, file) = tied();
+    let n = Arc::new(AtomicUsize::new(0));
+    let crashing = fx.editor().with_hook(move |s| {
+        if s == Step::Read && n.fetch_add(1, Ordering::SeqCst) == 1 {
+            return Err(std::io::Error::other("power cut"));
+        }
+        Ok(())
+    });
+    let err = crashing
+        .apply_proposals(&file, true)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("1 of 2 merges were made before it"), "{err}");
+    assert_eq!(fx.set().resolve("2027-01-b"), Some("2027-01-a"));
+    assert_eq!(fx.set().resolve("2027-01-c"), Some("2027-01-c"));
+    let e = fx.editor();
+    let dry = e.apply_proposals(&file, false).unwrap();
+    assert_eq!(pairs(&dry.merges), vec![("2027-01-c", "2027-01-a", 2)]);
+    assert_eq!(skips(&dry), vec![(1, "already-one-event")]);
+    let rest = e.apply_proposals(&file, true).unwrap();
+    assert_eq!(pairs(&rest.merges), pairs(&dry.merges));
+    assert_eq!(fx.set().aliases, one_run);
+    assert!(e.check().unwrap().ok);
+}
+
+#[test]
+fn the_dry_run_skips_what_the_log_could_not_take_and_the_run_does_the_same() {
+    // A reason that makes the merge's log line longer than a log line may
+    // be: the merge itself would stop at its append. The dry run says so,
+    // and the run skips the pair instead of stopping at it.
+    let (fx, file) = with_proposals();
+    let long = "x".repeat(4 << 20);
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.contains("r2: its sequel"));
+    fs::write(&file, text.replace("r2: its sequel", &long)).unwrap();
+    let before = fx.tree();
+    let e = fx.editor();
+    let dry = e.apply_proposals(&file, false).unwrap();
+    assert!(fx.tree() == before);
+    assert_eq!(
+        pairs(&dry.merges),
+        vec![(BETA, ALPHA, 1), (TWIN_A, TWIN_B, 4)]
+    );
+    let stuck = dry.skipped.iter().find(|s| s.line == 2).unwrap();
+    assert_eq!(stuck.why, "refused");
+    assert!(
+        stuck
+            .detail
+            .contains("over the limit of 4194304 for one line"),
+        "{}",
+        &stuck.detail[..200.min(stuck.detail.len())]
+    );
+    assert_eq!(dry.merges.len() + dry.skipped.len(), dry.same_confident);
+    // The run: the same merges, the same skipped pairs, nothing stopped.
+    let done = e.apply_proposals(&file, true).unwrap();
+    assert_eq!(pairs(&done.merges), pairs(&dry.merges));
+    assert_eq!(skips(&done), skips(&dry));
+    assert_eq!(done.merged, 2);
+    assert_eq!(fx.log(MERGE_LOG).len(), 2);
+    assert_eq!(fx.set().resolve(LATE), Some(LATE));
+    assert!(e.check().unwrap().ok);
+}
+
+#[test]
+fn the_dry_run_refuses_a_merge_the_readers_id_table_would_refuse() {
+    // A monthly id two records list: the reader's warning about it would
+    // name another event once one of them is merged away, so `merge`
+    // refuses the pair. The dry run must say the same, not plan it.
+    let fx = fixture();
+    // It sorts first, so it holds the id; it starts last, so it is the
+    // one merged away.
+    let mut twice = rec(
+        "2026-01-twice",
+        "Twice",
+        ("2026-12-30", "2026-12-31"),
+        &["2026-01/E01", "2026-11/E02"],
+    );
+    twice.themes = strs(&["T"]);
+    put(&fx.dir, &twice);
+    let folder = fx.dir.join(PROPOSALS_DIR);
+    fs::create_dir(&folder).unwrap();
+    let file = folder.join(FILE);
+    let l = line(DELTA, "2026-01-twice", "same", "confident", "r", (1, 1));
+    fs::write(&file, format!("{l}\n")).unwrap();
+    let e = fx.editor();
+    let direct = e
+        .merge(&merge_req("2026-01-twice", DELTA, By::Model))
+        .unwrap_err()
+        .to_string();
+    assert!(direct.contains("the reader would warn"), "{direct}");
+    let before = fx.tree();
+    for apply in [false, true] {
+        let r = e.apply_proposals(&file, apply).unwrap();
+        assert_eq!((r.merges.len(), skips(&r)), (0, vec![(1, "refused")]));
+        assert!(r.skipped[0].detail.contains("the reader would warn"));
+        assert!(fx.tree() == before);
+    }
+}

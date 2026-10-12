@@ -1,5 +1,8 @@
 //! The two append-only files of the records folder, `merge-log.jsonl` and
-//! `merge-decisions.jsonl`: their only reader and their only writer.
+//! `merge-decisions.jsonl`: their only reader and their only writer. The
+//! file handling ([`Jsonl`]: the read, the checks and the append) is also
+//! what the writer of `analysis/topics/corrections.jsonl` stands on
+//! ([`crate::corrections`]), with limits of its own.
 //!
 //! Reading. A file is read whole before anything is written. It must be a
 //! plain file (not a symlink: the open does not follow one) of at most
@@ -13,14 +16,21 @@
 //! is opened without following a link, and the checks are made on the
 //! open descriptor, before the write: a regular file, with exactly one
 //! link (an append to a file with a second name would also change that
-//! other name's contents, which may lie outside the records folder), the
+//! other name's contents, which may lie outside the file's folder), the
 //! file that was read, at the length it was read at. The line with its
 //! newline must be at most 4 MiB, and the file with the line at most
 //! 256 MiB, so no append leaves a log this module then refuses to read.
 //! The object and its newline go out in one `write` call, then the file
 //! is synced. A log that is not there is created (create-new, so the name
-//! cannot be a link of any kind) with mode 0644, set on the descriptor.
-//! Nothing is ever rewritten or removed.
+//! cannot be a link of any kind) with the default mode of a new file, so
+//! its permission bits are what the process's umask leaves of 0666; no
+//! mode is set on it afterwards. Nothing is ever rewritten or removed.
+//!
+//! Lines. A merge line must carry every key of [`MergeLine`], `reason`
+//! and `a_merged_into_before` included (their value may be null); an undo
+//! line every key of [`UndoLine`]; a decision line every key of
+//! [`DecisionLine`]. A line without one of its keys, or with a key of no
+//! kind, is malformed.
 //!
 //! [`MergeLog::ready_for_undo`] and [`Decisions::ready`] make the same
 //! checks without writing. `unmerge` and `decide` append their line last,
@@ -33,9 +43,9 @@
 //! the last line holds the largest id, no further line can be written and
 //! `merge` and `unmerge` refuse.
 
-use super::store::{ident_of, links_of, no_follow, read_plain, set_mode};
+use super::store::{ident_of, links_of, no_follow, read_plain};
 use anyhow::{bail, Context, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,11 +59,19 @@ pub(super) const MAX_LINE_BYTES: u64 = 4 << 20;
 /// Largest number of a merge-log id.
 pub(super) const MAX_ID: u64 = 999_999_999;
 
-/// The size limits of one log.
+/// The size limits of one append-only file.
 #[derive(Debug, Clone, Copy)]
-struct Caps {
-    file: u64,
-    line: u64,
+pub(crate) struct Caps {
+    /// Largest file read, and the largest an append may leave.
+    pub file: u64,
+    /// Largest line, with its newline, read or written.
+    pub line: u64,
+}
+
+/// A key that must be on the line; its value may be null. (An `Option`
+/// field read by serde's own rule is `None` when the key is missing.)
+fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(d)
 }
 
 const CAPS: Caps = Caps {
@@ -79,6 +97,8 @@ pub struct MergeLine {
     /// When the line was written, UTC.
     pub at: String,
     pub by: By,
+    /// Null when no reason was given; the key is always there.
+    #[serde(deserialize_with = "present")]
     pub reason: Option<String>,
     /// The record merged away.
     pub a: String,
@@ -86,7 +106,8 @@ pub struct MergeLine {
     pub b: String,
     /// `a`'s `merged_into` before the merge. Always null: a record that is
     /// already merged into another is not merged. A line with any other
-    /// value is malformed.
+    /// value, or without the key, is malformed.
+    #[serde(deserialize_with = "present")]
     pub a_merged_into_before: Option<String>,
 }
 
@@ -125,12 +146,15 @@ pub enum Decision {
 }
 
 /// An append-only file as one read gave it.
-struct Jsonl {
-    path: PathBuf,
+pub(crate) struct Jsonl {
+    pub path: PathBuf,
     /// Device and inode, and the length read; `None` when no file is there.
     read: Option<((u64, u64), u64)>,
     /// Each line's JSON object.
-    values: Vec<serde_json::Value>,
+    pub values: Vec<serde_json::Value>,
+    /// The bytes read, when the reader asked to keep them
+    /// ([`Jsonl::read_keeping`]); empty when no file is there.
+    pub bytes: Vec<u8>,
     caps: Caps,
 }
 
@@ -140,12 +164,21 @@ impl Jsonl {
     }
 
     fn read_with(dir: &Path, name: &str, caps: Caps) -> Result<Jsonl> {
+        let mut file = Jsonl::read_keeping(dir, name, caps)?;
+        file.bytes = Vec::new();
+        Ok(file)
+    }
+
+    /// Read `<dir>/<name>` whole and check it (see the notes of this
+    /// file), keeping the bytes read.
+    pub(crate) fn read_keeping(dir: &Path, name: &str, caps: Caps) -> Result<Jsonl> {
         let path = dir.join(name);
         let Some(plain) = read_plain(&path, caps.file)? else {
             return Ok(Jsonl {
                 path,
                 read: None,
                 values: vec![],
+                bytes: vec![],
                 caps,
             });
         };
@@ -180,6 +213,7 @@ impl Jsonl {
             path,
             read: Some((plain.ident, plain.bytes.len() as u64)),
             values,
+            bytes: plain.bytes,
             caps,
         })
     }
@@ -198,7 +232,13 @@ impl Jsonl {
     /// newline. Refused when the line is over the line limit, or when the
     /// file with it would be over the file limit (it could not be read
     /// again).
-    fn text_of<T: Serialize>(&self, line: &T) -> Result<String> {
+    pub(crate) fn text_of<T: Serialize>(&self, line: &T) -> Result<String> {
+        self.text_after(line, 0)
+    }
+
+    /// [`Jsonl::text_of`] for a file that has grown by `planned` bytes
+    /// since it was read (lines a run means to append before this one).
+    fn text_after<T: Serialize>(&self, line: &T, planned: u64) -> Result<String> {
         let at = self.path.display();
         let mut text = serde_json::to_string(line)?;
         if text.contains('\n') {
@@ -212,7 +252,7 @@ impl Jsonl {
                 self.caps.line
             );
         }
-        let have = self.read.map_or(0, |(_, len)| len);
+        let have = self.read.map_or(0, |(_, len)| len).saturating_add(planned);
         if have.checked_add(add).is_none_or(|n| n > self.caps.file) {
             bail!(
                 "{at}: is {have} bytes, and a line of {add} more would take it over the limit of {} bytes, past which it is not read; move the file away by hand to start a new one; nothing was changed",
@@ -233,7 +273,7 @@ impl Jsonl {
         let links = links_of(meta);
         if links != 1 {
             bail!(
-                "{at}: has {links} hard links; an append would also change the file under its other name, which may be outside the records folder, so it is not written; nothing was changed"
+                "{at}: has {links} hard links; an append would also change the file under its other name, which may be outside its folder, so it is not written; nothing was changed"
             );
         }
         // The file just opened, not the path: it must be the file that was
@@ -270,8 +310,8 @@ impl Jsonl {
     /// Append `line` and a newline in one `write` call, then sync. Every
     /// check is made before the write, on the open descriptor (see the
     /// notes of this file). A file that was not there is created here,
-    /// create-new, mode 0644.
-    fn append<T: Serialize>(&mut self, line: &T) -> Result<()> {
+    /// create-new, with the default mode of a new file (the umask applies).
+    pub(crate) fn append<T: Serialize>(&mut self, line: &T) -> Result<()> {
         let at = self.path.display().to_string();
         let text = self.text_of(line)?;
         let mut open = std::fs::OpenOptions::new();
@@ -279,11 +319,6 @@ impl Jsonl {
         let new = self.read.is_none();
         if new {
             open.create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                open.mode(0o644);
-            }
         }
         let mut file = no_follow(&mut open).open(&self.path).with_context(|| {
             format!(
@@ -292,10 +327,6 @@ impl Jsonl {
         })?;
         let meta = file.metadata().with_context(|| format!("look at {at}"))?;
         let before = self.appendable(&meta)?;
-        if new {
-            // Whatever the umask made of the mode asked for at the open.
-            set_mode(&file, 0o644).with_context(|| format!("set the mode of {at}"))?;
-        }
         let wrote = file
             .write(text.as_bytes())
             .with_context(|| format!("append to {at}"))?;
@@ -402,6 +433,33 @@ impl MergeLog {
                 self.file.path.display()
             ),
         }
+    }
+
+    /// The id of the line after `planned` further lines. Refused past the
+    /// largest id.
+    pub fn id_after(&self, planned: u64) -> Result<String> {
+        match self
+            .last
+            .checked_add(planned)
+            .and_then(|n| n.checked_add(1))
+            .filter(|n| *n <= MAX_ID)
+        {
+            Some(n) => Ok(format!("m{n:06}")),
+            None => self.next_id().and_then(|_| {
+                bail!(
+                    "{}: the merges before this one use the last id there is (m{MAX_ID}); nothing was changed",
+                    self.file.path.display()
+                )
+            }),
+        }
+    }
+
+    /// The size checks an append of `line` makes (the line limit, and the
+    /// file limit), for a log that `planned` bytes of other lines are
+    /// appended to first. No file is looked at. Gives the line's length
+    /// with its newline.
+    pub fn fits_after(&self, line: &MergeLine, planned: u64) -> Result<u64> {
+        Ok(self.file.text_after(line, planned)?.len() as u64)
     }
 
     /// The checks of an append of `line`, with no write.

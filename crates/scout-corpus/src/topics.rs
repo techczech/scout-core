@@ -18,6 +18,20 @@
 //!   applied. In a corpus with a records folder, `event_add` /
 //!   `event_remove` (lists of event ids) put the item in further events or
 //!   take it out of one; see "Events" below.
+//! - Numbered corrections: a line whose `id` is `c` and six to nine digits
+//!   (the lines `scout correct` writes, [`crate::corrections`]) is read as
+//!   above, and three things more are read on it and on no other line:
+//!   `theme_add` / `theme_remove` and `entity_add` / `entity_remove`
+//!   (string lists) patch the item's list as it stands at that line (after
+//!   the line's own `themes` / `entities`, additions first: a name the
+//!   list has under [`fold`] is not added again; a removal takes out every
+//!   name equal under the fold); and `undoes` (a numbered id) makes the
+//!   line an undo line. An undo line takes back every earlier numbered
+//!   line of that id and the same `key` that is not itself an undo line:
+//!   such a line is not applied at all, as if it were not in the file.
+//!   Nothing else on an undo line is read. An undo line that names no
+//!   such earlier line is a bad line. A file without a numbered line
+//!   reads exactly as it did before numbered lines existed.
 //! - Events: everything in this note holds only for a corpus that has a
 //!   records folder (`analysis/events/`, [`crate::events`]). There an item
 //!   can be in several events: the tag row's `event`, the ids of its
@@ -38,8 +52,9 @@
 //!   the month `month:` filters on and the month facet counts; `y:` /
 //!   `after:` / `before:` keep filtering on the document's own date.
 //!
-//! The archive files are never written. The index copy is rebuilt whenever
-//! the layer files' bytes or the corpus's documents change.
+//! Nothing here writes the archive files (`corrections.jsonl` has one
+//! writer, [`crate::corrections`]). The index copy is rebuilt whenever the
+//! layer files' bytes or the corpus's documents change.
 
 use crate::events::{EventSet, EventsReport};
 use anyhow::{bail, Context, Result};
@@ -212,7 +227,7 @@ struct ListedEvents {
 
 /// What a tag row and the corrections say about an item's events beyond
 /// its `event`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Membership {
     /// The tag row's `events` list.
     listed: Option<Vec<String>>,
@@ -243,6 +258,9 @@ pub struct Layer {
     pub corrections_unmatched: usize,
     /// Correction lines that did not parse or carried a wrongly typed field.
     pub corrections_bad_lines: usize,
+    /// Numbered correction lines an undo line took back. Neither they nor
+    /// the undo lines count in `corrections`.
+    pub corrections_undone: usize,
     /// The corpus's event records, when it has a records folder.
     pub events: Option<EventSet>,
 }
@@ -261,15 +279,26 @@ fn stream_lines(
     path: &Path,
     cap: usize,
     hash: &mut Sha1,
-    mut each: impl FnMut(Line<'_>),
+    each: impl FnMut(Line<'_>),
 ) -> Result<bool> {
-    use std::io::BufRead;
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
-    let mut r = std::io::BufReader::with_capacity(64 * 1024, file);
+    let r = std::io::BufReader::with_capacity(64 * 1024, file);
+    split_lines(r, cap, hash, each).with_context(|| format!("read {}", path.display()))?;
+    Ok(true)
+}
+
+/// [`stream_lines`] over any source of bytes: the one place a layer or
+/// corrections file is cut into lines.
+fn split_lines(
+    mut r: impl std::io::BufRead,
+    cap: usize,
+    hash: &mut Sha1,
+    mut each: impl FnMut(Line<'_>),
+) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::new();
     let mut over = false;
     let mut emit = |buf: &mut Vec<u8>, over: &mut bool| {
@@ -290,14 +319,12 @@ fn stream_lines(
         *over = false;
     };
     loop {
-        let chunk = r
-            .fill_buf()
-            .with_context(|| format!("read {}", path.display()))?;
+        let chunk = r.fill_buf()?;
         if chunk.is_empty() {
             if !buf.is_empty() || over {
                 emit(&mut buf, &mut over);
             }
-            return Ok(true);
+            return Ok(());
         }
         let (part, newline) = match chunk.iter().position(|&b| b == b'\n') {
             Some(i) => (&chunk[..i], Some(i)),
@@ -387,44 +414,94 @@ fn read_beside(root: &Path) -> Result<Beside> {
             hash,
         });
     };
-    let mut members = rows.members;
-    let mut out = Layer {
-        layer_path: root.join(LAYER_FILE),
-        items: rows.items,
-        bad_lines: rows.bad_lines,
-        corrections: 0,
-        corrections_unmatched: 0,
-        corrections_bad_lines: 0,
-        events: None,
-    };
     h.update([0u8]);
-    let (mut applied, mut unknown, mut bad) = (0, 0, 0);
+    let mut lines: Vec<Option<String>> = Vec::new();
     stream_lines(
         &root.join(CORRECTIONS_FILE),
         MAX_LINE_BYTES,
         &mut h,
         |l| match l {
-            Line::Text(t) => match apply_correction(&mut out.items, &mut members, lasting, t) {
-                Correction::Applied => applied += 1,
-                Correction::UnknownKey => unknown += 1,
-                Correction::Bad => bad += 1,
-            },
-            Line::Bad => bad += 1,
+            Line::Text(t) => lines.push(Some(t.to_string())),
+            Line::Bad => lines.push(None),
         },
     )?;
-    out.corrections = applied;
-    out.corrections_unmatched = unknown;
-    out.corrections_bad_lines = bad;
-    fill_event_names(&mut out.items);
-    out.events = records;
-    if let Some(set) = &out.events {
-        resolve_events(&mut out.items, &members, set);
-    }
+    let lines: Vec<Option<&str>> = lines.iter().map(Option::as_deref).collect();
+    let (items, read) = correct(rows.items, rows.members, records.as_ref(), &lines);
+    let count = |want: LineRead| read.iter().filter(|r| **r == want).count();
     Ok(Beside {
-        layer: Some(out),
+        layer: Some(Layer {
+            layer_path: root.join(LAYER_FILE),
+            items,
+            bad_lines: rows.bad_lines,
+            corrections: count(LineRead::Applied),
+            corrections_unmatched: count(LineRead::UnknownKey),
+            corrections_bad_lines: count(LineRead::Bad),
+            corrections_undone: count(LineRead::Undone),
+            events: records,
+        }),
         records_alone: None,
         hash: hex(h),
     })
+}
+
+/// The tag rows with a corrections file's lines applied, as every reader
+/// of the layer has them: the lines in order ([`apply_corrections`]), the
+/// event names filled, and, with records, every item's events resolved.
+/// Gives the items and what each line was read as.
+fn correct(
+    mut items: BTreeMap<String, LayerItem>,
+    mut members: BTreeMap<String, Membership>,
+    records: Option<&EventSet>,
+    lines: &[Option<&str>],
+) -> (BTreeMap<String, LayerItem>, Vec<LineRead>) {
+    let read = apply_corrections(&mut items, &mut members, records.is_some(), lines);
+    fill_event_names(&mut items);
+    if let Some(set) = records {
+        resolve_events(&mut items, &members, set);
+    }
+    (items, read)
+}
+
+/// The tag rows and the event records of one corpus, read once, for the
+/// writer of the corrections file ([`crate::corrections`]): it asks what
+/// the reader makes of a set of correction lines, with the reader's own
+/// code, before it writes one.
+pub(crate) struct TagSource {
+    rows: TagRows,
+    pub records: Option<EventSet>,
+}
+
+impl TagSource {
+    /// Read the records folder and the layer file of the corpus at
+    /// `root`, as [`read_layer`] reads them; `None` without a layer file.
+    pub(crate) fn read(root: &Path) -> Result<Option<TagSource>> {
+        let mut h = Sha1::new();
+        let records = crate::events::read_hashed(root, &mut h)?;
+        let rows = read_tag_rows_hashed(root, records.is_some(), &mut h)?;
+        Ok(rows.map(|rows| TagSource { rows, records }))
+    }
+
+    /// Every item's tags with `text` as the corrections file, and what
+    /// each of its non-blank lines was read as. `text` is cut into lines
+    /// by the function that cuts the file ([`split_lines`]).
+    pub(crate) fn with_corrections(
+        &self,
+        text: &[u8],
+    ) -> (BTreeMap<String, LayerItem>, Vec<LineRead>) {
+        let mut lines: Vec<Option<String>> = Vec::new();
+        // Reading from memory does not fail.
+        let _ = split_lines(text, MAX_LINE_BYTES, &mut Sha1::new(), |l| match l {
+            Line::Text(t) => lines.push(Some(t.to_string())),
+            Line::Bad => lines.push(None),
+        });
+        let lines: Vec<Option<&str>> = lines.iter().map(Option::as_deref).collect();
+        correct(
+            self.rows.items.clone(),
+            self.rows.members.clone(),
+            self.records.as_ref(),
+            &lines,
+        )
+    }
 }
 
 /// The tag rows of the layer file, before any correction: what
@@ -526,26 +603,129 @@ fn add_layer_line(
     true
 }
 
-enum Correction {
+/// What one non-blank line of the corrections file was read as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineRead {
+    /// Applied to its item.
     Applied,
+    /// Its key has no tag row; not applied.
     UnknownKey,
+    /// Not a JSON object, no `key`, a wrongly typed field, over the line
+    /// cap, not UTF-8, or an undo line that names no line to take back.
     Bad,
+    /// An undo line that took an earlier line back.
+    Undo,
+    /// A numbered line an undo line took back; not applied.
+    Undone,
 }
 
-/// Apply one corrections line. `event_add` / `event_remove` are fields
-/// only when `lasting` (the corpus has a records folder); otherwise they
-/// are unknown keys like `by` or `note`: not read, not type-checked.
+/// The number of a numbered correction's id: `c` and six to nine digits.
+pub(crate) fn correction_number(id: &str) -> Option<u64> {
+    let digits = id.strip_prefix('c')?;
+    ((6..=9).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
+/// The id of a numbered line, when `m` is one.
+fn numbered(m: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+    m.get("id")
+        .and_then(|v| v.as_str())
+        .filter(|id| correction_number(id).is_some())
+}
+
+/// Apply the lines of a corrections file, in order (`None`: a line that
+/// is not valid UTF-8 or is over the cap). Undo lines are found first, so
+/// a line taken back is never applied (see the module notes).
+fn apply_corrections(
+    items: &mut BTreeMap<String, LayerItem>,
+    members: &mut BTreeMap<String, Membership>,
+    lasting: bool,
+    lines: &[Option<&str>],
+) -> Vec<LineRead> {
+    let parsed: Vec<Option<serde_json::Map<String, serde_json::Value>>> = lines
+        .iter()
+        .map(|l| match serde_json::from_str::<serde_json::Value>((*l)?) {
+            Ok(serde_json::Value::Object(m)) => Some(m),
+            _ => None,
+        })
+        .collect();
+    type Object = serde_json::Map<String, serde_json::Value>;
+    fn key_of(m: &Object) -> Option<&str> {
+        m.get("key").and_then(|k| k.as_str()).map(str::trim)
+    }
+    fn is_undo(m: &Object) -> bool {
+        numbered(m).is_some() && m.contains_key("undoes")
+    }
+    // Numbered lines that are not undo lines, by id and key.
+    let mut by_id: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, m) in parsed.iter().enumerate() {
+        if let Some(m) = m.as_ref().filter(|m| !is_undo(m)) {
+            if let (Some(id), Some(key)) = (numbered(m), key_of(m)) {
+                by_id.entry((id, key)).or_default().push(i);
+            }
+        }
+    }
+    let mut read: Vec<Option<LineRead>> = vec![None; lines.len()];
+    for (j, m) in parsed.iter().enumerate() {
+        let Some(m) = m.as_ref().filter(|m| is_undo(m)) else {
+            continue;
+        };
+        let target = m
+            .get("undoes")
+            .and_then(|v| v.as_str())
+            .filter(|id| correction_number(id).is_some());
+        let mut found = false;
+        if let (Some(target), Some(key)) = (target, key_of(m)) {
+            let earlier = by_id.get(&(target, key)).map(Vec::as_slice);
+            for &i in earlier.unwrap_or_default().iter().filter(|i| **i < j) {
+                read[i] = Some(LineRead::Undone);
+                found = true;
+            }
+        }
+        read[j] = Some(if found { LineRead::Undo } else { LineRead::Bad });
+    }
+    parsed
+        .iter()
+        .zip(read)
+        .map(|(m, known)| match (known, m) {
+            (Some(known), _) => known,
+            (None, None) => LineRead::Bad,
+            (None, Some(m)) => apply_correction(items, members, lasting, m),
+        })
+        .collect()
+}
+
+/// Add to and take from a list of names under [`fold`]: additions first
+/// (a name the list has is not added again), then removals (every name
+/// equal under the fold).
+fn patch_names(list: &mut Vec<String>, add: &[String], remove: &[String]) {
+    for a in add {
+        let f = fold(a);
+        if !f.is_empty() && !list.iter().any(|have| fold(have) == f) {
+            list.push(a.trim().to_string());
+        }
+    }
+    for r in remove {
+        let f = fold(r);
+        list.retain(|have| fold(have) != f);
+    }
+}
+
+/// Apply one corrections line, already parsed. `event_add` /
+/// `event_remove` are fields only when `lasting` (the corpus has a records
+/// folder), and `theme_add` / `theme_remove` / `entity_add` /
+/// `entity_remove` only on a numbered line; otherwise they are unknown
+/// keys like `by` or `note`: not read, not type-checked.
 fn apply_correction(
     items: &mut BTreeMap<String, LayerItem>,
     members: &mut BTreeMap<String, Membership>,
     lasting: bool,
-    line: &str,
-) -> Correction {
-    let Ok(serde_json::Value::Object(m)) = serde_json::from_str::<serde_json::Value>(line) else {
-        return Correction::Bad;
-    };
+    m: &serde_json::Map<String, serde_json::Value>,
+) -> LineRead {
+    let patch = numbered(m).is_some();
     let Some(key) = m.get("key").and_then(|k| k.as_str()).map(str::trim) else {
-        return Correction::Bad;
+        return LineRead::Bad;
     };
     // Validate every field before touching the item.
     let strings = |v: &serde_json::Value| -> Option<Vec<String>> {
@@ -568,7 +748,9 @@ fn apply_correction(
     let mut event_name = None;
     let mut ai = None;
     let (mut add, mut remove) = (None, None);
-    for (field, v) in &m {
+    let (mut theme_add, mut theme_remove) = (None, None);
+    let (mut entity_add, mut entity_remove) = (None, None);
+    for (field, v) in m {
         let ok = match field.as_str() {
             "themes" => strings(v).map(|s| themes = Some(s)).is_some(),
             "entities" => strings(v).map(|s| entities = Some(s)).is_some(),
@@ -576,6 +758,10 @@ fn apply_correction(
             "event_name" => opt_str(v).map(|s| event_name = Some(s)).is_some(),
             "event_add" if lasting => strings(v).map(|s| add = Some(s)).is_some(),
             "event_remove" if lasting => strings(v).map(|s| remove = Some(s)).is_some(),
+            "theme_add" if patch => strings(v).map(|s| theme_add = Some(s)).is_some(),
+            "theme_remove" if patch => strings(v).map(|s| theme_remove = Some(s)).is_some(),
+            "entity_add" if patch => strings(v).map(|s| entity_add = Some(s)).is_some(),
+            "entity_remove" if patch => strings(v).map(|s| entity_remove = Some(s)).is_some(),
             "ai_related" => match v {
                 serde_json::Value::Bool(b) => {
                     ai = Some(Some(*b));
@@ -590,11 +776,11 @@ fn apply_correction(
             _ => true,
         };
         if !ok {
-            return Correction::Bad;
+            return LineRead::Bad;
         }
     }
     let Some(item) = items.get_mut(key) else {
-        return Correction::UnknownKey;
+        return LineRead::UnknownKey;
     };
     let t = &mut item.info;
     let mark = |f: &str, t: &mut TopicInfo| {
@@ -606,8 +792,24 @@ fn apply_correction(
         t.themes = v;
         mark("themes", t);
     }
+    if theme_add.is_some() || theme_remove.is_some() {
+        patch_names(
+            &mut t.themes,
+            &theme_add.unwrap_or_default(),
+            &theme_remove.unwrap_or_default(),
+        );
+        mark("themes", t);
+    }
     if let Some(v) = entities {
         t.entities = v;
+        mark("entities", t);
+    }
+    if entity_add.is_some() || entity_remove.is_some() {
+        patch_names(
+            &mut t.entities,
+            &entity_add.unwrap_or_default(),
+            &entity_remove.unwrap_or_default(),
+        );
         mark("entities", t);
     }
     if let Some(v) = event {
@@ -635,7 +837,7 @@ fn apply_correction(
     }
     t.corrected
         .sort_by_key(|f| CORRECTABLE.iter().position(|c| c == f));
-    Correction::Applied
+    LineRead::Applied
 }
 
 /// Items with an event but no name take the most frequent name the layer
@@ -740,6 +942,10 @@ pub struct TopicReport {
     pub corrections: usize,
     pub corrections_unmatched: usize,
     pub corrections_bad_lines: usize,
+    /// Numbered correction lines an undo line took back (present when not
+    /// 0).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub corrections_undone: usize,
     /// False when the layer and the documents were unchanged since the last
     /// build, so the stored copy was kept.
     pub reloaded: bool,
@@ -747,6 +953,10 @@ pub struct TopicReport {
     /// (`analysis/events/`); its warnings name every file left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<EventsReport>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 pub(crate) const TABLE_SQL: &str = "
@@ -847,6 +1057,7 @@ pub fn apply(conn: &Connection, layer: Option<&Layer>) -> Result<Option<TopicRep
         corrections: layer.corrections,
         corrections_unmatched: layer.corrections_unmatched,
         corrections_bad_lines: layer.corrections_bad_lines,
+        corrections_undone: layer.corrections_undone,
         reloaded: true,
         events: layer.events.as_ref().map(EventSet::report),
     }))

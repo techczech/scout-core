@@ -373,6 +373,53 @@ impl Default for TopicsQuery {
     }
 }
 
+/// `scout topics theme-months`: documents per theme and layer month.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeMonthsQuery {
+    /// Corpus ids; empty = the query's `in:`, else every indexed corpus.
+    #[serde(rename = "in")]
+    pub in_: Vec<String>,
+    /// The first month, `YYYY-MM`; without it, the earliest month of a
+    /// counted document.
+    pub from: Option<String>,
+    /// The last month, `YYYY-MM`; without it, the latest month of a
+    /// counted document.
+    pub to: Option<String>,
+    /// Narrows the documents, in the grammar of `search`; empty = every
+    /// tagged document search can return.
+    pub query: String,
+}
+
+/// Most months one `theme-months` reply covers (150 years).
+pub const MAX_THEME_MONTHS: usize = 1800;
+
+/// `topics theme-months --json`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ThemeMonthsResults {
+    pub schema_version: u32,
+    pub query: String,
+    pub corpora: Vec<String>,
+    /// The first and last month of `months`; null when there is none.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    /// Every month from `from` to `to`, ascending, empty ones included.
+    pub months: Vec<String>,
+    /// Every theme with a document in the range: by total, largest first,
+    /// then by name.
+    pub themes: Vec<String>,
+    /// `counts[t][m]`: documents carrying `themes[t]` whose layer month is
+    /// `months[m]`. A document with two themes counts in both rows.
+    pub counts: Vec<Vec<usize>>,
+    /// Per theme: its row added up (a document has one month).
+    pub theme_totals: Vec<usize>,
+    /// Per month: the tagged documents of that month, each once, with or
+    /// without a theme.
+    pub month_totals: Vec<usize>,
+    /// The tagged documents of the range, each once.
+    pub documents: usize,
+}
+
 /// `facets --json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct FacetsResults {
@@ -504,6 +551,12 @@ pub struct InitDefaults {
 impl Outcome for FacetsResults {
     fn has_results(&self) -> bool {
         self.total_documents > 0
+    }
+}
+
+impl Outcome for ThemeMonthsResults {
+    fn has_results(&self) -> bool {
+        self.documents > 0
     }
 }
 
@@ -673,6 +726,29 @@ fn events_are_per_corpus<'a>(
         }
     }
     Ok(false)
+}
+
+/// Every month from `first` to `last` (both `YYYY-MM`), ascending; empty
+/// when `last` is before `first`. Refused over [`MAX_THEME_MONTHS`].
+fn month_range(first: &str, last: &str) -> Result<Vec<String>> {
+    let parts = |m: &str| -> Result<(i32, u32)> {
+        let (y, mo) = m
+            .split_once('-')
+            .ok_or_else(|| anyhow!("{m:?} is not a month YYYY-MM"))?;
+        Ok((y.parse()?, mo.parse()?))
+    };
+    let ((y0, m0), (y1, m1)) = (parts(first)?, parts(last)?);
+    let count = (i64::from(y1) - i64::from(y0)) * 12 + i64::from(m1) - i64::from(m0) + 1;
+    if count > MAX_THEME_MONTHS as i64 {
+        bail!("{first} to {last} is {count} months; at most {MAX_THEME_MONTHS} are listed");
+    }
+    let mut out = Vec::new();
+    let (mut y, mut m) = (y0, m0);
+    for _ in 0..count.max(0) {
+        out.push(format!("{y:04}-{m:02}"));
+        (y, m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    }
+    Ok(out)
 }
 
 impl Engine {
@@ -952,6 +1028,144 @@ impl Engine {
                 top: q.top,
                 min_event_items: (q.min_event_items > 1).then_some(q.min_event_items),
                 facets: counter.facets(q.top),
+            },
+            notes,
+        })
+    }
+
+    /// The theme × month matrix: documents per theme and layer month, in
+    /// one call. The documents are the tagged ones `search` can return
+    /// (as [`Engine::topics`]), or, with a query, the tagged ones among
+    /// those the query matches (as [`Engine::facets`]); a document counts
+    /// in the month of its tags (`month:`), once per theme it carries. So
+    /// a cell is the count `facets` gives that theme for the same query
+    /// with `month:YYYY-MM` added.
+    ///
+    /// Several corpora: a theme is its name (under the fold of labels),
+    /// and its counts are added up over the searched corpora, as the
+    /// theme facet's are.
+    pub fn theme_months(&self, q: &ThemeMonthsQuery) -> Result<Reply<ThemeMonthsResults>> {
+        let bound = |what: &str, v: &Option<String>| -> Result<Option<String>> {
+            match v.as_deref().map(str::trim) {
+                None | Some("") => Ok(None),
+                Some(m) if m.len() == 7 && crate::topics::valid_month(m) => Ok(Some(m.to_string())),
+                Some(m) => bail!("--{what} {m:?} is not a month YYYY-MM"),
+            }
+        };
+        let (from, to) = (bound("from", &q.from)?, bound("to", &q.to)?);
+        if let (Some(f), Some(t)) = (&from, &to) {
+            if t < f {
+                bail!("--to {t} is before --from {f}");
+            }
+        }
+        let query = q.query.trim();
+        let mut notes = vec![];
+        let named = search::query_corpora(query)?;
+        let ids = if q.in_.is_empty() {
+            named.clone()
+        } else {
+            q.in_.clone()
+        };
+        let corpora = self.scope(&ids, &mut notes)?;
+        let mut used = Vec::new();
+        // (month, the document's themes) of every counted document.
+        let mut docs: Vec<(String, Vec<String>)> = Vec::new();
+        for c in &corpora {
+            if !(named.is_empty() || named.iter().any(|n| n == c.id())) {
+                continue;
+            }
+            let conn = index::open_existing(&c.config, c.index_path())?;
+            let matched: Vec<crate::filter::DocInfo> = if query.is_empty() {
+                crate::filter::load_docs(&conn)?
+                    .into_values()
+                    .filter(|d| d.tokens > 0)
+                    .collect()
+            } else {
+                search::matching_docs(&conn, query)?.1
+            };
+            for d in matched {
+                let Some(t) = d.topic else { continue };
+                let Some(month) = t.month else { continue };
+                if from.as_ref().is_some_and(|f| month < *f)
+                    || to.as_ref().is_some_and(|t| month > *t)
+                {
+                    continue;
+                }
+                docs.push((month, t.themes));
+            }
+            used.push(c.id().to_string());
+        }
+        if used.is_empty() {
+            let have: Vec<&str> = corpora.iter().map(|c| c.id()).collect();
+            bail!(
+                "in:{} names none of the searched corpora ({})",
+                named.join(","),
+                have.join(", ")
+            );
+        }
+        let first = from.or_else(|| docs.iter().map(|d| d.0.clone()).min());
+        let last = to.or_else(|| docs.iter().map(|d| d.0.clone()).max());
+        let months = match (&first, &last) {
+            (Some(f), Some(l)) => month_range(f, l)?,
+            _ => vec![],
+        };
+        let at: std::collections::BTreeMap<&str, usize> = months
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.as_str(), i))
+            .collect();
+        let mut month_totals = vec![0usize; months.len()];
+        // Folded name → (spelling → documents, the row).
+        type Row = (std::collections::BTreeMap<String, usize>, Vec<usize>);
+        let mut rows: std::collections::BTreeMap<String, Row> = Default::default();
+        let mut documents = 0;
+        for (month, themes) in &docs {
+            let Some(&m) = at.get(month.as_str()) else {
+                continue;
+            };
+            documents += 1;
+            month_totals[m] += 1;
+            let mut seen = std::collections::BTreeSet::new();
+            for t in themes {
+                let f = crate::topics::fold(t);
+                if f.is_empty() || !seen.insert(f.clone()) {
+                    continue;
+                }
+                let row = rows
+                    .entry(f)
+                    .or_insert_with(|| (Default::default(), vec![0; months.len()]));
+                *row.0.entry(t.trim().to_string()).or_default() += 1;
+                row.1[m] += 1;
+            }
+        }
+        // The spelling shown is the most frequent one (ties: the first in
+        // order), as a facet shows it.
+        let mut table: Vec<(String, usize, Vec<usize>)> = rows
+            .into_values()
+            .map(|(spellings, row)| {
+                let max = spellings.values().max().copied().unwrap_or(0);
+                let name = spellings
+                    .into_iter()
+                    .find(|(_, c)| *c == max)
+                    .map(|(s, _)| s)
+                    .unwrap_or_default();
+                (name, row.iter().sum(), row)
+            })
+            .collect();
+        table.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(Reply {
+            body: ThemeMonthsResults {
+                schema_version: crate::topics::SCHEMA_VERSION,
+                query: query.to_string(),
+                corpora: used,
+                from: months.first().cloned(),
+                to: months.last().cloned(),
+                themes: table.iter().map(|r| r.0.clone()).collect(),
+                theme_totals: table.iter().map(|r| r.1).collect(),
+                counts: table.into_iter().map(|r| r.2).collect(),
+                month_totals,
+                documents,
+                months,
             },
             notes,
         })

@@ -146,7 +146,8 @@ fn merge_refuses_and_changes_nothing() {
         "2026-10-beta: already merged into 2026-09-alpha",
         || merge(ALPHA, BETA, By::Dominik),
     );
-    // A date that is not one.
+    // A date that is not one: the reader does not read such a record, so
+    // no edit goes on over the folder.
     let mut vague = rec(
         "2026-01-vague",
         "Vague",
@@ -156,11 +157,16 @@ fn merge_refuses_and_changes_nothing() {
     put(&fx.dir, &vague);
     refused(
         &fx,
-        "2026-01-vague: start \"early 2026\" is not a date YYYY-MM-DD; set it first",
+        "2026-01-vague.md: cannot read the record (start \"early 2026\" is not a date YYYY-MM-DD); fix or remove it first",
         || merge("2026-01-vague", DELTA, By::Dominik),
     );
-    refused(&fx, "is not a date YYYY-MM-DD; set it first", || {
-        merge(DELTA, "2026-01-vague", By::Dominik)
+    refused(
+        &fx,
+        "is not a date YYYY-MM-DD); fix or remove it first",
+        || merge(DELTA, "2026-01-vague", By::Dominik),
+    );
+    refused(&fx, "cannot read the record", || {
+        merge(BETA, GAMMA, By::Dominik)
     });
     // A monthly id two records list: the reader's warning about it would
     // name another event after the merge, and the merge is refused.
@@ -366,6 +372,41 @@ fn a_malformed_merge_log_stops_every_command_before_any_write() {
     let undo =
         |id: &str, undoes: &str| format!("{}\n", json!({"id": id, "at": NOW, "undoes": undoes}));
     let line2 = good.replace("\"m000001\"", "\"m000002\"");
+    // A line without one of its keys: a key whose value may be null must
+    // still be there.
+    let without = |line: &str, key: &str| {
+        let mut v: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert!(v.as_object_mut().unwrap().remove(key).is_some(), "{key}");
+        format!("{v}\n")
+    };
+    for key in ["id", "at", "by", "reason", "a", "b", "a_merged_into_before"] {
+        fs::write(
+            fx.dir.join(MERGE_LOG),
+            format!("{good}{}", without(&line2, key)),
+        )
+        .unwrap();
+        let why = format!("line 2: not a merge line (missing field `{key}`)");
+        refused(&fx, &why, || fx.editor().check());
+        refused(&fx, &why, || {
+            fx.editor().merge(&merge_req(GAMMA, DELTA, By::Dominik))
+        });
+    }
+    for key in ["id", "at"] {
+        let undo = undo("m000002", "m000001");
+        fs::write(
+            fx.dir.join(MERGE_LOG),
+            format!("{good}{}", without(&undo, key)),
+        )
+        .unwrap();
+        let why = format!("line 2: not an undo line (missing field `{key}`)");
+        refused(&fx, &why, || fx.editor().unmerge("m000001"));
+    }
+    // A null where the key allows one is a line as written.
+    let null_reason = good.replace("\"reason\":\"one story\"", "\"reason\":null");
+    assert_ne!(null_reason, good);
+    fs::write(fx.dir.join(MERGE_LOG), &null_reason).unwrap();
+    assert!(fx.editor().check().unwrap().ok);
+    fs::write(fx.dir.join(MERGE_LOG), &good).unwrap();
     for (text, why) in [
         (format!("{good}not json\n"), "line 2: not JSON"),
         (format!("{good}[1]\n"), "line 2: not a JSON object"),

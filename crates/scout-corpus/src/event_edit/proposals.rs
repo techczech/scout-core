@@ -11,7 +11,7 @@
 //! is in. As in `merge`, only the record merged away changes; "starts
 //! earlier" is by each surviving record's own `start`.
 
-use super::log::{By, Decision, DecisionLine, Decisions, MergeLog};
+use super::log::{By, Decision, DecisionLine, Decisions, MergeLine, MergeLog};
 use super::merge::{merged_record, not_applied_line, Merged};
 use super::store::{read_plain, Snapshot};
 use super::{plain_text, EventEditor, MergeRequest, Step};
@@ -190,8 +190,17 @@ struct Sim<'a> {
     log: &'a MergeLog,
     records: BTreeMap<String, EventRecord>,
     set: EventSet,
-    /// Items per event, from the proposal lines; a survivor's grows.
+    /// Items per event, by the folded id of the record that holds it now:
+    /// the counts the proposal lines give for every record of the event
+    /// that the file names, added up. A survivor's grows with each merge.
     items: BTreeMap<String, u64>,
+    /// The records the merges so far have changed, by folded id.
+    changed: BTreeMap<String, EventRecord>,
+    /// The log lines the merges so far append: how many, and their bytes.
+    planned_lines: u64,
+    planned_bytes: u64,
+    /// The time the planned log lines carry (its length is what counts).
+    at: String,
 }
 
 /// Which of two events survives a merge: the one whose own record starts
@@ -219,13 +228,24 @@ fn direction<'r>(
 }
 
 impl<'a> Sim<'a> {
-    fn new(snap: &'a Snapshot, log: &'a MergeLog, file: &ProposalsFile) -> Sim<'a> {
-        let mut items: BTreeMap<String, u64> = BTreeMap::new();
+    /// The count of an event is kept under the record that holds it now.
+    /// A record the file names that is already merged into another (by an
+    /// earlier run over this file, or by any other merge) adds its count
+    /// to its holder's, as the merge of it in this run would have. So a
+    /// run cut short and taken up again counts as one run does.
+    fn new(snap: &'a Snapshot, log: &'a MergeLog, file: &ProposalsFile, at: &str) -> Sim<'a> {
+        let mut own: BTreeMap<String, u64> = BTreeMap::new();
         for p in &file.proposals {
             for (id, n) in [(&p.a, p.a_items), (&p.b, p.b_items)] {
-                let have = items.entry(fold(id)).or_default();
+                let have = own.entry(fold(id)).or_default();
                 *have = (*have).max(n);
             }
+        }
+        let mut items: BTreeMap<String, u64> = BTreeMap::new();
+        for (id, n) in own {
+            let holder = snap.set.resolve(&id).map(fold).unwrap_or(id);
+            let have = items.entry(holder).or_default();
+            *have = have.saturating_add(n);
         }
         Sim {
             snap,
@@ -233,6 +253,10 @@ impl<'a> Sim<'a> {
             records: snap.set.records.clone(),
             set: snap.set.clone(),
             items,
+            changed: BTreeMap::new(),
+            planned_lines: 0,
+            planned_bytes: 0,
+            at: at.to_string(),
         }
     }
 
@@ -263,6 +287,16 @@ impl<'a> Sim<'a> {
 
     /// Try the model's merge of one confident pair; on success the copy
     /// of the records moves on.
+    ///
+    /// Every refusal [`EventEditor::merge`] would make of this merge that
+    /// can be told from what was read is made here, on the records and
+    /// the log as the merges before it leave them: the pair, the rule for
+    /// model merges, a merge logged and not applied, the record's
+    /// frontmatter, the reader's id table with the merge made
+    /// ([`Snapshot::verify`]), the next log id, and the size of the log
+    /// line and of the log with it. What is left to the merge itself is
+    /// what only the moment of the write can tell (a file changed since
+    /// it was read, a write that fails).
     fn merge(&mut self, p: &Proposal) -> Result<PlannedMerge, SkippedPair> {
         let skip = |(why, detail): (String, String)| SkippedPair {
             a: p.a.clone(),
@@ -294,6 +328,22 @@ impl<'a> Sim<'a> {
             .rewrite(&new_a, false)
             .map_err(|e| refused(e.to_string()))?;
         let into_id = into.id.clone();
+        // Meant, as in `merge`: every id `from` holds is held by `into`.
+        let mut expected = self.set.aliases.clone();
+        for holder in expected.values_mut() {
+            if *holder == new_a.id {
+                *holder = into_id.clone();
+            }
+        }
+        let with: Vec<&EventRecord> = self
+            .changed
+            .values()
+            .filter(|r| fold(&r.id) != fold(&new_a.id))
+            .chain(std::iter::once(&new_a))
+            .collect();
+        self.snap
+            .verify(&with, &expected)
+            .map_err(|e| refused(e.to_string()))?;
         let planned = PlannedMerge {
             a: new_a.id.clone(),
             b: into_id.clone(),
@@ -301,6 +351,25 @@ impl<'a> Sim<'a> {
             line: p.line,
             log_id: None,
         };
+        let line = MergeLine {
+            id: self
+                .log
+                .id_after(self.planned_lines)
+                .map_err(|e| refused(e.to_string()))?,
+            at: self.at.clone(),
+            by: By::Model,
+            reason: planned.reason.clone(),
+            a: planned.a.clone(),
+            b: planned.b.clone(),
+            a_merged_into_before: None,
+        };
+        let bytes = self
+            .log
+            .fits_after(&line, self.planned_bytes)
+            .map_err(|e| refused(e.to_string()))?;
+        self.planned_lines += 1;
+        self.planned_bytes = self.planned_bytes.saturating_add(bytes);
+        self.changed.insert(fold(&new_a.id), new_a.clone());
         let moved = self.items.get(&fold(&new_a.id)).copied().unwrap_or(0);
         let have = self.items.entry(fold(&into_id)).or_default();
         *have = have.saturating_add(moved);
@@ -460,10 +529,19 @@ impl EventEditor {
     /// surviving record (a tie: the one with more items survives,
     /// by the line's `a_items` / `b_items`; then the id that sorts first).
     /// A pair is taken as the two events its ids are in by then, so
-    /// A~B and B~C end in one event, the earliest. Skipped and counted:
-    /// a pair already in one event, a pair naming a missing record, a
-    /// merge the rule for model merges refuses (`a` has `edited` set), and
-    /// any other refusal of [`EventEditor::merge`].
+    /// A~B and B~C end in one event, the earliest. An event's item count
+    /// is that of every record of it the file names, added up, whether
+    /// the records were merged in this run or before it: a run cut short
+    /// and taken up again picks the survivors one run would. Skipped and
+    /// counted: a pair already in one event, a pair naming a missing
+    /// record, a merge the rule for model merges refuses (`a` has
+    /// `edited` set), and any other refusal of [`EventEditor::merge`]
+    /// that can be told before the write (the size of the log line and of
+    /// the log among them).
+    ///
+    /// The run without `apply` and the run with it work out the same
+    /// merges and the same skipped pairs, by the same code; `apply` then
+    /// makes the merges.
     ///
     /// Without `apply` nothing is written. With it each merge is made by
     /// [`EventEditor::merge`], whole, with its own log line; an error in
@@ -473,7 +551,7 @@ impl EventEditor {
         let file = self.read_proposals(file)?;
         let snap = Snapshot::read(&self.dir)?;
         let log = MergeLog::read(&self.dir)?;
-        let (mut merges, skipped) = Sim::new(&snap, &log, &file).run(&file);
+        let (mut merges, skipped) = Sim::new(&snap, &log, &file, &self.now()).run(&file);
         let mut merged = 0;
         if apply {
             let total = merges.len();
@@ -529,7 +607,7 @@ impl EventEditor {
     ) -> Result<Vec<(Proposal, Standing)>> {
         let snap = Snapshot::read(&self.dir)?;
         let log = MergeLog::read(&self.dir)?;
-        let sim = Sim::new(&snap, &log, file);
+        let sim = Sim::new(&snap, &log, file, &self.now());
         let items = sim.items.clone();
         let (_, skipped) = sim.run(file);
         let ruled: BTreeMap<usize, String> = skipped
@@ -544,7 +622,7 @@ impl EventEditor {
             .map(|d| (pair_key(&d.a, &d.b), d.decision))
             .collect();
         // The records as they are on disk, not after the confident merges.
-        let now = Sim::new(&snap, &log, file);
+        let now = Sim::new(&snap, &log, file, &self.now());
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for p in &file.proposals {

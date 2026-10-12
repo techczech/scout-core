@@ -523,6 +523,69 @@
    "file": "UPPER.MD",
    "verdict": "ignored",
    "note": "only a lower-case .md ending makes a record"
+  },
+  {
+   "file": "valid-origin-dominik-dates.md",
+   "verdict": "accept",
+   "note": "origin dominik; quoted dates; start and end the same day; edited a date"
+  },
+  {
+   "file": "valid-leap-day.md",
+   "verdict": "accept",
+   "note": "29 February of a leap year is a date; an open end"
+  },
+  {
+   "file": "origin-capital.md",
+   "verdict": "reject",
+   "why": "origin \"Dominik\" is not model or dominik",
+   "note": "origin is one of two words, as written"
+  },
+  {
+   "file": "origin-other.md",
+   "verdict": "reject",
+   "why": "origin \"import\" is not model or dominik"
+  },
+  {
+   "file": "start-not-a-date.md",
+   "verdict": "reject",
+   "why": "start \"early 2026\" is not a date YYYY-MM-DD"
+  },
+  {
+   "file": "start-month-only.md",
+   "verdict": "reject",
+   "why": "start \"2026-09\" is not a date YYYY-MM-DD"
+  },
+  {
+   "file": "start-single-digits.md",
+   "verdict": "reject",
+   "why": "start \"2026-9-1\" is not a date YYYY-MM-DD"
+  },
+  {
+   "file": "end-not-a-day.md",
+   "verdict": "reject",
+   "why": "end \"2026-02-30\" is not a date YYYY-MM-DD",
+   "note": "the form of a date, but no such day"
+  },
+  {
+   "file": "end-before-start.md",
+   "verdict": "reject",
+   "why": "end 2026-09-01 is before start 2026-09-02"
+  },
+  {
+   "file": "edited-not-a-date.md",
+   "verdict": "reject",
+   "why": "edited \"yesterday\" is not a date YYYY-MM-DD"
+  },
+  {
+   "file": "edited-timestamp.md",
+   "verdict": "reject",
+   "why": "edited \"2026-10-11T08:00:00Z\" is not a date YYYY-MM-DD"
+  },
+  {
+   "file": "removed-not-a-date.md",
+   "verdict": "reject",
+   "why": "removed \"true\" is not a date YYYY-MM-DD",
+   "note": "`removed` is the date, not a flag"
   }
  ]
 }

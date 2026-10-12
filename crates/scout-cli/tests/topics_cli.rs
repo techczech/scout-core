@@ -2,7 +2,7 @@
 //! exactly the facade's JSON with its exit code, `index build` names the
 //! join rate, and the archive folder is never written.
 
-use scout_corpus::api::{self, FacetsQuery, TopicsQuery};
+use scout_corpus::api::{self, FacetsQuery, ThemeMonthsQuery, TopicsQuery};
 use scout_corpus::{Engine, Outcome, Registry};
 use std::fs;
 use std::path::Path;
@@ -171,6 +171,79 @@ fn facets_and_topics_match_the_facade_and_build_reports_the_join() {
         api::to_json(&t).unwrap(),
         true,
     );
+
+    // The theme × month matrix: the facade's JSON, with and without a
+    // query and bounds.
+    let m = engine
+        .theme_months(&ThemeMonthsQuery::default())
+        .unwrap()
+        .body;
+    assert_eq!(m.months, ["2026-09"]);
+    assert_eq!(m.themes, ["AI and mathematics", "Vibe coding"]);
+    assert_eq!(
+        (m.counts.clone(), m.month_totals.clone()),
+        (vec![vec![2], vec![1]], vec![2])
+    );
+    check(
+        &["topics", "theme-months", "--json"],
+        api::to_json(&m).unwrap(),
+        true,
+    );
+    let m = engine
+        .theme_months(&ThemeMonthsQuery {
+            in_: vec!["highlights".into()],
+            from: Some("2026-08".into()),
+            to: Some("2026-10".into()),
+            query: "Astra theme:\"Vibe coding\"".into(),
+        })
+        .unwrap()
+        .body;
+    assert_eq!((m.months.len(), m.documents), (3, 1));
+    check(
+        &[
+            "topics",
+            "theme-months",
+            "Astra",
+            "theme:\"Vibe coding\"",
+            "--from",
+            "2026-08",
+            "--to",
+            "2026-10",
+            "--in",
+            "highlights",
+            "--json",
+        ],
+        api::to_json(&m).unwrap(),
+        true,
+    );
+    let none = engine
+        .theme_months(&ThemeMonthsQuery {
+            query: "theme:Nothing".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .body;
+    check(
+        &["topics", "theme-months", "theme:Nothing", "--json"],
+        api::to_json(&none).unwrap(),
+        false,
+    );
+    let o = stdout(&scout(&cfg, &data, &["topics", "theme-months"]));
+    assert!(
+        o.starts_with("2 themes over 1 months from 2026-09 to 2026-09, 2 tagged documents"),
+        "{o}"
+    );
+    assert!(o.contains("  2  AI and mathematics  2026-09:2"), "{o}");
+    for bad in [
+        vec!["topics", "theme-months", "--from", "2026"],
+        vec!["topics", "theme-months", "--month", "2026-09"],
+        vec!["topics", "themes", "--from", "2026-09"],
+        vec!["topics", "themes", "a-query"],
+    ] {
+        let o = scout(&cfg, &data, &bad);
+        assert_eq!(o.status.code(), Some(2), "{bad:?}");
+        assert!(o.stdout.is_empty(), "{bad:?}");
+    }
 
     // Human output.
     let o = stdout(&scout(&cfg, &data, &["facets", "event:2026-09/E21"]));

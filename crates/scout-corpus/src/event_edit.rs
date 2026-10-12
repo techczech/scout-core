@@ -50,8 +50,11 @@
 //! then the new file is renamed over the target. The old file is never
 //! opened for writing: the rename gives the record's name a new file, and
 //! the old file's bytes stay as they were under any other name it has.
-//! A record that `create` makes, and a log made by its first line, has
-//! mode 0644, set on the descriptor whatever the umask.
+//! A record that `create` makes, and a log made by its first line, is
+//! created with the default mode of a new file: its permission bits are
+//! what the process's umask leaves of 0666, and no mode is set on it
+//! afterwards. Only a replaced record has bits set (those of the file it
+//! replaces).
 //!
 //! Merging. A merge of `a` into `b` changes one field of one record:
 //! `a.merged_into` becomes `b`. `unmerge` clears it. Record `b` is never
@@ -123,10 +126,10 @@
 //!   the permission bits are carried over: not its owner, group, extended
 //!   attributes or times.
 
-mod log;
+pub(crate) mod log;
 mod merge;
 mod proposals;
-mod store;
+pub(crate) mod store;
 
 use crate::event_seed::naming;
 use crate::event_seed::render::{body_text, render_record};
@@ -214,7 +217,7 @@ pub struct Changed {
 }
 
 /// `s` trimmed, refused when it holds a control character.
-fn plain_text(what: &str, s: &str) -> Result<String> {
+pub(crate) fn plain_text(what: &str, s: &str) -> Result<String> {
     if let Some(c) = s.chars().find(|c| c.is_control() || is_record_control(*c)) {
         bail!(
             "{what} holds a control character (U+{:04X}); give it as one line of plain text (nothing was changed)",
@@ -232,15 +235,19 @@ fn date(what: &str, s: &str) -> Result<String> {
     Ok(s.to_string())
 }
 
-/// `end` must not be before `start`, when the record has both.
+/// The span of a record whose `start` or `end` an operation sets (or
+/// clears): each bound the record then has must be a date, the one the
+/// operation did not name too, and `end` must not be before `start`.
 fn span_in_order(r: &EventRecord) -> Result<()> {
-    if let (Some(start), Some(end)) = (&r.start, &r.end) {
-        if !is_date(start) || !is_date(end) {
+    for (what, bound) in [("start", &r.start), ("end", &r.end)] {
+        if let Some(d) = bound.as_deref().filter(|d| !is_date(d)) {
             bail!(
-                "{}: start {start:?} and end {end:?} are not both dates YYYY-MM-DD; set both (nothing was changed)",
+                "{}: {what} {d:?} is not a date YYYY-MM-DD; set it to one in the same command (nothing was changed)",
                 r.id
             );
         }
+    }
+    if let (Some(start), Some(end)) = (&r.start, &r.end) {
         if end < start {
             bail!(
                 "{}: end {end} is before start {start} (nothing was changed)",
@@ -364,8 +371,10 @@ impl EventEditor {
     ///
     /// Refused, with nothing changed: no such record; nothing to set; a
     /// name or alias that is empty or holds a control character; a date
-    /// that is not `YYYY-MM-DD` (an empty `end` clears it); `end` before
-    /// `start`; an alias to remove that the record does not have.
+    /// that is not `YYYY-MM-DD` (an empty `end` clears it); with `start`
+    /// or `end` given (clearing `end` too), a bound the record keeps that
+    /// is not a date; `end` before `start`; an alias to remove that the
+    /// record does not have.
     pub fn set(&self, id: &str, edit: &FieldEdit) -> Result<Changed> {
         if *edit == FieldEdit::default() {
             bail!("nothing to set: give at least one field (nothing was changed)");
@@ -546,6 +555,49 @@ mod tests {
             "today",
         ] {
             assert!(!is_date(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_span_is_in_order_only_when_every_bound_it_has_is_a_date() {
+        let r = |start: Option<&str>, end: Option<&str>| EventRecord {
+            id: "x".into(),
+            start: start.map(String::from),
+            end: end.map(String::from),
+            ..EventRecord::default()
+        };
+        for (start, end) in [
+            (None, None),
+            (Some("2026-10-01"), None),
+            (None, Some("2026-10-02")),
+            (Some("2026-10-01"), Some("2026-10-01")),
+            (Some("2026-10-01"), Some("2026-10-02")),
+        ] {
+            span_in_order(&r(start, end)).unwrap();
+        }
+        // The other bound, left as it was, is not a date: with `end` set,
+        // with `end` cleared, and with `start` set.
+        for (start, end, why) in [
+            (
+                Some("early 2026"),
+                Some("2026-10-02"),
+                "start \"early 2026\" is not a date",
+            ),
+            (
+                Some("early 2026"),
+                None,
+                "start \"early 2026\" is not a date",
+            ),
+            (
+                Some("2026-10-01"),
+                Some("soon"),
+                "end \"soon\" is not a date",
+            ),
+            (None, Some("2026-13-01"), "end \"2026-13-01\" is not a date"),
+            (Some("2026-10-02"), Some("2026-10-01"), "is before start"),
+        ] {
+            let e = span_in_order(&r(start, end)).unwrap_err().to_string();
+            assert!(e.contains(why) && e.contains("nothing was changed"), "{e}");
         }
     }
 

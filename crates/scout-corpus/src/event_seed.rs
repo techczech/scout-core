@@ -66,7 +66,8 @@
 //!
 //! Writes (only with `apply`): the out folder when it is missing (with
 //! any missing folder above it), and new record files directly inside it, each `<id>.md` with a slug id, each
-//! opened create-exclusive and no-follow. No existing file is opened for
+//! opened create-exclusive and no-follow, with the default mode of a new
+//! file (its permission bits are what the umask leaves of 0666). No existing file is opened for
 //! writing, renamed or removed; no temporary or log file is made. The
 //! run's counts go to the caller.
 //!
@@ -642,7 +643,8 @@ pub(crate) fn create_exclusive(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        open.custom_flags(libc::O_NOFOLLOW).mode(0o644);
+        // No mode asked for: a new file's default, so the umask applies.
+        open.custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = match open.open(&target) {
         Ok(f) => f,

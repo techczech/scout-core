@@ -290,6 +290,22 @@ fn on_a_copy_of_the_real_records_a_merge_and_its_undo() {
     let root = scratch.path().join("archive");
     let dir = root.join(events::EVENTS_DIR);
     copy_dir(&archive.join(events::EVENTS_DIR), &dir);
+    // The archive may hold this very merge already (the merge pass made
+    // it on 2026-10-11): it is taken back in the copy first, by its line
+    // in the copy's log, so the test starts from the two events apart.
+    if read_all(&dir).records[MATHS].merged_into.is_some() {
+        let lines = log_lines(&dir.join(MERGE_LOG));
+        let undone: Vec<&str> = lines.iter().filter_map(|l| l["undoes"].as_str()).collect();
+        let made = lines
+            .iter()
+            .filter(|l| l["a"] == MATHS && l["b"] == FIELDS)
+            .filter_map(|l| l["id"].as_str())
+            .rfind(|id| !undone.contains(id))
+            .expect("the merge's line");
+        EventEditor::open(&root).unwrap().unmerge(made).unwrap();
+        eprintln!("copy of the real records: {made} ({MATHS} into {FIELDS}) taken back first");
+    }
+    let logged = log_lines(&dir.join(MERGE_LOG)).len();
     let copy = tree(&dir);
     let set = read_all(&dir);
     let (maths, fields) = (set.records[MATHS].clone(), set.records[FIELDS].clone());
@@ -394,8 +410,10 @@ fn on_a_copy_of_the_real_records_a_merge_and_its_undo() {
     e.unmerge(&m.log_id).unwrap();
     let mut after = tree(&dir);
     assert!(after.remove(&dir.join(MERGE_LOG)).is_some());
+    let mut copy = copy;
+    copy.remove(&dir.join(MERGE_LOG));
     assert!(after == copy);
-    assert_eq!(log_lines(&dir.join(MERGE_LOG)).len(), 2);
+    assert_eq!(log_lines(&dir.join(MERGE_LOG)).len(), logged + 2);
     c.build_index(false).unwrap();
     assert_eq!(total(&c, &format!("event:{old_id}")), in_maths);
     assert_eq!(total(&c, &format!("event:{FIELDS}")), in_fields);
