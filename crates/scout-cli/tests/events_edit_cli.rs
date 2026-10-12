@@ -406,3 +406,69 @@ fn the_archive_is_required_and_its_path_is_checked() {
     assert!(text(&out.stderr).contains("no records folder"));
     assert!(fs::read_dir(&empty).unwrap().next().is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn apply_proposals_refuses_a_log_with_a_second_name_the_same_with_and_without_apply() {
+    let fx = Fx::new();
+    // Two records of the model's (one made here is his, and the model
+    // does not merge his away).
+    for (id, name, start) in [
+        (ALPHA, "Alpha story", "2026-09-05"),
+        (BETA, "Beta", "2026-10-02"),
+    ] {
+        let record = scout_corpus::events::EventRecord {
+            id: id.into(),
+            name: name.into(),
+            start: Some(start.into()),
+            end: Some(start.into()),
+            origin: Some("model".into()),
+            description: format!("About {name}."),
+            ..Default::default()
+        };
+        fs::write(
+            fx.dir.join(format!("{id}.md")),
+            scout_corpus::event_seed::render_record(&record),
+        )
+        .unwrap();
+    }
+    let folder = fx.dir.join("merge-proposals");
+    fs::create_dir_all(&folder).unwrap();
+    let file = folder.join("run-1.jsonl");
+    fs::write(
+        &file,
+        format!(
+            "{}\n",
+            json!({"a": ALPHA, "b": BETA, "verdict": "same", "confidence": "confident", "reason": "one story"})
+        ),
+    )
+    .unwrap();
+    let f = file.to_str().unwrap();
+    // An empty log, linked from outside the records folder.
+    let log = fx.dir.join("merge-log.jsonl");
+    let other = fx.tmp.path().join("other-name.jsonl");
+    fs::write(&log, "").unwrap();
+    fs::hard_link(&log, &other).unwrap();
+    let why = "merge-log.jsonl: has 2 hard links";
+    fx.refused(&["apply-proposals", f], why);
+    fx.refused(&["apply-proposals", f, "--apply"], why);
+    let (dry, run) = (
+        fx.run(&["apply-proposals", f]),
+        fx.run(&["apply-proposals", f, "--apply"]),
+    );
+    assert_eq!(text(&dry.stderr), text(&run.stderr));
+    assert!(
+        text(&dry.stderr).contains("1 merges are planned and none was made"),
+        "{}",
+        text(&dry.stderr)
+    );
+    assert!(!text(&dry.stderr).contains("dry run"));
+    assert_eq!(fs::read(&other).unwrap(), b"");
+    // With one name: the plan, then the merge.
+    fs::remove_file(&other).unwrap();
+    let planned = fx.ok(&["apply-proposals", f]);
+    assert_eq!(planned["merges"].as_array().unwrap().len(), 1);
+    let made = fx.ok(&["apply-proposals", f, "--apply"]);
+    assert_eq!(made["merged"], 1);
+    assert_eq!(fx.lines("merge-log.jsonl").len(), 1);
+}

@@ -1,11 +1,20 @@
 //! Human output for the topic-layer commands (`facets`, `topics`) and the
 //! topic line of `index build`. Formatting only.
+//!
+//! Every name, id, date and path printed here comes from an archive file
+//! or an argument, and goes through [`crate::term::safe`].
 
+use crate::term::safe;
 use scout_corpus::api::{
     EventsResults, FacetItem, FacetsResults, ThemeMonthsResults, TopicsResults,
 };
 use scout_corpus::events::EventsReport;
 use scout_corpus::topics::{Facet, TopicReport};
+
+/// A list of names on one line, safe for a terminal.
+fn list(items: &[String]) -> String {
+    safe(&items.join(", ")).into_owned()
+}
 
 fn rows(items: &[FacetItem]) {
     let w = items
@@ -18,11 +27,11 @@ fn rows(items: &[FacetItem]) {
         let corpus = i
             .corpus
             .as_deref()
-            .map(|c| format!("  [{c}]"))
+            .map(|c| format!("  [{}]", safe(c)))
             .unwrap_or_default();
         match &i.name {
-            Some(n) => println!("  {:>w$}  {}  {}{corpus}", i.count, i.value, n),
-            None => println!("  {:>w$}  {}{corpus}", i.count, i.value),
+            Some(n) => println!("  {:>w$}  {}  {}{corpus}", i.count, safe(&i.value), safe(n)),
+            None => println!("  {:>w$}  {}{corpus}", i.count, safe(&i.value)),
         }
     }
 }
@@ -45,7 +54,7 @@ pub fn print_facets(r: &FacetsResults) {
         r.total_documents,
         r.tagged_documents,
         r.query,
-        r.corpora.join(", ")
+        list(&r.corpora)
     );
     let f = &r.facets;
     section("themes", &f.theme);
@@ -65,20 +74,20 @@ pub fn print_topics(r: &TopicsResults) {
     let month = r
         .month
         .as_deref()
-        .map(|m| format!(" in {m}"))
+        .map(|m| format!(" in {}", safe(m)))
         .unwrap_or_default();
     println!(
         "{} {field} values over {} tagged documents{month} ({})",
         r.distinct,
         r.tagged_documents,
-        r.corpora.join(", ")
+        list(&r.corpora)
     );
     rows(&r.items);
 }
 
 pub fn print_theme_months(r: &ThemeMonthsResults) {
     let span = match (&r.from, &r.to) {
-        (Some(a), Some(b)) => format!(" from {a} to {b}"),
+        (Some(a), Some(b)) => format!(" from {} to {}", safe(a), safe(b)),
         _ => String::new(),
     };
     println!(
@@ -86,7 +95,7 @@ pub fn print_theme_months(r: &ThemeMonthsResults) {
         r.themes.len(),
         r.months.len(),
         r.documents,
-        r.corpora.join(", ")
+        list(&r.corpora)
     );
     let w = r
         .theme_totals
@@ -101,9 +110,14 @@ pub fn print_theme_months(r: &ThemeMonthsResults) {
             .iter()
             .zip(&r.counts[i])
             .filter(|(_, n)| **n > 0)
-            .map(|(m, n)| format!("{m}:{n}"))
+            .map(|(m, n)| format!("{}:{n}", safe(m)))
             .collect();
-        println!("  {:>w$}  {theme}  {}", r.theme_totals[i], cells.join(" "));
+        println!(
+            "  {:>w$}  {}  {}",
+            r.theme_totals[i],
+            safe(theme),
+            cells.join(" ")
+        );
     }
 }
 
@@ -111,9 +125,9 @@ pub fn print_events(r: &EventsResults) {
     let month = r
         .month
         .as_deref()
-        .map(|m| format!(" with items in {m}"))
+        .map(|m| format!(" with items in {}", safe(m)))
         .unwrap_or_default();
-    println!("{} events{month} ({})", r.distinct, r.corpora.join(", "));
+    println!("{} events{month} ({})", r.distinct, list(&r.corpora));
     let w = r
         .events
         .iter()
@@ -122,19 +136,19 @@ pub fn print_events(r: &EventsResults) {
         .unwrap_or(1);
     for e in &r.events {
         let span = match (&e.start, &e.end) {
-            (Some(a), Some(b)) if a != b => format!("  {a} to {b}"),
-            (Some(a), _) => format!("  {a}"),
+            (Some(a), Some(b)) if a != b => format!("  {} to {}", safe(a), safe(b)),
+            (Some(a), _) => format!("  {}", safe(a)),
             _ => String::new(),
         };
         let merged = e
             .merged_into
             .as_deref()
-            .map(|m| format!("  (merged into {m})"))
+            .map(|m| format!("  (merged into {})", safe(m)))
             .unwrap_or_default();
         let removed = e
             .removed
             .as_deref()
-            .map(|d| format!("  (removed {d})"))
+            .map(|d| format!("  (removed {})", safe(d)))
             .unwrap_or_default();
         let in_month = e
             .month_items
@@ -143,8 +157,8 @@ pub fn print_events(r: &EventsResults) {
         println!(
             "  {:>w$}  {}  {}{span}{in_month}{merged}{removed}",
             e.items,
-            e.id,
-            e.name.as_deref().unwrap_or("")
+            safe(&e.id),
+            safe(e.name.as_deref().unwrap_or(""))
         );
     }
 }
@@ -156,7 +170,7 @@ pub fn print_events_report(e: &EventsReport) {
         "", e.records, e.merged, e.members, e.skipped
     );
     for w in &e.warnings {
-        println!("{:<10} warning: {w}", "");
+        println!("{:<10} warning: {}", "", safe(w));
     }
     if e.warnings_total > e.warnings.len() {
         println!(
@@ -204,10 +218,6 @@ pub fn print_topic_report(t: &TopicReport) {
         print_events_report(e);
     }
     if !t.unmatched_sample.is_empty() {
-        println!(
-            "{:<10} unmatched e.g. {}",
-            "",
-            t.unmatched_sample.join(", ")
-        );
+        println!("{:<10} unmatched e.g. {}", "", list(&t.unmatched_sample));
     }
 }

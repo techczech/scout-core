@@ -11,7 +11,7 @@
 //! is in. As in `merge`, only the record merged away changes; "starts
 //! earlier" is by each surviving record's own `start`.
 
-use super::log::{By, Decision, DecisionLine, Decisions, MergeLine, MergeLog};
+use super::log::{By, Decision, DecisionLine, Decisions, MergeLine, MergeLog, Planned};
 use super::merge::{merged_record, not_applied_line, Merged};
 use super::store::{read_plain, Snapshot};
 use super::{plain_text, EventEditor, MergeRequest, Step};
@@ -197,8 +197,12 @@ struct Sim<'a> {
     /// The records the merges so far have changed, by folded id.
     changed: BTreeMap<String, EventRecord>,
     /// The log lines the merges so far append: how many, and their bytes.
-    planned_lines: u64,
-    planned_bytes: u64,
+    planned: Planned,
+    /// Why the log cannot be appended to at all, when it cannot (its
+    /// type, its links, a change since it was read, an open that fails):
+    /// the answer for the first merge planned, which is the answer for
+    /// every one. Not a skipped pair: the run is refused.
+    log_refusal: Option<String>,
     /// The time the planned log lines carry (its length is what counts).
     at: String,
 }
@@ -254,8 +258,8 @@ impl<'a> Sim<'a> {
             set: snap.set.clone(),
             items,
             changed: BTreeMap::new(),
-            planned_lines: 0,
-            planned_bytes: 0,
+            planned: Planned::default(),
+            log_refusal: None,
             at: at.to_string(),
         }
     }
@@ -293,10 +297,16 @@ impl<'a> Sim<'a> {
     /// the log as the merges before it leave them: the pair, the rule for
     /// model merges, a merge logged and not applied, the record's
     /// frontmatter, the reader's id table with the merge made
-    /// ([`Snapshot::verify`]), the next log id, and the size of the log
-    /// line and of the log with it. What is left to the merge itself is
+    /// ([`Snapshot::verify`]), and last the log: the question `merge`
+    /// itself asks before its first write
+    /// ([`MergeLog::ready_to_append`]), for the log as the merges before
+    /// this one leave it. A line the log cannot take (no id left, a line
+    /// or a log over its limit) is this pair's refusal. A log that cannot
+    /// be appended to at all is the run's ([`Sim::log_refusal`]); the
+    /// pair is then planned as if it could, so that what follows it is
+    /// worked out as it would be. What is left to the merge itself is
     /// what only the moment of the write can tell (a file changed since
-    /// it was read, a write that fails).
+    /// this read of it, a write that fails).
     fn merge(&mut self, p: &Proposal) -> Result<PlannedMerge, SkippedPair> {
         let skip = |(why, detail): (String, String)| SkippedPair {
             a: p.a.clone(),
@@ -351,24 +361,23 @@ impl<'a> Sim<'a> {
             line: p.line,
             log_id: None,
         };
-        let line = MergeLine {
-            id: self
-                .log
-                .id_after(self.planned_lines)
-                .map_err(|e| refused(e.to_string()))?,
-            at: self.at.clone(),
-            by: By::Model,
-            reason: planned.reason.clone(),
-            a: planned.a.clone(),
-            b: planned.b.clone(),
-            a_merged_into_before: None,
-        };
-        let bytes = self
+        let ready = self
             .log
-            .fits_after(&line, self.planned_bytes)
+            .ready_to_append(self.planned, |id| MergeLine {
+                id,
+                at: self.at.clone(),
+                by: By::Model,
+                reason: planned.reason.clone(),
+                a: planned.a.clone(),
+                b: planned.b.clone(),
+                a_merged_into_before: None,
+            })
             .map_err(|e| refused(e.to_string()))?;
-        self.planned_lines += 1;
-        self.planned_bytes = self.planned_bytes.saturating_add(bytes);
+        if let (Err(e), None) = (&ready.file, &self.log_refusal) {
+            self.log_refusal = Some(format!("{e:#}"));
+        }
+        self.planned.lines += 1;
+        self.planned.bytes = self.planned.bytes.saturating_add(ready.bytes);
         self.changed.insert(fold(&new_a.id), new_a.clone());
         let moved = self.items.get(&fold(&new_a.id)).copied().unwrap_or(0);
         let have = self.items.entry(fold(&into_id)).or_default();
@@ -381,8 +390,10 @@ impl<'a> Sim<'a> {
         Ok(planned)
     }
 
-    /// Every `same` + `confident` pair of the file, in file order.
-    fn run(mut self, file: &ProposalsFile) -> (Vec<PlannedMerge>, Vec<SkippedPair>) {
+    /// Every `same` + `confident` pair of the file, in file order: the
+    /// merges, the skipped pairs, and why the log cannot be appended to
+    /// at all when a merge is planned and it cannot.
+    fn run(mut self, file: &ProposalsFile) -> Plan {
         let (mut merges, mut skipped) = (Vec::new(), Vec::new());
         for p in file.proposals.iter().filter(|p| is_confident_same(p)) {
             match self.merge(p) {
@@ -390,8 +401,19 @@ impl<'a> Sim<'a> {
                 Err(s) => skipped.push(s),
             }
         }
-        (merges, skipped)
+        Plan {
+            merges,
+            skipped,
+            log_refusal: self.log_refusal,
+        }
     }
+}
+
+/// What [`Sim::run`] worked out.
+struct Plan {
+    merges: Vec<PlannedMerge>,
+    skipped: Vec<SkippedPair>,
+    log_refusal: Option<String>,
 }
 
 fn is_confident_same(p: &Proposal) -> bool {
@@ -536,12 +558,20 @@ impl EventEditor {
     /// counted: a pair already in one event, a pair naming a missing
     /// record, a merge the rule for model merges refuses (`a` has
     /// `edited` set), and any other refusal of [`EventEditor::merge`]
-    /// that can be told before the write (the size of the log line and of
-    /// the log among them).
+    /// that can be told before the write (no log id left, the size of the
+    /// log line and of the log among them).
+    ///
+    /// Refused, with and without `apply`, by the same words and with
+    /// nothing changed: a merge is planned and `merge-log.jsonl` cannot
+    /// be appended to at all (not a plain file, a second hard link,
+    /// changed since it was read, not open to writing). That is a
+    /// refusal of the run, said once, not a skipped pair. A run that
+    /// plans no merge appends nothing and is not refused for its log.
     ///
     /// The run without `apply` and the run with it work out the same
-    /// merges and the same skipped pairs, by the same code; `apply` then
-    /// makes the merges.
+    /// merges, the same skipped pairs and the same refusal, by the same
+    /// code, the log's answer included: it is the one `merge` asks for
+    /// before its first write. `apply` then makes the merges.
     ///
     /// Without `apply` nothing is written. With it each merge is made by
     /// [`EventEditor::merge`], whole, with its own log line; an error in
@@ -551,7 +581,18 @@ impl EventEditor {
         let file = self.read_proposals(file)?;
         let snap = Snapshot::read(&self.dir)?;
         let log = MergeLog::read(&self.dir)?;
-        let (mut merges, skipped) = Sim::new(&snap, &log, &file, &self.now()).run(&file);
+        let Plan {
+            mut merges,
+            skipped,
+            log_refusal,
+        } = Sim::new(&snap, &log, &file, &self.now()).run(&file);
+        if let Some(why) = log_refusal {
+            bail!(
+                "{why}\n{}: {} merges are planned and none was made: the merge log cannot be appended to",
+                file.path.display(),
+                merges.len()
+            );
+        }
         let mut merged = 0;
         if apply {
             let total = merges.len();
@@ -609,7 +650,10 @@ impl EventEditor {
         let log = MergeLog::read(&self.dir)?;
         let sim = Sim::new(&snap, &log, file, &self.now());
         let items = sim.items.clone();
-        let (_, skipped) = sim.run(file);
+        // Only the pairs the rule for model merges refuses are taken
+        // from this run; whether the log can be appended to is nothing to
+        // a list that reads only.
+        let skipped = sim.run(file).skipped;
         let ruled: BTreeMap<usize, String> = skipped
             .into_iter()
             .filter(|s| s.why == "model-rule")

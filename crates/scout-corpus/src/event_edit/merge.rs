@@ -12,7 +12,7 @@
 //! merged or edited since, and its undo touches `a` only. The order of the
 //! writes and the states of a merge line are in the notes of [`super`].
 
-use super::log::{By, MergeLine, MergeLog, UndoLine, MERGE_LOG};
+use super::log::{By, MergeLine, MergeLog, Planned, UndoLine, MERGE_LOG};
 use super::store::{self, leftover_temps, still_as_read, Snapshot};
 use super::{is_date, plain_text, EventEditor, MergeRequest, Step};
 use crate::events::EventRecord;
@@ -291,15 +291,20 @@ impl EventEditor {
             }
         }
         snap.verify(&[&new_a], &expected)?;
-        let line = MergeLine {
-            id: log.next_id()?,
-            at: self.now(),
-            by: req.by,
-            reason: reason.clone(),
-            a: a.id.clone(),
-            b: b.id.clone(),
-            a_merged_into_before: a.merged_into.clone(),
-        };
+        // That the log can take the line: the question `apply-proposals`
+        // asks of every merge it plans, answered by the checks the append
+        // below makes again on the descriptor it writes to.
+        let line = log
+            .ready_to_append(Planned::default(), |id| MergeLine {
+                id,
+                at: self.now(),
+                by: req.by,
+                reason: reason.clone(),
+                a: a.id.clone(),
+                b: b.id.clone(),
+                a_merged_into_before: a.merged_into.clone(),
+            })?
+            .line()?;
         self.step(Step::Read)?;
         still_as_read(&snap.dir, &wa.file, &wa.old)?;
         let (log_id, at) = (line.id.clone(), line.at.clone());

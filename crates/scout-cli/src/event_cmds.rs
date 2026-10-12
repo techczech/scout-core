@@ -165,7 +165,8 @@ pub fn run(cmd: EventsCmd) -> Result<ExitCode> {
             if !r.apply {
                 eprintln!(
                     "dry run: nothing written; {} records would be created in {} (add --apply)",
-                    r.to_create, r.out
+                    r.to_create,
+                    crate::term::safe(&r.out)
                 );
             }
             Ok(ExitCode::SUCCESS)

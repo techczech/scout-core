@@ -353,3 +353,83 @@ fn bounds_are_months_and_an_empty_range_is_empty() {
                "documents": 3})
     );
 }
+
+#[test]
+fn a_query_with_a_month_field_is_refused_and_every_other_field_keeps_the_equality() {
+    let fx = fixture();
+    let q = |query: &str, in_: &[&str]| ThemeMonthsQuery {
+        in_: in_.iter().map(|s| s.to_string()).collect(),
+        from: Some("2025-11".into()),
+        to: Some("2026-03".into()),
+        query: query.into(),
+    };
+    // `month:` as the engine's parser reads it: alone, among terms, after
+    // other fields, as a year, with and without bounds, in any case.
+    for query in [
+        "month:2026-02",
+        "proof month:2026-02",
+        "theme:Coding month:2025-12 agents",
+        "month:2026",
+        "in:one month:2026-02",
+        "MONTH:2026-02",
+    ] {
+        for bounded in [true, false] {
+            let mut ask = q(query, &[]);
+            if !bounded {
+                (ask.from, ask.to) = (None, None);
+            }
+            let e = fx
+                .engine
+                .theme_months(&ask)
+                .err()
+                .unwrap_or_else(|| panic!("{query:?} was accepted"))
+                .to_string();
+            assert!(
+                e.contains("in the query") && e.contains("use --from and --to"),
+                "{query}: {e}"
+            );
+        }
+    }
+    // A month that is no month is the parser's own refusal, as in search.
+    let e = fx.engine.theme_months(&q("month:soon", &[])).unwrap_err();
+    assert!(e.to_string().contains("month:"), "{e}");
+    // The text `month:` inside a phrase is a phrase, not the field.
+    let m = matrix(&fx, q("\"month:2026-02\"", &["one"]));
+    assert_eq!(m.documents, 0);
+    equals_facets(&fx, &m, "\"month:2026-02\"", &["one"]);
+
+    // Every other field: each cell is still the facet count.
+    for query in [
+        "theme:Maths",
+        "theme:Coding proof",
+        "ai:true",
+        "ai:false",
+        "ty:tweet agents",
+        "au:A proof",
+        "ti:W3",
+        "source:one",
+        "after:2025-12 proof",
+        "before:2026-02",
+        "y:2025",
+        "proof OR agents",
+        "-proof",
+    ] {
+        for in_ in [&["one"][..], &[][..]] {
+            let m = matrix(&fx, q(query, in_));
+            assert_eq!(m.months.len(), 5, "{query}");
+            equals_facets(&fx, &m, query, in_);
+        }
+        // Without bounds too: the range is the documents'.
+        let m = matrix(
+            &fx,
+            ThemeMonthsQuery {
+                query: query.into(),
+                ..Default::default()
+            },
+        );
+        equals_facets(&fx, &m, query, &[]);
+    }
+    // At least one of them counted something in more than one month.
+    let m = matrix(&fx, q("theme:Coding", &["one"]));
+    assert_eq!(m.month_totals, [1, 1, 0, 1, 1]);
+}

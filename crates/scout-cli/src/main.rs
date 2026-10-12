@@ -6,6 +6,7 @@
 
 mod correct_cmds;
 mod event_cmds;
+mod term;
 mod topic_views;
 mod views;
 
@@ -480,7 +481,9 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("scout: {e:#}");
+            // An error names what it stopped at: a path, a key, a value
+            // of a file. Its line feeds stay (a cause per line).
+            eprintln!("scout: {}", term::safe_lines(&format!("{e:#}")));
             if e.downcast_ref::<PassageNotFound>().is_some() {
                 return ExitCode::from(1);
             }
@@ -505,7 +508,7 @@ fn out<T: serde::Serialize + Outcome>(
 ) -> Result<ExitCode> {
     let reply = reply?;
     for n in &reply.notes {
-        eprintln!("{n}");
+        eprintln!("{}", term::safe_lines(n));
     }
     if json {
         println!("{}", api::to_json(&reply.body)?);
@@ -612,7 +615,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         if i > 0 {
                             println!();
                         }
-                        print!("{}", fmt.pick(&d.citation));
+                        print!("{}", term::safe_lines(fmt.pick(&d.citation)));
                     }
                 }
                 None => views::print_hits(res),
@@ -836,7 +839,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => {
             let q = CiteQuery { passage_id };
             out(engine.cite(&q), json, |r| {
-                print!("{}", format.pick(&r.citation))
+                print!("{}", term::safe_lines(format.pick(&r.citation)))
             })
         }
         Cmd::CleanReport {
@@ -866,13 +869,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 };
                 let tty = std::io::stderr().is_terminal();
                 let mut on = |ev: BuildEvent| match ev {
-                    BuildEvent::Download(note) => eprintln!("{note}"),
+                    BuildEvent::Download(note) => eprintln!("{}", term::safe_lines(&note)),
                     BuildEvent::Embedding {
                         corpus,
                         done,
                         total,
                     } if tty && total > 0 => {
-                        eprint!("\rscout: embedding {corpus}: {done}/{total} passages");
+                        eprint!(
+                            "\rscout: embedding {}: {done}/{total} passages",
+                            term::safe(&corpus)
+                        );
                         if done == total {
                             eprintln!();
                         }

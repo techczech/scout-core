@@ -225,3 +225,98 @@ fn item_counts_that_are_not_whole_numbers_in_range_skip_the_line() {
     assert_eq!(fx.record(BETA).merged_into, None);
     assert_eq!(fx.record(ALPHA).merged_into.as_deref(), Some(DELTA));
 }
+
+/// What `apply-proposals` says of `file`, without and with `--apply`: the
+/// two must be the same refusal, and neither may change a file.
+#[cfg(unix)]
+fn both_runs_refuse(fx: &Fx, file: &Path, needle: &str) -> String {
+    let before = fx.tree();
+    let e = fx.editor();
+    let dry = format!(
+        "{:#}",
+        e.apply_proposals(file, false)
+            .expect_err("the dry run plans a merge its log cannot take")
+    );
+    let run = format!(
+        "{:#}",
+        e.apply_proposals(file, true)
+            .expect_err("the run appends to its log")
+    );
+    assert_eq!(dry, run, "the dry run and the run say different things");
+    assert!(dry.contains(needle), "want {needle:?} in {dry}");
+    assert!(
+        dry.contains("2 merges are planned and none was made"),
+        "{dry}"
+    );
+    // Said once, for the run: not once per pair.
+    assert_eq!(dry.matches(needle).count(), 1, "{dry}");
+    assert!(fx.tree() == before, "{needle}: a file changed");
+    dry
+}
+
+#[cfg(unix)]
+#[test]
+fn the_dry_run_and_the_run_refuse_a_log_that_cannot_be_appended_to_by_the_same_words() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = fixture();
+    let file = proposals(
+        &fx,
+        &[
+            pair(ALPHA, BETA, "confident"),
+            pair(DELTA, ALPHA, "confident"),
+            pair(ALPHA, GAMMA, "doubtful"),
+        ],
+    );
+    let log = fx.dir.join(MERGE_LOG);
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim.jsonl");
+
+    // An empty log with a second name: read like any file, never
+    // appended to. The dry run asks what the merge asks.
+    fs::write(&log, "").unwrap();
+    fs::hard_link(&log, &victim).unwrap();
+    let why = both_runs_refuse(&fx, &file, "merge-log.jsonl: has 2 hard links");
+    assert!(why.contains("nothing was changed"), "{why}");
+    assert_eq!(fs::read(&victim).unwrap(), b"");
+    // `merge` itself gives the log's refusal in the same words.
+    let e = fx.editor();
+    let one = format!(
+        "{:#}",
+        e.merge(&merge_req(BETA, ALPHA, By::Model)).unwrap_err()
+    );
+    assert_eq!(why.lines().next(), Some(one.as_str()));
+    // Reading only is not refused: the waiting list, and the check.
+    assert_eq!(e.proposals(&file).unwrap().waiting.len(), 1);
+    assert!(e.check().unwrap().ok);
+    fs::remove_file(&victim).unwrap();
+
+    // A log that may not be written: the same question, the same answer.
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o444)).unwrap();
+    if fs::OpenOptions::new().append(true).open(&log).is_err() {
+        both_runs_refuse(&fx, &file, "merge-log.jsonl to append");
+    }
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+
+    // A run that plans no merge appends nothing: its log is not asked.
+    fs::hard_link(&log, &victim).unwrap();
+    let none = proposals(&fx, &[pair(ALPHA, GAMMA, "doubtful")]);
+    for apply in [false, true] {
+        let r = e.apply_proposals(&none, apply).unwrap();
+        assert_eq!((r.merges.len(), r.merged), (0, 0));
+    }
+    fs::remove_file(&victim).unwrap();
+
+    // With one name and open to writing, the plan is made as planned.
+    let file = proposals(
+        &fx,
+        &[
+            pair(ALPHA, BETA, "confident"),
+            pair(DELTA, ALPHA, "confident"),
+        ],
+    );
+    let dry = e.apply_proposals(&file, false).unwrap();
+    assert_eq!(dry.merges.len(), 2);
+    let done = e.apply_proposals(&file, true).unwrap();
+    assert_eq!(done.merged, 2);
+    assert_eq!(fx.log(MERGE_LOG).len(), 2);
+}

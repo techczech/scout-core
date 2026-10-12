@@ -1041,6 +1041,12 @@ impl Engine {
     /// a cell is the count `facets` gives that theme for the same query
     /// with `month:YYYY-MM` added.
     ///
+    /// A query with a `month:` field is refused (as the engine's own
+    /// parser reads the query, [`search::Plan::parse`]: the field, not
+    /// the text `month:` inside a phrase): the months are the columns,
+    /// chosen with `from` and `to`. So the equality with `facets` holds
+    /// for every query this accepts.
+    ///
     /// Several corpora: a theme is its name (under the fold of labels),
     /// and its counts are added up over the searched corpora, as the
     /// theme facet's are.
@@ -1060,7 +1066,13 @@ impl Engine {
         }
         let query = q.query.trim();
         let mut notes = vec![];
-        let named = search::query_corpora(query)?;
+        let plan = search::Plan::parse(query)?;
+        if let Some(m) = &plan.filter.month {
+            bail!(
+                "month:{m} in the query: theme-months counts every month of its range, so a query does not pick one; use --from and --to"
+            );
+        }
+        let named = plan.corpora;
         let ids = if q.in_.is_empty() {
             named.clone()
         } else {

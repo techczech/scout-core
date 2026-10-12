@@ -47,6 +47,18 @@
 //!   refusal names the later line. Corrections of other values, fields
 //!   and items do not stand in the way. An undo line is not undone: make
 //!   the correction again.
+//! - Undo, like every operation, is refused for a key that has no tag
+//!   row (the item left `current.jsonl` after the correction was made),
+//!   before any write. The correction's line stays in the file, where the
+//!   reader does with it what it does with any line for a key without a
+//!   tag row: counts it (`corrections_unmatched`) and applies it to
+//!   nothing.
+//! - Whether an undo would be accepted (`list`: `undoable`, `why_not`) is
+//!   answered by running the undo itself up to its append
+//!   ([`State::undo_plan`]), the readiness of the file included
+//!   (`Jsonl::ready`, the checks of the append with no write). `undo`
+//!   calls the same function and then appends. There is no second copy
+//!   of any of its checks.
 //!
 //! Before any write, each operation:
 //!
@@ -331,9 +343,10 @@ pub struct ListedCorrection {
     pub undoes: Option<String>,
     /// Of a correction taken back: the undo line.
     pub undone_by: Option<String>,
-    /// `scout correct undo <id>` would be accepted now.
+    /// `scout correct undo <id>` would be accepted now: every check of
+    /// the undo up to its append passes.
     pub undoable: bool,
-    /// Why not, when it would not.
+    /// Why not, when it would not: the refusal `undo` would give.
     pub why_not: Option<String>,
 }
 
@@ -445,7 +458,9 @@ impl State {
         e.read == LineRead::Applied
     }
 
-    /// Why the correction at `at` cannot be undone now, if it cannot.
+    /// Why the line at `at` is not one an undo takes back, if it is not:
+    /// the first of the checks of [`State::undo_plan`], its only caller.
+    /// Not the whole answer to "would `undo` be accepted?".
     fn why_not_undoable(&self, at: usize) -> Option<String> {
         let e = &self.entries[at];
         let id = e.id.as_deref().unwrap_or_default();
@@ -498,6 +513,69 @@ impl State {
         }
     }
 
+    /// Every check of the undo of the line at `at_line`, in order, with
+    /// no write: the line is a correction, not undone, with no later
+    /// change of the same value in effect; its item still has a tag row;
+    /// an id is left; the reader would read the file with the undo line
+    /// as the file without the line taken back; and the file can take the
+    /// line (`Jsonl::ready`: the checks of the append itself). `undo`
+    /// appends [`UndoPlan::line`] after this; `list` asks this for every
+    /// line it shows. An error is the refusal `undo` gives.
+    fn undo_plan(&self, at_line: usize, now: &str) -> Result<UndoPlan> {
+        if let Some(why) = self.why_not_undoable(at_line) {
+            bail!("{why} (nothing was changed)");
+        }
+        let entry = &self.entries[at_line];
+        let id = entry.id.as_deref().unwrap_or_default();
+        let What::Change {
+            op,
+            value,
+            entity_type,
+        } = &entry.what
+        else {
+            bail!("{id}: not a correction (nothing was changed)");
+        };
+        self.item(&entry.key)?;
+        let mut plan = UndoPlan {
+            new_id: self.next_id()?,
+            at: now.to_string(),
+            key: entry.key.clone(),
+            undoes: id.to_string(),
+            op: *op,
+            value: value.clone(),
+            entity_type: entity_type.clone(),
+            tags: TopicInfo::default(),
+        };
+        // The file with the undo line must read as the file without the
+        // line taken back.
+        let mut with = self.file.bytes.clone();
+        with.extend_from_slice(self.file.text_of(&plan.line())?.as_bytes());
+        let without: Vec<u8> = self
+            .file
+            .bytes
+            .split_inclusive(|b| *b == b'\n')
+            .enumerate()
+            .filter(|(i, _)| *i != at_line)
+            .flat_map(|(_, l)| l.iter().copied())
+            .collect();
+        let (after, read) = self.source.with_corrections(&with);
+        let (meant, _) = self.source.with_corrections(&without);
+        let as_meant = read.len() == self.read.len() + 1
+            && read.last() == Some(&LineRead::Undo)
+            && read[at_line] == LineRead::Undone
+            && (0..self.read.len()).all(|i| i == at_line || read[i] == self.read[i])
+            && after == meant;
+        let Some(tags) = after.get(&entry.key).filter(|_| as_meant) else {
+            bail!(
+                "{}: the reader would not read the undo of {id} as the file without that line; nothing was changed",
+                self.file.path.display()
+            );
+        };
+        plan.tags = tags.info.clone();
+        self.file.ready(&plan.line())?;
+        Ok(plan)
+    }
+
     /// The item of `key` as the reader has it, or the refusal.
     fn item(&self, key: &str) -> Result<&TopicInfo> {
         match self.items.get(key) {
@@ -506,6 +584,42 @@ impl State {
                 "{key}: no tag row in {}; only an item the layer holds is corrected (nothing was changed)",
                 topics::LAYER_FILE
             ),
+        }
+    }
+}
+
+/// An undo every check allows ([`State::undo_plan`]): the line `undo`
+/// appends, and what it reports.
+struct UndoPlan {
+    new_id: String,
+    at: String,
+    key: String,
+    /// The correction taken back.
+    undoes: String,
+    op: Op,
+    value: String,
+    entity_type: Option<String>,
+    /// The item's tags as the reader has them with the undo line.
+    tags: TopicInfo,
+}
+
+impl UndoPlan {
+    /// The line checked, and the line appended.
+    fn line(&self) -> NewLine<'_> {
+        NewLine {
+            id: &self.new_id,
+            at: &self.at,
+            date: &self.at[..10.min(self.at.len())],
+            by: "dominik",
+            key: &self.key,
+            theme_add: None,
+            theme_remove: None,
+            entity_add: None,
+            entity_type: None,
+            entity_remove: None,
+            event_add: None,
+            event_remove: None,
+            undoes: Some(&self.undoes),
         }
     }
 }
@@ -1001,7 +1115,11 @@ impl CorrectionEditor {
     /// Refused, with nothing changed: no such correction; an undo line;
     /// one already undone; one after which a later line in effect touched
     /// the same theme, entity or event of the same item (the refusal
-    /// names it: undo that one first).
+    /// names it: undo that one first); a correction whose item has no tag
+    /// row any more (its line stays, and the reader goes on counting it
+    /// as a correction for an unknown key, applied to nothing); no id
+    /// left; a file that cannot take the line. Every one of these is
+    /// [`State::undo_plan`]'s, which `list` runs for its `undoable`.
     pub fn undo(&self, id: &str) -> Result<Corrected> {
         let id = id.trim();
         let mut state = self.read()?;
@@ -1015,86 +1133,36 @@ impl CorrectionEditor {
                 state.file.path.display()
             );
         };
-        if let Some(why) = state.why_not_undoable(at_line) {
-            bail!("{why} (nothing was changed)");
-        }
-        let entry = state.entries[at_line].clone();
-        let What::Change {
-            op,
-            value,
-            entity_type,
-        } = entry.what.clone()
-        else {
-            bail!("{id}: not a correction (nothing was changed)");
-        };
-        let new_id = state.next_id()?;
-        let at = self.now();
-        let line = NewLine {
-            id: &new_id,
-            at: &at,
-            date: &at[..10.min(at.len())],
-            by: "dominik",
-            key: &entry.key,
-            theme_add: None,
-            theme_remove: None,
-            entity_add: None,
-            entity_type: None,
-            entity_remove: None,
-            event_add: None,
-            event_remove: None,
-            undoes: Some(id),
-        };
-        // The file with the undo line must read as the file without the
-        // line taken back.
-        let mut with = state.file.bytes.clone();
-        with.extend_from_slice(state.file.text_of(&line)?.as_bytes());
-        let without: Vec<u8> = state
-            .file
-            .bytes
-            .split_inclusive(|b| *b == b'\n')
-            .enumerate()
-            .filter(|(i, _)| *i != at_line)
-            .flat_map(|(_, l)| l.iter().copied())
-            .collect();
-        let (after, read) = state.source.with_corrections(&with);
-        let (meant, _) = state.source.with_corrections(&without);
-        let as_meant = read.len() == state.read.len() + 1
-            && read.last() == Some(&LineRead::Undo)
-            && read[at_line] == LineRead::Undone
-            && (0..state.read.len()).all(|i| i == at_line || read[i] == state.read[i])
-            && after == meant;
-        if !as_meant {
-            bail!(
-                "{}: the reader would not read the undo of {id} as the file without that line; nothing was changed",
-                state.file.path.display()
-            );
-        }
-        state.file.append(&line)?;
+        let plan = state.undo_plan(at_line, &self.now())?;
+        state.file.append(&plan.line())?;
         Ok(Corrected {
             tool: "scout correct undo".into(),
-            at,
-            id: new_id,
+            at: plan.at,
+            id: plan.new_id,
             op: "undo".into(),
-            value,
-            entity_type: entity_type.filter(|_| op == Op::EntityAdd),
-            undoes: Some(id.to_string()),
+            value: plan.value,
+            entity_type: plan.entity_type.filter(|_| plan.op == Op::EntityAdd),
+            undoes: Some(plan.undoes),
             file: state.file.path.display().to_string(),
             reindex_needed: true,
-            tags: state.item_after(&after, &entry.key),
-            key: entry.key,
+            tags: plan.tags,
+            key: plan.key,
         })
     }
 
     /// The item `key`: its tags with no correction applied, its tags as
     /// the reader has them, and the lines of the corrections file for it,
-    /// newest first, each with whether `undo` would take it now. Reads
-    /// only. The file is checked as for a write, so a line the writer
-    /// would refuse to append after is an error here too.
+    /// newest first, each with whether `undo` would take it now: the
+    /// answer of [`State::undo_plan`], the function `undo` runs before
+    /// its append, so `why_not` is word for word the refusal `undo`
+    /// would give. Reads only. The file is checked as for a write, so a
+    /// line the writer would refuse to append after is an error here too.
     pub fn list(&self, key: &str) -> Result<Listing> {
         let key = text("the key", key)?;
         let state = self.read()?;
         let effective = state.item(&key)?.clone();
         let (model, _) = state.source.with_corrections(b"");
+        let now = self.now();
         let corrections = state
             .entries
             .iter()
@@ -1102,7 +1170,7 @@ impl CorrectionEditor {
             .filter(|(_, e)| e.key == key)
             .rev()
             .map(|(i, e)| {
-                let why_not = state.why_not_undoable(i);
+                let why_not = state.undo_plan(i, &now).err().map(|e| format!("{e:#}"));
                 let (op, value, entity_type, fields, undoes) = match &e.what {
                     What::Change {
                         op,
@@ -1150,12 +1218,6 @@ impl CorrectionEditor {
             corrections,
             key,
         })
-    }
-}
-
-impl State {
-    fn item_after(&self, after: &Items, key: &str) -> TopicInfo {
-        after.get(key).map(|it| it.info.clone()).unwrap_or_default()
     }
 }
 

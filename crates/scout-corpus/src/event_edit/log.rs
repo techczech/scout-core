@@ -32,11 +32,23 @@
 //! [`DecisionLine`]. A line without one of its keys, or with a key of no
 //! kind, is malformed.
 //!
-//! [`MergeLog::ready_for_undo`] and [`Decisions::ready`] make the same
-//! checks without writing. `unmerge` and `decide` append their line last,
-//! after records have changed, so they call these before their first
-//! write; `merge` appends its line first, where the append's own checks
-//! are already ahead of every write.
+//! One function, two callers. Every check above is made by
+//! [`Jsonl::check`], and by nothing else: the append calls it and then
+//! writes to the descriptor it opened; "would an append succeed?" is the
+//! same call without the write ([`Jsonl::ready`],
+//! [`MergeLog::ready_to_append`], [`MergeLog::ready_for_undo`],
+//! [`Decisions::ready`]). The two differ in one place only: where no file
+//! is there, the append creates it and the question only sees that the
+//! name is still free. `unmerge` and `decide` append their line last,
+//! after records have changed, so they ask before their first write;
+//! `merge` asks before its first write too, and `apply-proposals` asks for
+//! every merge it plans, with and without `--apply`.
+//!
+//! A check gives two answers, kept apart. The line: its length, and the
+//! file's length with it (and, for the merge log, whether an id is left).
+//! The file, whatever the line: its type, its link count, whether it is
+//! the file that was read at the length read, whether it opens for
+//! append.
 //!
 //! Ids of the merge log are `m` and six to nine digits, so at most
 //! `m999999999` ([`MAX_ID`]). A line with any other id is malformed. When
@@ -264,7 +276,7 @@ impl Jsonl {
 
     /// Is the open file one an append may write to? A regular file with
     /// one link, and, when a file was read, that file at the length read.
-    /// Gives its length.
+    /// Gives its length. Called by [`Jsonl::check`] only.
     fn appendable(&self, meta: &std::fs::Metadata) -> Result<u64> {
         let at = self.path.display();
         if !meta.is_file() {
@@ -286,47 +298,87 @@ impl Jsonl {
         Ok(meta.len())
     }
 
-    /// Every check of [`Jsonl::append`], with no write: for an operation
-    /// that appends its line after it has changed records.
-    fn ready<T: Serialize>(&self, line: &T) -> Result<()> {
+    /// Every check of an append of `line`, to a file that has grown by
+    /// `planned` bytes since it was read (lines a run means to append
+    /// first; 0 for the next line). This is the one place the checks are
+    /// made: [`Jsonl::append`] calls it with `write` and writes to the
+    /// descriptor it gives, and every "would the append succeed?" answer
+    /// is the same call without `write`.
+    ///
+    /// The outer result is the line's: over the line limit, or the file
+    /// with it over the file limit. The inner one is the file's, whatever
+    /// the line: it is opened for append without following a link (so a
+    /// file that may not be written fails here, with or without `write`),
+    /// and on the descriptor it must be a regular file with one link, the
+    /// file that was read, at the length read.
+    ///
+    /// Where no file was read: with `write` the file is created
+    /// (create-new); without, the name must still be free and nothing is
+    /// created.
+    fn check<T: Serialize>(
+        &self,
+        line: &T,
+        planned: u64,
+        write: bool,
+    ) -> Result<(String, Result<Option<Target>>)> {
+        let text = self.text_after(line, planned)?;
+        Ok((text, self.target(write)))
+    }
+
+    /// The file's half of [`Jsonl::check`].
+    fn target(&self, write: bool) -> Result<Option<Target>> {
         let at = self.path.display().to_string();
-        self.text_of(line)?;
-        if self.read.is_none() {
+        let new = self.read.is_none();
+        if new && !write {
             return match std::fs::symlink_metadata(&self.path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e).with_context(|| format!("look at {at}")),
                 Ok(_) => bail!("{at}: appeared since it was looked for (another tool made it meanwhile); nothing was changed"),
             };
         }
-        let file = no_follow(std::fs::OpenOptions::new().read(true))
-            .open(&self.path)
-            .with_context(|| {
-                format!("open {at} (it must be a plain file, not a link; nothing was changed)")
-            })?;
-        let meta = file.metadata().with_context(|| format!("look at {at}"))?;
-        self.appendable(&meta).map(|_| ())
-    }
-
-    /// Append `line` and a newline in one `write` call, then sync. Every
-    /// check is made before the write, on the open descriptor (see the
-    /// notes of this file). A file that was not there is created here,
-    /// create-new, with the default mode of a new file (the umask applies).
-    pub(crate) fn append<T: Serialize>(&mut self, line: &T) -> Result<()> {
-        let at = self.path.display().to_string();
-        let text = self.text_of(line)?;
         let mut open = std::fs::OpenOptions::new();
         open.append(true);
-        let new = self.read.is_none();
         if new {
             open.create_new(true);
         }
-        let mut file = no_follow(&mut open).open(&self.path).with_context(|| {
+        let file = no_follow(&mut open).open(&self.path).with_context(|| {
             format!(
-                "open {at} to append (it must be a plain file, not a link; nothing was changed)"
+                "open {at} to append (it must be a plain file, not a link, that may be written; nothing was changed)"
             )
         })?;
         let meta = file.metadata().with_context(|| format!("look at {at}"))?;
-        let before = self.appendable(&meta)?;
+        let len = self.appendable(&meta)?;
+        Ok(Some(Target {
+            file,
+            ident: ident_of(&meta),
+            len,
+        }))
+    }
+
+    /// Would an append of `line` succeed? [`Jsonl::check`] with no write,
+    /// the two answers as one: for an operation that appends its line
+    /// after it has changed records, and for a listing that says what an
+    /// operation would do.
+    pub(crate) fn ready<T: Serialize>(&self, line: &T) -> Result<()> {
+        self.check(line, 0, false)?.1.map(|_| ())
+    }
+
+    /// Append `line` and a newline in one `write` call, then sync. Every
+    /// check is [`Jsonl::check`]'s, made before the write, on the open
+    /// descriptor (see the notes of this file). A file that was not there
+    /// is created there, create-new, with the default mode of a new file
+    /// (the umask applies).
+    pub(crate) fn append<T: Serialize>(&mut self, line: &T) -> Result<()> {
+        let at = self.path.display().to_string();
+        let (text, target) = self.check(line, 0, true)?;
+        let Some(Target {
+            mut file,
+            ident,
+            len: before,
+        }) = target?
+        else {
+            bail!("{at}: not opened to append; nothing was changed");
+        };
         let wrote = file
             .write(text.as_bytes())
             .with_context(|| format!("append to {at}"))?;
@@ -336,8 +388,41 @@ impl Jsonl {
             bail!("{at}: the line could not be appended whole; nothing was changed");
         }
         file.sync_all().with_context(|| format!("sync {at}"))?;
-        self.read = Some((ident_of(&meta), before + wrote as u64));
+        self.read = Some((ident, before + wrote as u64));
         Ok(())
+    }
+}
+
+/// The file an append writes to: open, and checked on its descriptor.
+struct Target {
+    file: std::fs::File,
+    ident: (u64, u64),
+    len: u64,
+}
+
+/// What a run means to append before the line asked about.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Planned {
+    pub lines: u64,
+    pub bytes: u64,
+}
+
+/// The answer of [`MergeLog::ready_to_append`] for a line the log's
+/// limits allow.
+pub(super) struct Ready {
+    /// The line, with the id it would take.
+    pub line: MergeLine,
+    /// Its length with its newline.
+    pub bytes: u64,
+    /// Whether the file can be appended to at all: the same answer for
+    /// every line.
+    pub file: Result<()>,
+}
+
+impl Ready {
+    /// The line, when the file can take it.
+    pub fn line(self) -> Result<MergeLine> {
+        self.file.map(|()| self.line)
     }
 }
 
@@ -437,7 +522,7 @@ impl MergeLog {
 
     /// The id of the line after `planned` further lines. Refused past the
     /// largest id.
-    pub fn id_after(&self, planned: u64) -> Result<String> {
+    fn id_after(&self, planned: u64) -> Result<String> {
         match self
             .last
             .checked_add(planned)
@@ -454,12 +539,28 @@ impl MergeLog {
         }
     }
 
-    /// The size checks an append of `line` makes (the line limit, and the
-    /// file limit), for a log that `planned` bytes of other lines are
-    /// appended to first. No file is looked at. Gives the line's length
-    /// with its newline.
-    pub fn fits_after(&self, line: &MergeLine, planned: u64) -> Result<u64> {
-        Ok(self.file.text_after(line, planned)?.len() as u64)
+    /// Would the append of a merge line succeed, after the `planned`
+    /// lines of a run? `make` builds the line from the id it would take.
+    /// This is what [`MergeLog::append_merge`] goes through
+    /// ([`Jsonl::check`]) and the id, with no write: `merge` calls it
+    /// before its first write, and `apply-proposals` for every merge it
+    /// plans, with and without `--apply`.
+    ///
+    /// An error is the line's: no id left, a line over the line limit, a
+    /// log it would take over the file limit. [`Ready::file`] is the
+    /// file's, whatever the line.
+    pub fn ready_to_append(
+        &self,
+        planned: Planned,
+        make: impl FnOnce(String) -> MergeLine,
+    ) -> Result<Ready> {
+        let line = make(self.id_after(planned.lines)?);
+        let (text, target) = self.file.check(&line, planned.bytes, false)?;
+        Ok(Ready {
+            line,
+            bytes: text.len() as u64,
+            file: target.map(|_| ()),
+        })
     }
 
     /// The checks of an append of `line`, with no write.
@@ -641,6 +742,88 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(e.contains("line 1: longer than 120 bytes"), "{e}");
+    }
+
+    /// What the question says (`ready`) is what the append does, in the
+    /// same words, for every state of the file; a refused append writes
+    /// nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_question_and_the_append_give_one_answer() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(DECISIONS_LOG);
+        let other = tmp.path().join("other-name");
+        let line = decision("x");
+        let read = || Jsonl::read_with(tmp.path(), DECISIONS_LOG, SMALL).unwrap();
+        let same = |log: &mut Jsonl, why: &str| {
+            let before = std::fs::read(&path).ok();
+            let asked = format!("{:#}", log.ready(&line).unwrap_err());
+            let done = format!("{:#}", log.append(&line).unwrap_err());
+            assert_eq!(asked, done);
+            assert!(asked.contains(why), "want {why:?} in {asked}");
+            assert_eq!(std::fs::read(&path).ok(), before, "{why}");
+        };
+        // No file: both say yes, and the append makes it.
+        let mut log = read();
+        log.ready(&line).unwrap();
+        assert!(!path.exists(), "the question made the file");
+        log.append(&line).unwrap();
+        log.ready(&line).unwrap();
+        // A second name.
+        std::fs::hard_link(&path, &other).unwrap();
+        same(&mut log, "has 2 hard links");
+        same(&mut read(), "has 2 hard links");
+        std::fs::remove_file(&other).unwrap();
+        // Written by another since it was read.
+        let mut stale = read();
+        read().append(&line).unwrap();
+        same(&mut stale, "changed since it was read");
+        // Replaced by another file of the same length.
+        let mut stale = read();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::rename(&path, &other).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        same(&mut stale, "changed since it was read");
+        std::fs::remove_file(&other).unwrap();
+        // Not open to writing.
+        let mut log = read();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        if std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .is_err()
+        {
+            same(&mut log, "to append");
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // A symlink, or a folder, where the file was.
+        let mut log = read();
+        std::fs::rename(&path, &other).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        same(&mut log, "to append");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        same(&mut log, "to append");
+        std::fs::remove_dir(&path).unwrap();
+        // Read as missing, there by the time of the append.
+        let mut absent = read();
+        std::fs::write(&path, "").unwrap();
+        let asked = absent.ready(&line).unwrap_err().to_string();
+        assert!(
+            asked.contains("appeared since it was looked for"),
+            "{asked}"
+        );
+        assert!(absent.append(&line).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        // The line's own limits.
+        let mut log = read();
+        let long = decision(&"x".repeat(SMALL.line as usize));
+        let asked = log.ready(&long).unwrap_err().to_string();
+        assert_eq!(asked, log.append(&long).unwrap_err().to_string());
+        // And yes means yes.
+        log.ready(&line).unwrap();
+        log.append(&line).unwrap();
     }
 
     #[test]

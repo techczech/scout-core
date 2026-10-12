@@ -262,3 +262,46 @@ fn facets_and_topics_match_the_facade_and_build_reports_the_join() {
     );
     assert_eq!(files(&h), before, "archive untouched");
 }
+
+#[test]
+fn theme_months_refuses_a_month_field_in_its_query_with_exit_2() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cfg, data, _) = fixture(tmp.path());
+    assert!(scout(&cfg, &data, &["index", "build"]).status.success());
+    for args in [
+        vec!["topics", "theme-months", "month:2026-09"],
+        vec!["topics", "theme-months", "month:2026-09", "--json"],
+        vec![
+            "topics",
+            "theme-months",
+            "proof",
+            "month:2026",
+            "--from",
+            "2026-09",
+        ],
+    ] {
+        let o = scout(&cfg, &data, &args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(o.stdout.is_empty(), "{args:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("in the query") && err.contains("use --from and --to"),
+            "{args:?}: {err}"
+        );
+    }
+    // The same months by the bounds, and any other field, are taken.
+    let o = scout(
+        &cfg,
+        &data,
+        &[
+            "topics",
+            "theme-months",
+            "ai:true",
+            "--from",
+            "2026-09",
+            "--to",
+            "2026-09",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+}

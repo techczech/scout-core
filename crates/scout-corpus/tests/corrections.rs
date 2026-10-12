@@ -912,14 +912,191 @@ fn the_listing_gives_the_model_tags_the_tags_in_effect_and_every_line() {
             {"id": "c000004", "line": 4, "at": NOW, "date": "2026-10-12", "by": "dominik",
              "op": "undo", "value": null, "undoes": "c000001", "undone_by": null,
              "undoable": false,
-             "why_not": "c000004 is the undo of c000001; an undo is not undone, make the correction again"},
+             "why_not": "c000004 is the undo of c000001; an undo is not undone, make the correction again (nothing was changed)"},
             {"id": "c000002", "line": 2, "at": NOW, "date": "2026-10-12", "by": "dominik",
              "op": "entity_add", "value": "Astra", "entity_type": "model", "undoes": null,
              "undone_by": null, "undoable": true, "why_not": null},
             {"id": "c000001", "line": 1, "at": NOW, "date": "2026-10-12", "by": "dominik",
              "op": "theme_add", "value": "Metaphor and cognition", "undoes": null,
              "undone_by": "c000004", "undoable": false,
-             "why_not": "c000001: already undone, by c000004"},
+             "why_not": "c000001: already undone, by c000004 (nothing was changed)"},
         ])
     );
+}
+
+/// For every line `list` shows of `key`: `undoable` and `why_not` are
+/// what `undo` then does. A line said not undoable is refused in the
+/// words of its `why_not`, with nothing written; one said undoable is
+/// undone, on a copy of the archive, so this archive stays as it is.
+/// Gives `(id, undoable)`, newest first.
+fn listing_is_what_undo_does(fx: &Fx, key: &str) -> Vec<(String, bool)> {
+    let e = fx.editor();
+    let listed = e.list(key).unwrap();
+    let mut out = Vec::new();
+    for c in &listed.corrections {
+        assert_eq!(c.undoable, c.why_not.is_none(), "{c:?}");
+        let Some(id) = &c.id else {
+            assert!(!c.undoable, "a line without an id cannot be named: {c:?}");
+            continue;
+        };
+        out.push((id.clone(), c.undoable));
+        if let Some(why) = &c.why_not {
+            let before = tree(fx.root());
+            let refusal = format!("{:#}", e.undo(id).expect_err(why));
+            assert_eq!(&refusal, why, "{id}: list and undo disagree");
+            assert!(tree(fx.root()) == before, "{id}: a refused undo wrote");
+            continue;
+        }
+        // On a copy: the same files under another root.
+        let copy = tempfile::tempdir().unwrap();
+        for (path, bytes) in tree(fx.root()) {
+            let to = copy.path().join(path.strip_prefix(fx.root()).unwrap());
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::write(to, bytes).unwrap();
+        }
+        let there = CorrectionEditor::open(copy.path()).unwrap().with_now(NOW);
+        let done = there
+            .undo(id)
+            .unwrap_or_else(|e| panic!("{id}: listed undoable, and undo says {e:#}"));
+        assert_eq!(done.undoes.as_deref(), Some(id.as_str()));
+    }
+    out
+}
+
+fn flags(l: &[(String, bool)]) -> Vec<(&str, bool)> {
+    l.iter().map(|(id, u)| (id.as_str(), *u)).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn undoable_in_the_listing_is_the_answer_undo_gives() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = fixture(true);
+    let e = fx.editor();
+    // The states the listing already told apart: a later change of the
+    // same value, an undo line, a line undone, a hand-written line.
+    e.add_theme("x:4", MATHS).unwrap();
+    e.remove_theme("x:4", MATHS).unwrap();
+    e.add_entity("x:4", "Astra", "model").unwrap();
+    e.add_to_event("x:4", GEMINI).unwrap();
+    e.undo("c000003").unwrap();
+    let mut text = fs::read_to_string(fx.file()).unwrap();
+    text.push_str("{\"key\":\"x:4\",\"ai_related\":false}\n");
+    fs::write(fx.file(), &text).unwrap();
+    assert_eq!(
+        flags(&listing_is_what_undo_does(&fx, "x:4")),
+        [
+            ("c000005", false),
+            ("c000004", true),
+            ("c000003", false),
+            ("c000002", true),
+            ("c000001", false)
+        ]
+    );
+
+    // A second name for the file: every undo is refused at its append,
+    // so no line is undoable, and the listing says why in undo's words.
+    let outside = tempfile::tempdir().unwrap();
+    let other = outside.path().join("other-name.jsonl");
+    fs::hard_link(fx.file(), &other).unwrap();
+    let linked = listing_is_what_undo_does(&fx, "x:4");
+    assert!(linked.iter().all(|(_, undoable)| !undoable), "{linked:?}");
+    let l = e.list("x:4").unwrap();
+    let why = |id: &str| {
+        l.corrections
+            .iter()
+            .find(|c| c.id.as_deref() == Some(id))
+            .and_then(|c| c.why_not.clone())
+            .unwrap()
+    };
+    assert!(
+        why("c000004").contains("has 2 hard links"),
+        "{}",
+        why("c000004")
+    );
+    // The first refusal of the undo is the one given: an undone line is
+    // refused for that before the file is looked at.
+    assert!(
+        why("c000003").contains("already undone"),
+        "{}",
+        why("c000003")
+    );
+    fs::remove_file(&other).unwrap();
+
+    // A file that may not be written.
+    fs::set_permissions(fx.file(), fs::Permissions::from_mode(0o444)).unwrap();
+    if fs::OpenOptions::new().append(true).open(fx.file()).is_err() {
+        let locked = listing_is_what_undo_does(&fx, "x:4");
+        assert!(locked.iter().all(|(_, undoable)| !undoable), "{locked:?}");
+    }
+    fs::set_permissions(fx.file(), fs::Permissions::from_mode(0o644)).unwrap();
+
+    // No id left for the undo line: the correction that holds the last
+    // id is in effect, and cannot be undone.
+    let last = r#"{"id":"c999999999","at":"t","date":"d","by":"dominik","key":"x:2","entity_add":["Astra"],"entity_type":"model"}"#;
+    fs::write(fx.file(), format!("{text}{last}\n")).unwrap();
+    assert_eq!(fx.reader(2).entities, ["Astra"]);
+    assert_eq!(
+        flags(&listing_is_what_undo_does(&fx, "x:2")),
+        [("c999999999", false)]
+    );
+    let l = e.list("x:2").unwrap();
+    let why = l.corrections[0].why_not.as_deref().unwrap();
+    assert!(
+        why.contains("the last correction has the largest id there is (c999999999)"),
+        "{why}"
+    );
+    // And every other line of the file is in the same case.
+    let stuck = listing_is_what_undo_does(&fx, "x:4");
+    assert!(stuck.iter().all(|(_, undoable)| !undoable), "{stuck:?}");
+}
+
+#[test]
+fn undo_is_refused_for_an_item_that_has_no_tag_row_any_more() {
+    let fx = fixture(true);
+    let e = fx.editor();
+    e.add_theme("x:4", MATHS).unwrap();
+    e.add_theme("x:1", VIBE).unwrap();
+    listing_is_what_undo_does(&fx, "x:4");
+    // The model's rows are written again without x:4.
+    let rows = fs::read_to_string(fx.root().join(topics::LAYER_FILE)).unwrap();
+    let kept: String = rows
+        .lines()
+        .filter(|l| !l.contains("\"key\":\"x:4\""))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_ne!(kept, rows);
+    write(fx.root(), topics::LAYER_FILE, &kept);
+    // Undo, like every operation on that key, is refused before a write.
+    let why = "x:4: no tag row in analysis/topics/current.jsonl";
+    fx.refused(why, || e.undo("c000001"));
+    fx.refused(why, || e.add_theme("x:4", VIBE));
+    fx.refused(why, || e.list("x:4"));
+    assert_eq!(fx.lines().len(), 2);
+    // The line stays, and the reader does with it what it does with any
+    // correction for a key without a tag row: counts it, applies it to
+    // nothing. The other item's correction is read as before.
+    let layer = topics::read_layer(fx.root()).unwrap().unwrap();
+    assert!(!layer.items.contains_key("x:4"));
+    assert_eq!(
+        (
+            layer.corrections,
+            layer.corrections_unmatched,
+            layer.corrections_bad_lines
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!(fx.reader(1).themes, [MATHS, VIBE]);
+    // The other item's corrections are undone as ever.
+    assert_eq!(
+        flags(&listing_is_what_undo_does(&fx, "x:1")),
+        [("c000002", true)]
+    );
+    e.undo("c000002").unwrap();
+    assert_eq!(fx.reader(1).themes, [MATHS]);
+    // When the row is back, so is the undo.
+    write(fx.root(), topics::LAYER_FILE, &rows);
+    assert_eq!(fx.reader(4).themes, [MATHS]);
+    e.undo("c000001").unwrap();
+    assert!(fx.reader(4).themes.is_empty());
 }

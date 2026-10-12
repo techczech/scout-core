@@ -1,6 +1,13 @@
 //! Human output for every command: compact and aligned (J9 frame).
 //! Formatting only; every number comes from `scout-corpus`.
+//!
+//! Every string printed here that is not a number or a word of this file
+//! goes through [`crate::term::safe`] (a text of several lines through
+//! `safe_lines`), so nothing from an archive file, the registry or an
+//! argument reaches the terminal as a control sequence. A `{:?}` value is
+//! left to Rust's own escaping of control characters.
 
+use crate::term::{safe, safe_lines};
 use scout_corpus::api::{
     CorporaList, CorpusShow, IndexBuildReport, IndexStatusReport, InitDefaults, Removed,
 };
@@ -24,8 +31,16 @@ pub fn code(any: bool) -> ExitCode {
     }
 }
 
+/// Text of a file on one line, safe for a terminal: runs of white space
+/// (line breaks among them) become one space, and what is left goes
+/// through [`safe`].
 fn flat(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    safe(&s.split_whitespace().collect::<Vec<_>>().join(" ")).into_owned()
+}
+
+/// A list of names on one line, safe for a terminal.
+fn list(items: &[String], sep: &str) -> String {
+    safe(&items.join(sep)).into_owned()
 }
 
 fn keep_tail(s: &str, n: usize) -> String {
@@ -67,8 +82,8 @@ pub fn print_kwic(r: &KwicResults) {
         r.total,
         r.pieces,
         r.term,
-        r.corpora.join(", "),
-        r.sort,
+        list(&r.corpora, ", "),
+        safe(&r.sort),
         r.returned
     );
     const SIDE: usize = 48;
@@ -83,8 +98,8 @@ pub fn print_kwic(r: &KwicResults) {
         println!(
             "{left}  [{}]  {right}  {:<10} {}:{}",
             flat(&l.node),
-            date,
-            l.rel_path,
+            safe(date),
+            safe(&l.rel_path),
             l.line
         );
     }
@@ -100,7 +115,7 @@ pub fn print_dist(d: &Distribution) {
             .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default(),
-        d.corpora.join(", ")
+        list(&d.corpora, ", ")
     );
     let w = d
         .buckets
@@ -120,7 +135,7 @@ pub fn print_dist(d: &Distribution) {
     for b in &d.buckets {
         println!(
             "{}  {:>6}  {:>6}  {:>10.1}  {:>10}",
-            pad_right(&b.key, w),
+            pad_right(&safe(&b.key), w),
             b.hits,
             b.pieces,
             b.per_million,
@@ -143,7 +158,7 @@ pub fn print_ngrams(r: &NgramResults) {
         r.grams.len(),
         r.n_min,
         r.n_max,
-        r.corpora.join(", "),
+        list(&r.corpora, ", "),
         r.documents,
         r.total_tokens,
         period,
@@ -169,7 +184,10 @@ pub fn print_ngrams(r: &NgramResults) {
             .unwrap_or_default();
         println!(
             "{:>7}  {:>5} pieces  {}{}",
-            g.count, g.pieces, g.gram, years
+            g.count,
+            g.pieces,
+            safe(&g.gram),
+            years
         );
         if let Some(d) = &g.dist {
             println!("{:>16}{}", "", dist_line(d));
@@ -183,8 +201,8 @@ fn dist_line(d: &RowDist) -> String {
         .buckets
         .iter()
         .map(|b| match &b.title {
-            Some(t) => format!("{}:{}", keep_head(t, 40), b.count),
-            None => format!("{}:{}", b.key, b.count),
+            Some(t) => format!("{}:{}", safe(&keep_head(t, 40)), b.count),
+            None => format!("{}:{}", safe(&b.key), b.count),
         })
         .collect();
     if let Some(o) = &d.other {
@@ -206,7 +224,7 @@ pub fn print_collocates(r: &CollocResults) {
         "{} collocates of {:?} in {} (f={} of {} tokens · ±{} · {} · min {}{}) · showing {}",
         r.candidates,
         r.node,
-        r.corpora.join(", "),
+        list(&r.corpora, ", "),
         r.node_freq,
         r.total_tokens,
         r.window,
@@ -237,7 +255,7 @@ pub fn print_collocates(r: &CollocResults) {
     for x in &r.rows {
         println!(
             "{}  {:>6}  {:>7}  {:>7.2}  {:>6.2}",
-            pad_right(&x.collocate, w),
+            pad_right(&safe(&x.collocate), w),
             x.count,
             x.collocate_freq,
             x.logdice,
@@ -261,15 +279,15 @@ pub fn print_compare(r: &CompareResults) {
     );
     println!(
         "  A = {} in {} (f={}, {} tokens)",
-        r.a.spec,
-        r.a.corpora.join(", "),
+        safe(&r.a.spec),
+        list(&r.a.corpora, ", "),
         r.a.node_freq,
         r.a.total_tokens
     );
     println!(
         "  B = {} in {} (f={}, {} tokens)",
-        r.b.spec,
-        r.b.corpora.join(", "),
+        safe(&r.b.spec),
+        list(&r.b.corpora, ", "),
         r.b.node_freq,
         r.b.total_tokens
     );
@@ -297,7 +315,7 @@ pub fn print_compare(r: &CompareResults) {
         };
         println!(
             "{}  {:>6} {:>7}  {:>6} {:>7}  {:>7}  {:>6}",
-            pad_right(&x.collocate, w),
+            pad_right(&safe(&x.collocate), w),
             x.a.count,
             opt3(sa),
             x.b.count,
@@ -309,7 +327,7 @@ pub fn print_compare(r: &CompareResults) {
 }
 
 fn print_keys(title: &str, rows: &[KeyWord]) {
-    println!("{title}");
+    println!("{}", safe(title));
     if rows.is_empty() {
         println!("  (none)");
         return;
@@ -333,7 +351,7 @@ fn print_keys(title: &str, rows: &[KeyWord]) {
     for x in rows {
         println!(
             "  {}  {:>6} {:>6}  {:>9.1} {:>9.1}  {:>8.1}  {:>8}",
-            pad_right(&x.word, w),
+            pad_right(&safe(&x.word), w),
             x.a,
             x.b,
             x.a_per_million,
@@ -349,14 +367,14 @@ fn print_keys(title: &str, rows: &[KeyWord]) {
 pub fn print_keyness(r: &KeynessResults) {
     println!(
         "keyness · A = {} ({} docs, {} tokens in {}) · B = {} ({} docs, {} tokens in {})",
-        r.a.spec,
+        safe(&r.a.spec),
         r.a.documents,
         r.a.tokens,
-        r.a.corpora.join(", "),
-        r.b.spec,
+        list(&r.a.corpora, ", "),
+        safe(&r.b.spec),
         r.b.documents,
         r.b.tokens,
-        r.b.corpora.join(", ")
+        list(&r.b.corpora, ", ")
     );
     println!(
         "  log-likelihood G2 ≥ {} (p < 0.05) · min {}{}",
@@ -376,7 +394,7 @@ pub fn print_keyness(r: &KeynessResults) {
 }
 
 pub fn print_profile(p: &Profile) {
-    println!("{:?} in {}", p.word, p.corpora.join(", "));
+    println!("{:?} in {}", p.word, list(&p.corpora, ", "));
     println!(
         "  frequency   {}  ({:.1} per million of {} tokens)",
         p.frequency, p.per_million, p.total_tokens
@@ -385,12 +403,14 @@ pub fn print_profile(p: &Profile) {
     match &p.first_used {
         Some(f) => println!(
             "  first used  {}  {}  ({}:{})",
-            f.date_display
-                .as_deref()
-                .or(f.date.as_deref())
-                .unwrap_or("—"),
-            f.title,
-            f.rel_path,
+            safe(
+                f.date_display
+                    .as_deref()
+                    .or(f.date.as_deref())
+                    .unwrap_or("—")
+            ),
+            safe(&f.title),
+            safe(&f.rel_path),
             f.line
         ),
         None => println!("  first used  —"),
@@ -399,7 +419,7 @@ pub fn print_profile(p: &Profile) {
         .by_year
         .iter()
         .filter(|b| b.hits > 0)
-        .map(|b| format!("{}:{}", b.key, b.hits))
+        .map(|b| format!("{}:{}", safe(&b.key), b.hits))
         .collect();
     println!("  by year     {}", years.join(" "));
     if !p.top_documents.is_empty() {
@@ -412,8 +432,8 @@ pub fn print_profile(p: &Profile) {
                 "    {:>9.1}  {:>3} hits  {:<10}  {}",
                 d.per_million,
                 d.hits,
-                d.date.as_deref().unwrap_or("—"),
-                d.title
+                safe(d.date.as_deref().unwrap_or("—")),
+                safe(&d.title)
             );
         }
     }
@@ -421,7 +441,7 @@ pub fn print_profile(p: &Profile) {
         .collocates
         .items
         .iter()
-        .map(|c| format!("{} {:.1} ({})", c.collocate, c.logdice, c.count))
+        .map(|c| format!("{} {:.1} ({})", safe(&c.collocate), c.logdice, c.count))
         .collect();
     println!(
         "  collocates  (logDice, ±{}, min {}){}",
@@ -443,23 +463,23 @@ pub fn print_profile(p: &Profile) {
         }
     );
     for g in &p.ngrams.items {
-        println!("    {:>5}  {}", g.count, g.gram);
+        println!("    {:>5}  {}", g.count, safe(&g.gram));
     }
 }
 
 pub fn print_verify(v: &VerifyResult) {
     if !v.found {
-        println!("not found in {}", v.corpora.join(", "));
+        println!("not found in {}", list(&v.corpora, ", "));
         return;
     }
     println!("found {} match(es)", v.matches.len());
     for m in &v.matches {
         println!(
             "  {}:{}  {}  {}",
-            m.rel_path,
+            safe(&m.rel_path),
             m.line,
-            m.date.as_deref().unwrap_or("—"),
-            m.title
+            safe(m.date.as_deref().unwrap_or("—")),
+            safe(&m.title)
         );
         println!("    > {}", keep_head(&flat(&m.original), 200));
     }
@@ -471,19 +491,19 @@ pub fn print_hits(res: &scout_corpus::SearchResults) {
         res.total_documents,
         res.total_passages,
         res.query,
-        res.corpora.join(", "),
+        list(&res.corpora, ", "),
         res.mode
             .as_deref()
-            .map(|m| format!(" ({m})"))
+            .map(|m| format!(" ({})", safe(m)))
             .unwrap_or_default()
     );
     if !res.plan.ignored.is_empty() {
-        println!("(not applied here: {})", res.plan.ignored.join(" "));
+        println!("(not applied here: {})", list(&res.plan.ignored, " "));
     }
     for (i, d) in res.results.iter().enumerate() {
         let hit = &d.hits[0];
         println!();
-        println!("{:>3}. [{}] {}", i + 1, d.corpus, d.title);
+        println!("{:>3}. [{}] {}", i + 1, safe(&d.corpus), safe(&d.title));
         let mut date = d
             .date
             .as_deref()
@@ -498,8 +518,12 @@ pub fn print_hits(res: &scout_corpus::SearchResults) {
             .map(|s| format!("  cos {s:.3}"))
             .unwrap_or_default();
         println!(
-            "     {date:<10}  {genre:<10}  {}:{}  ({} passages){sim}",
-            d.rel_path, hit.line, d.passage_count
+            "     {:<10}  {:<10}  {}:{}  ({} passages){sim}",
+            safe(&date),
+            safe(&genre),
+            safe(&d.rel_path),
+            hit.line,
+            d.passage_count
         );
         let q = flat(&hit.quote);
         let q = if q.chars().count() > 220 {
@@ -518,15 +542,15 @@ pub fn print_similar(res: &SimilarResults) {
         res.total_passages,
         res.seeds.len(),
         if res.seeds.len() == 1 { "" } else { "s" },
-        res.corpora.join(", ")
+        list(&res.corpora, ", ")
     );
     for (i, s) in res.seeds.iter().enumerate() {
         println!(
             "  seed {}: [{}] {}  {}",
             i + 1,
-            s.corpus,
-            s.title,
-            s.passage_id
+            safe(&s.corpus),
+            safe(&s.title),
+            safe(&s.passage_id)
         );
     }
     for (i, r) in res.results.iter().enumerate() {
@@ -537,17 +561,24 @@ pub fn print_similar(res: &SimilarResults) {
             .map(|n| n + 1)
             .unwrap_or(0);
         println!();
-        println!("{:>3}. [{}] {}  ({:.3})", i + 1, r.corpus, r.title, r.score);
+        println!(
+            "{:>3}. [{}] {}  ({:.3})",
+            i + 1,
+            safe(&r.corpus),
+            safe(&r.title),
+            r.score
+        );
         let date = r
             .date
             .as_deref()
             .map(|s| s.get(..10).unwrap_or(s).to_string())
             .unwrap_or_else(|| "—".into());
         println!(
-            "     {date:<10}  {}:{}  like seed {seed} · shared: {}",
-            r.rel_path,
+            "     {:<10}  {}:{}  like seed {seed} · shared: {}",
+            safe(&date),
+            safe(&r.rel_path),
             r.line_start,
-            r.shared_terms.join(", ")
+            list(&r.shared_terms, ", ")
         );
         let q = flat(&r.quote);
         let q = if q.chars().count() > 220 {
@@ -561,38 +592,48 @@ pub fn print_similar(res: &SimilarResults) {
 
 pub fn print_init_defaults(r: &InitDefaults) {
     if r.wrote {
-        println!("wrote {}", r.path);
+        println!("wrote {}", safe(&r.path));
     } else {
         println!(
             "{} exists; left unchanged (use --force to overwrite)",
-            r.path
+            safe(&r.path)
         );
     }
     for c in &r.corpora {
-        println!("  {:<11} {:<24} {}", c.id, c.kind, c.path);
+        println!(
+            "  {:<11} {:<24} {}",
+            safe(&c.id),
+            safe(&c.kind),
+            safe(&c.path)
+        );
     }
 }
 
 pub fn print_added(c: &CorpusConfig) {
-    println!("added {} ({}) {}", c.id, c.kind.as_str(), c.path);
+    println!(
+        "added {} ({}) {}",
+        safe(&c.id),
+        c.kind.as_str(),
+        safe(&c.path)
+    );
     if !c.include.is_empty() {
-        println!("  include {}", c.include.join(", "));
+        println!("  include {}", list(&c.include, ", "));
     }
     if !c.exclude.is_empty() {
-        println!("  exclude {}", c.exclude.join(", "));
+        println!("  exclude {}", list(&c.exclude, ", "));
     }
-    println!("next: scout index build {}", c.id);
+    println!("next: scout index build {}", safe(&c.id));
 }
 
 pub fn print_removed(r: &Removed) {
-    println!("removed {} ({} left untouched)", r.id, r.path);
+    println!("removed {} ({} left untouched)", safe(&r.id), safe(&r.path));
     if r.index_kept {
         println!("  index kept");
     } else if r.deleted.is_empty() {
         println!("  no index to delete");
     } else {
         for p in &r.deleted {
-            println!("  deleted {p}");
+            println!("  deleted {}", safe(p));
         }
     }
 }
@@ -602,10 +643,10 @@ pub fn print_corpora(r: &CorporaList) {
     for c in &r.corpora {
         println!(
             "{:<11} {:<24} {:<8} {}{}",
-            c.id,
-            c.kind,
+            safe(&c.id),
+            safe(&c.kind),
             if c.index_built { "built" } else { "missing" },
-            c.path,
+            safe(&c.path),
             if c.folder_exists {
                 ""
             } else {
@@ -616,11 +657,11 @@ pub fn print_corpora(r: &CorporaList) {
 }
 
 pub fn print_corpus_show(r: &CorpusShow) {
-    print!("{}", r.toml);
-    println!("\n# root:  {}", r.entry.root);
+    print!("{}", safe_lines(&r.toml));
+    println!("\n# root:  {}", safe(&r.entry.root));
     println!(
         "# index: {} ({})",
-        r.entry.index_path,
+        safe(&r.entry.index_path),
         if r.entry.index_built {
             "built"
         } else {
@@ -633,7 +674,7 @@ pub fn print_build(r: &IndexBuildReport) {
     for r in &r.reports {
         println!(
             "{:<10} {} docs · {} passages · {} tokens  ({} {}: {} indexed, {} unchanged, {} removed, {} not documents) {:.1}s",
-            r.corpus,
+            safe(&r.corpus),
             r.docs,
             r.passages,
             r.tokens,
@@ -649,11 +690,11 @@ pub fn print_build(r: &IndexBuildReport) {
             println!(
                 "{:<10} vectors {} ({}-d): {} passages ({} {}: {} embedded, {} reused, {} removed) {:.1} MB {:.1}s",
                 "",
-                v.model,
+                safe(&v.model),
                 v.dim,
                 v.passages,
                 if v.full { "full" } else { "incremental" },
-                v.vectors_path,
+                safe(&v.vectors_path),
                 v.embedded,
                 v.reused,
                 v.removed,
@@ -680,7 +721,12 @@ pub fn print_status(r: &IndexStatusReport) {
             let note = format!("no index; run `scout index build {}`", s.corpus);
             println!(
                 "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
-                s.corpus, "—", "—", "—", "—", note
+                safe(&s.corpus),
+                "—",
+                "—",
+                "—",
+                "—",
+                safe(&note)
             );
             continue;
         }
@@ -703,11 +749,11 @@ pub fn print_status(r: &IndexStatusReport) {
         };
         println!(
             "{:<11} {:>6} {:>9} {:>10}  {:<20}  {}",
-            s.corpus,
+            safe(&s.corpus),
             s.docs,
             s.passages,
             s.tokens,
-            s.built_at.clone().unwrap_or_default(),
+            safe(s.built_at.as_deref().unwrap_or_default()),
             stale
         );
     }
@@ -724,7 +770,10 @@ fn toks(t: &[String]) -> String {
 pub fn print_clean_report(r: &CleanReport) {
     println!(
         "Cleaning report · {} · {} documents · {} passages · {} lines",
-        r.corpus, r.documents, r.passages, r.lines
+        safe(&r.corpus),
+        r.documents,
+        r.passages,
+        r.lines
     );
     println!(
         "{:<28} {:>10} {:>16} {:>14}",
@@ -733,7 +782,10 @@ pub fn print_clean_report(r: &CleanReport) {
     for rule in &r.rules {
         println!(
             "{:<28} {:>10} {:>16} {:>14}",
-            rule.label, rule.passages, rule.token_passages, rule.token_lines
+            safe(&rule.label),
+            rule.passages,
+            rule.token_passages,
+            rule.token_lines
         );
         if let Some(ps) = &rule.patterns {
             if ps.is_empty() {
@@ -744,7 +796,11 @@ pub fn print_clean_report(r: &CleanReport) {
             for p in ps {
                 println!(
                     "    rule {} ({}) {:?}: {} lines dropped in {} passages",
-                    p.n, p.origin, p.regex, p.lines, p.passages
+                    p.n,
+                    safe(&p.origin),
+                    p.regex,
+                    p.lines,
+                    p.passages
                 );
             }
         }
@@ -754,19 +810,19 @@ pub fn print_clean_report(r: &CleanReport) {
             continue;
         }
         println!();
-        println!("{} · samples", rule.label);
+        println!("{} · samples", safe(&rule.label));
         for s in &rule.samples {
             let by = s
                 .pattern
                 .map(|n| format!(" · rule {n}"))
                 .unwrap_or_default();
-            println!("  {}:{}  ×{}{by}", s.rel_path, s.line, s.occurrences);
-            println!("    original: {}", keep_head(&s.original, 160));
-            println!("    before:   {}", keep_head(&toks(&s.before), 160));
-            println!("    after:    {}", keep_head(&toks(&s.after), 160));
+            println!("  {}:{}  ×{}{by}", safe(&s.rel_path), s.line, s.occurrences);
+            println!("    original: {}", safe(&keep_head(&s.original, 160)));
+            println!("    before:   {}", safe(&keep_head(&toks(&s.before), 160)));
+            println!("    after:    {}", safe(&keep_head(&toks(&s.after), 160)));
             let mut change: Vec<String> = s.removed.iter().map(|t| format!("-{t}")).collect();
             change.extend(s.added.iter().map(|t| format!("+{t}")));
-            println!("    change:   {}", keep_head(&change.join(" "), 160));
+            println!("    change:   {}", safe(&keep_head(&change.join(" "), 160)));
         }
     }
 }
