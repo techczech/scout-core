@@ -124,7 +124,7 @@
 
 pub(crate) mod naming;
 pub(crate) mod render;
-mod sources;
+pub(crate) mod sources;
 
 use crate::events::{self, EventRecord, EventSet, EVENTS_DIR};
 use anyhow::{bail, Context, Result};

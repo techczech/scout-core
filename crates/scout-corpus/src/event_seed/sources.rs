@@ -37,18 +37,23 @@ pub(crate) struct TaggedItem {
 }
 
 /// Whitespace runs to one space, none at the ends.
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The period of a briefing events file name (`2026-09-events.json`,
-/// `2022-Q2-events.json`); `None` for any other name, and for every name
-/// holding `.superseded-`.
-fn events_file_period(name: &str) -> Option<&str> {
+/// The period of a file of the briefings folder named `<period><suffix>`
+/// (`2026-09-events.json`, `2022-Q2-briefing.json`); `None` for any other
+/// name, and for every name holding `.superseded-`.
+pub(crate) fn file_period<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
     if name.contains(".superseded-") {
         return None;
     }
-    name.strip_suffix("-events.json").filter(|p| is_period(p))
+    name.strip_suffix(suffix).filter(|p| is_period(p))
+}
+
+/// The period of a briefing events file name.
+fn events_file_period(name: &str) -> Option<&str> {
+    file_period(name, "-events.json")
 }
 
 /// Monthly events from the briefings folder, by monthly id
@@ -116,43 +121,56 @@ fn parse_briefing(
     };
     let mut out = BTreeMap::new();
     for (i, ev) in events.iter().enumerate() {
-        let Some(ev) = ev.as_object() else {
-            return Err(format!("event {} of the list is not an object", i + 1));
-        };
-        // The id as the index would compare it (`e01`, ` E01 ` are E01).
-        let raw = ev.get("id").unwrap_or(&Value::Null);
-        let number = crate::normalize::fold(raw.as_str().unwrap_or_default());
-        let Some(id) = monthly_id(&format!("{period}/{number}")) else {
-            return Err(format!("event id {raw} is not E<number>"));
-        };
-        // Text, or absent or null (empty).
-        let text = |k: &str| match ev.get(k) {
-            None | Some(Value::Null) => Ok(""),
-            Some(Value::String(s)) => Ok(s.as_str()),
-            Some(_) => Err(format!("event {id}: \"{k}\" is not text")),
-        };
-        let aliases = match ev.get("aliases") {
-            None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(l)) => l
-                .iter()
-                .map(|a| a.as_str().map(one_line))
-                .collect::<Option<Vec<String>>>()
-                .ok_or_else(|| format!("event {id}: \"aliases\" is not a list of text"))?
-                .into_iter()
-                .filter(|a| !a.is_empty())
-                .collect(),
-            Some(_) => return Err(format!("event {id}: \"aliases\" is not a list of text")),
-        };
-        let event = MonthlyEvent {
-            name: one_line(text("name")?),
-            aliases,
-            description: body_text(text("description")?),
-        };
+        let (id, event) = parse_event(ev, i, period)?;
         if out.insert(id.clone(), event).is_some() {
             return Err(format!("event {id} appears twice"));
         }
     }
     Ok(out)
+}
+
+/// Entry `i` (from 0) of a briefing's `events` list as its monthly id and
+/// what the briefing says of it, or what is wrong with it. The one reading
+/// of a briefing event: the seed's and the briefing read's
+/// (`crate::briefings`).
+pub(crate) fn parse_event(
+    ev: &Value,
+    i: usize,
+    period: &str,
+) -> std::result::Result<(String, MonthlyEvent), String> {
+    let Some(ev) = ev.as_object() else {
+        return Err(format!("event {} of the list is not an object", i + 1));
+    };
+    // The id as the index would compare it (`e01`, ` E01 ` are E01).
+    let raw = ev.get("id").unwrap_or(&Value::Null);
+    let number = crate::normalize::fold(raw.as_str().unwrap_or_default());
+    let Some(id) = monthly_id(&format!("{period}/{number}")) else {
+        return Err(format!("event id {raw} is not E<number>"));
+    };
+    // Text, or absent or null (empty).
+    let text = |k: &str| match ev.get(k) {
+        None | Some(Value::Null) => Ok(""),
+        Some(Value::String(s)) => Ok(s.as_str()),
+        Some(_) => Err(format!("event {id}: \"{k}\" is not text")),
+    };
+    let aliases = match ev.get("aliases") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(l)) => l
+            .iter()
+            .map(|a| a.as_str().map(one_line))
+            .collect::<Option<Vec<String>>>()
+            .ok_or_else(|| format!("event {id}: \"aliases\" is not a list of text"))?
+            .into_iter()
+            .filter(|a| !a.is_empty())
+            .collect(),
+        Some(_) => return Err(format!("event {id}: \"aliases\" is not a list of text")),
+    };
+    let event = MonthlyEvent {
+        name: one_line(text("name")?),
+        aliases,
+        description: body_text(text("description")?),
+    };
+    Ok((id, event))
 }
 
 /// The tag rows of `analysis/topics/current.jsonl` grouped by their

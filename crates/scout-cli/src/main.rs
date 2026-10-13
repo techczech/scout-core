@@ -4,6 +4,7 @@
 //!
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
+mod briefing_cmds;
 mod correct_cmds;
 mod event_cmds;
 mod term;
@@ -115,6 +116,13 @@ enum Cmd {
     Correct {
         #[command(subcommand)]
         cmd: correct_cmds::CorrectCmd,
+    },
+    /// Read the monthly briefings of an archive: `list` them, or `show`
+    /// one with each event linked to its lasting event record. Reads
+    /// only; no registry and no index.
+    Briefings {
+        #[command(subcommand)]
+        cmd: briefing_cmds::BriefingsCmd,
     },
     /// List topic-layer values with document counts; `theme-months` gives
     /// the documents per theme and month in one table.
@@ -588,6 +596,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Events { cmd: Some(cmd), .. } => return event_cmds::run(cmd),
         // So do the corrections of an item's tags.
         Cmd::Correct { cmd } => return correct_cmds::run(cmd),
+        // And the briefings read.
+        Cmd::Briefings { cmd } => return briefing_cmds::run(cmd),
         cmd => Cli { cmd },
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
@@ -645,7 +655,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             out(engine.facets(&q), json, topic_views::print_facets)
         }
-        Cmd::Correct { .. } => unreachable!("handled before the engine loads"),
+        Cmd::Correct { .. } | Cmd::Briefings { .. } => {
+            unreachable!("handled before the engine loads")
+        }
         Cmd::Topics {
             field,
             query,
