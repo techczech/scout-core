@@ -44,6 +44,7 @@ pub mod search;
 pub mod semantic;
 pub mod similar;
 pub mod stopwords;
+pub mod themes;
 pub mod tokenize;
 pub mod topic_facets;
 pub mod topics;

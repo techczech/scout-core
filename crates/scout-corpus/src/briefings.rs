@@ -239,30 +239,36 @@ pub fn briefing(archive: &Path, period: &str) -> Result<Briefing> {
     Ok(b)
 }
 
-/// The briefings folder of `archive`, after the seed's checks of the
-/// archive path (no `..` component; a folder); `None` when the archive
-/// has none.
+/// The briefings folder of `archive`; `None` when the archive has none.
+/// The rules are [`plain_folder_below`]'s.
+fn briefings_dir(archive: &Path) -> Result<Option<PathBuf>> {
+    plain_folder_below(archive, BRIEFINGS_DIR, "the briefings were not read")
+}
+
+/// The folder `rel` of `archive`, after the seed's checks of the archive
+/// path (no `..` component; a folder); `None` when it is not there.
 ///
 /// The archive path may be reached through a link: the caller chose it.
-/// Each folder below it on the way (`analysis`, `context`, `briefings`)
-/// must itself be a folder: a link there, even to a folder, would have
-/// files outside the archive read as its briefings, and is refused with
-/// the path named, as is a file. The first one that is not there means
-/// no briefings.
-fn briefings_dir(archive: &Path) -> Result<Option<PathBuf>> {
+/// Each folder below it on the way (for the briefings `analysis`,
+/// `context`, `briefings`) must itself be a folder: a link there, even to
+/// a folder, would have files outside the archive read as the archive's,
+/// and is refused with the path named and `unread` (what was not read),
+/// as is a file. The first one that is not there means `None`.
+pub(crate) fn plain_folder_below(
+    archive: &Path,
+    rel: &str,
+    unread: &str,
+) -> Result<Option<PathBuf>> {
     refuse_parent_dir(archive, "the archive")?;
     if !archive.is_dir() {
         bail!("{}: the archive is not a folder", archive.display());
     }
     let mut dir = archive.to_path_buf();
-    for part in Path::new(BRIEFINGS_DIR).components() {
+    for part in Path::new(rel).components() {
         dir.push(part);
         match std::fs::symlink_metadata(&dir) {
             Ok(m) if m.is_dir() => {}
-            Ok(_) => bail!(
-                "{}: not a plain folder; the briefings were not read",
-                dir.display()
-            ),
+            Ok(_) => bail!("{}: not a plain folder; {unread}", dir.display()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
         }

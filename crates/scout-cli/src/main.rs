@@ -8,6 +8,7 @@ mod briefing_cmds;
 mod correct_cmds;
 mod event_cmds;
 mod term;
+mod theme_cmds;
 mod topic_views;
 mod views;
 
@@ -123,6 +124,13 @@ enum Cmd {
     Briefings {
         #[command(subcommand)]
         cmd: briefing_cmds::BriefingsCmd,
+    },
+    /// Read the archive's theme list: the themes `scout correct theme-add`
+    /// accepts, in the list's order and spelling. Reads only; no registry
+    /// and no index.
+    Themes {
+        #[command(subcommand)]
+        cmd: theme_cmds::ThemesCmd,
     },
     /// List topic-layer values with document counts; `theme-months` gives
     /// the documents per theme and month in one table.
@@ -598,6 +606,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Correct { cmd } => return correct_cmds::run(cmd),
         // And the briefings read.
         Cmd::Briefings { cmd } => return briefing_cmds::run(cmd),
+        // And the theme list.
+        Cmd::Themes { cmd } => return theme_cmds::run(cmd),
         cmd => Cli { cmd },
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
@@ -655,7 +665,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             out(engine.facets(&q), json, topic_views::print_facets)
         }
-        Cmd::Correct { .. } | Cmd::Briefings { .. } => {
+        Cmd::Correct { .. } | Cmd::Briefings { .. } | Cmd::Themes { .. } => {
             unreachable!("handled before the engine loads")
         }
         Cmd::Topics {

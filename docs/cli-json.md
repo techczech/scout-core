@@ -9,7 +9,16 @@ spec: docs/specs/2026-09-27-corpus-engine-and-cli.md
 
 Values in the examples are illustrative. Every `--json` document is one pretty-printed JSON object with a top-level `schema_version` (integer). A field is added without a bump; a rename, removal or meaning change bumps that command's `schema_version`.
 
-## Changed in this version (0.4.3)
+## Changed in this version (0.4.4)
+
+Engine `scout-corpus/14`, unchanged: the index holds what it held and no index is rebuilt. One read is added; nothing is written by it.
+
+1. **`scout themes list --archive <path> [--json]`**, facade `scout_corpus::themes::themes_list(&archive)` returning `Vec<ThemeEntry>`: the archive's theme list in its order and spelling, which is the list `scout correct theme-add` accepts a theme from ("`scout themes list`").
+2. **`scout_corpus::themes::same_theme(a, b)`** (library only): whether two names are the same theme, by the comparison `theme-add` makes (the fold of "Query grammar").
+
+No other reply changes, and `scout correct theme-add` accepts, refuses and writes what it did: it reads the list through the loader the new read uses. Rust callers: the module `themes` is new (`themes_list`, `same_theme`, `ThemeEntry`, `NoThemeList`, `THEMES_FILE`, `MAX_THEMES_BYTES`); `corrections::THEMES_FILE` is the same constant, re-exported; no existing struct has a new field.
+
+## Changed in 0.4.3
 
 Engine `scout-corpus/14`, unchanged: the index holds what it held and no index is rebuilt. Two reads are added; nothing is written by either.
 
@@ -761,6 +770,20 @@ Reads the monthly briefings of one archive, `<archive>/analysis/context/briefing
   - the file is not a plain file, is over 4 MiB or is not a briefing ("Files", "A briefing file");
   - for a briefing with at least one event, the records cannot answer: no records folder (`<archive>/analysis/events: no records folder (run \`scout events seed\` first)`), or the reader skips a record file ("Bad records"), each named on its own line with the reader's reason: `<archive>/analysis/events/a.md: cannot read the record (id "YQ==" does not match the file name); fix or remove it first` (the first 20, then `and N more`). A skipped record could be the one that holds an event, so no event is shown as held by none on a partial read. A briefing with no events is shown without the records folder being read.
 
+## `scout themes list --archive <path> [--json]`
+
+The archive's theme list, `<archive>/analysis/context/themes.json` (the tagger's fixed list), in the list's order and spelling: exactly the themes `scout correct theme-add` accepts, read by the loader that command uses, so that an app offers them without reading the file or guessing a spelling from the index. No registry and no index are read; nothing is written, created or locked. Facade: `scout_corpus::themes::themes_list(&archive)`, returning the `themes` value. The command prints one JSON line on stdout and exits 0 (`--json` is accepted and changes nothing); a refusal exits 2 with the reason on one stderr line and nothing on stdout.
+
+```json
+{"themes":[{"name":"AI and mathematics","id":"T01","definition":"Models doing or checking mathematics."},{"name":"Vibe coding and AI-assisted programming","id":"T02","definition":null}]}
+```
+
+- **A theme**: `name`, the list's spelling (`themes[].name`, trimmed): `theme-add` given this name, or any name that is the same theme, writes exactly this. `id` (`themes[].id`, the tagger's id) and `definition` (`themes[].definition`, the tagger's description, on one line) are text, or null when the list has none or an empty one; control characters are taken out of both as the briefings read takes them out of a one-line value. Nothing else of the file is returned (`meta`, `include`, `exclude`, `added_in`).
+- **The same theme.** Names compare under the fold of "Query grammar" (NFC, quote and apostrophe variants unified, whitespace runs as one space, case ignored). Rust: `scout_corpus::themes::same_theme(a, b)`, the comparison `theme-add` makes; the fold itself is `scout_corpus::normalize::fold`. A later entry of the list that is the same theme as an earlier one is left out: `theme-add` would write the earlier spelling for it.
+- **No counts.** The read does not say how many items a theme has, and a theme no item has is listed like any other. For counts, join `scout topics themes` (`Engine::topics`, field `theme`) to this list by `same_theme(theme.name, item.value)`; a theme without a row there has no items.
+- **Refusals.** No list (`themes.json`, `analysis/context` or `analysis` is not there): `No theme list in this archive.` (Rust: `themes::NoThemeList`). A file that is not a list, in the words `theme-add` refuses it: `<file>: not JSON (…) (nothing was changed)`, `<file>: no \`themes\` list (nothing was changed)`, `<file>: theme 2 has no text \`name\` (nothing was changed)`. Refused by the read only (`theme-add` does not look at these fields and reads such a list as before): `<file>: theme 2: \`id\` is not text (nothing was changed)`, the same for `definition`, and a name with a control character, `<file>: theme 2: \`name\` holds a control character (U+0009); give it as one line of plain text (nothing was changed)`: `theme-add` refuses a theme given with one, and the read returns no name other than as stored.
+- **Paths.** As for the briefings ("`scout briefings`", "Paths"): an `--archive` path with a `..` component or that is not a folder is refused; the archive path itself may be a symlink; below it `analysis` and `analysis/context` must each be a folder, and a symlink or a file there is refused with nothing behind it read (`<archive>/analysis/context: not a plain folder; the theme list was not read`). `themes.json` itself must be a plain file of at most 16 MiB, opened as `theme-add` opens it: looked at without following a link, opened with `O_NOFOLLOW`, the opened handle checked (`<file>: not a plain file (a symlink, a folder or a special file); nothing was changed`, `<file>: larger than 16777216 bytes; nothing was changed`). `theme-add` does not make the check of the two folders; it finds the file as it always did.
+
 ## Correcting an item's tags
 
 `scout correct theme-add | theme-remove | entity-add | entity-remove | event-add | event-remove | undo | list`: his fixes to one item's tags. Each works on one archive, given with `--archive <path>` (required). Each of the first seven appends ONE line to `<archive>/analysis/topics/corrections.jsonl`; `list` writes nothing. This is the file's only writer. The model's rows (`current.jsonl`) are never written. No registry and no index are read or written: the index has the old tags until `scout index build` runs, and every result says so (`"reindex_needed": true`; nothing here starts a build). Facade: `scout_corpus::corrections::CorrectionEditor::open(&archive)?` and `add_theme(key, theme)`, `remove_theme(key, theme)`, `add_entity(key, name, type)`, `remove_entity(key, name)`, `add_to_event(key, event_id)`, `remove_from_event(key, event_id)`, `undo(id)`, `list(key)`, each returning the struct the CLI prints. Each command prints one JSON line on stdout and exits 0; a refusal exits 2 with the reason on stderr, nothing on stdout and nothing written.
@@ -803,7 +826,7 @@ scout correct list --key <key> --archive <path> [--json]
 **What each command checks before it writes.**
 
 - **The key** must be an item with a tag row in `current.jsonl` (`x:404: no tag row in analysis/topics/current.jsonl`). It is trimmed; a control character refuses it.
-- **A theme to add** must be a name of the archive's theme list, `<archive>/analysis/context/themes.json` (`themes[].name`, the tagger's list; this command is its only reader in scout, and the index never reads it). Names compare under the fold of "Query grammar"; the line carries the list's spelling. Refused: no list, a list that is not `{"themes": [{"name": "…"}, …]}`, a name not on it, a theme the item has.
+- **A theme to add** must be a name of the archive's theme list, `<archive>/analysis/context/themes.json` (`themes[].name`, the tagger's list; `scout themes list` gives the same list, read by the same loader, and the index never reads it). Names compare under the fold of "Query grammar"; the line carries the list's spelling. Refused: no list, a list that is not `{"themes": [{"name": "…"}, …]}`, a name not on it, a theme the item has.
 - **A theme to remove** must be one the item has now (model's or corrected), on the list or not; the line carries the item's spelling.
 - **An entity to add** is free text: trimmed, not empty, no control character (as for an event's name), at most 200 characters, with `--type` one of `person`, `org`, `model`, `product`, `work`, `event`, `place`, `other` (the types of the layer's `entities_typed`). Refused: one the item has under the fold. **An entity to remove** must be one the item has; the line carries the item's spelling.
 - **An event** may be given by lasting id, merged-away id or monthly id. It must resolve to a record that is not removed (`2031-01/E09: no event record holds this id`; `<id>: a removed event; restore it first`), and the line carries that record's id, the lasting event the id resolves to at that moment. `event-add` refuses an event the item is in; `event-remove` one it is not in. `event-remove` takes the item out whoever put it there, its tag row included (`tags.event` is then null).

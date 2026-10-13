@@ -99,8 +99,9 @@
 //! symlink (symlinks above it are accepted).
 //!
 //! What is read besides: `<archive>/analysis/context/themes.json`, the
-//! tagger's theme list (`themes[].name`), by `add_theme` only. This is
-//! its one reader in this workspace; the index never reads it.
+//! tagger's theme list (`themes[].name`), by `add_theme`, through the
+//! list's one loader (`crate::themes`, which also gives the public read
+//! of the list, `themes::themes_list`); the index never reads it.
 //!
 //! The index is not touched. After a correction search shows the old
 //! tags until `scout index build` runs; every result says so
@@ -114,9 +115,9 @@
 
 use crate::correction_lines::{numbered, LineRead, Numbered, Sequence};
 use crate::event_edit::log::{Caps, Jsonl};
-use crate::event_edit::store::read_plain;
 use crate::event_seed::{refuse_parent_dir, resolve_out_dir};
 use crate::normalize::fold;
+use crate::themes::same_theme;
 use crate::topics::{self, LayerItem, TagSource, TopicInfo};
 use anyhow::{bail, Result};
 use serde::Serialize;
@@ -128,11 +129,9 @@ use std::path::{Path, PathBuf};
 pub const TOPICS_DIR: &str = "analysis/topics";
 /// The corrections file's name in the topics folder.
 pub const CORRECTIONS_NAME: &str = "corrections.jsonl";
-/// The tagger's theme list, relative to the archive.
-pub const THEMES_FILE: &str = "analysis/context/themes.json";
 pub use crate::correction_lines::{Op, ENTITY_TYPES, MAX_FILE_BYTES};
-/// Largest theme list read.
-const MAX_THEMES_BYTES: u64 = 16 << 20;
+/// The tagger's theme list, relative to the archive.
+pub use crate::themes::THEMES_FILE;
 /// Largest number of a correction id (`c999999999`).
 pub const MAX_ID: u64 = crate::numbered_id::MAX;
 /// Longest entity name, in characters.
@@ -738,29 +737,16 @@ impl CorrectionEditor {
         Ok(state)
     }
 
-    /// The tagger's theme names, in the list's spelling.
+    /// The tagger's theme names, in the list's spelling, by the one
+    /// loader of the list ([`crate::themes::load`]).
     fn theme_list(&self) -> Result<Vec<String>> {
-        let path = self.archive.join(THEMES_FILE);
-        let at = path.display();
-        let Some(plain) = read_plain(&path, MAX_THEMES_BYTES)? else {
-            bail!("{at}: no theme list; a theme is added only from it (nothing was changed)");
+        let Some(list) = crate::themes::load(&self.archive)? else {
+            bail!(
+                "{}: no theme list; a theme is added only from it (nothing was changed)",
+                self.archive.join(THEMES_FILE).display()
+            );
         };
-        let v: Value = serde_json::from_slice(&plain.bytes)
-            .map_err(|e| anyhow::anyhow!("{at}: not JSON ({e}) (nothing was changed)"))?;
-        let Some(list) = v.get("themes").and_then(|t| t.as_array()) else {
-            bail!("{at}: no `themes` list (nothing was changed)");
-        };
-        let mut names = Vec::new();
-        for (i, t) in list.iter().enumerate() {
-            match t.get("name").and_then(|n| n.as_str()).map(str::trim) {
-                Some(n) if !n.is_empty() => names.push(n.to_string()),
-                _ => bail!(
-                    "{at}: theme {} has no text `name` (nothing was changed)",
-                    i + 1
-                ),
-            }
-        }
-        Ok(names)
+        Ok(list.into_iter().map(|t| t.name).collect())
     }
 
     /// Add `theme` to the item `key`. The theme must be a name of the
@@ -770,8 +756,8 @@ impl CorrectionEditor {
     /// item already has.
     pub fn add_theme(&self, key: &str, theme: &str) -> Result<Corrected> {
         let theme = text("the theme", theme)?;
-        let f = fold(&theme);
-        let Some(listed) = self.theme_list()?.into_iter().find(|n| fold(n) == f) else {
+        let listed = self.theme_list()?;
+        let Some(listed) = listed.into_iter().find(|n| same_theme(n, &theme)) else {
             bail!(
                 "{theme:?}: not a theme of {THEMES_FILE}; give a name of the list (nothing was changed)"
             );
