@@ -12,7 +12,10 @@
 //!   `YYYY-MM` or `YYYY-Qn`: plain files directly in that folder. A name
 //!   holding `.superseded-` is ignored, as the seed ignores it. A symlink,
 //!   a folder or a special file under a briefing's name is refused, and so
-//!   is a file over [`MAX_BRIEFING_BYTES`].
+//!   is a file over [`MAX_BRIEFING_BYTES`]. Each of `analysis`, `context`
+//!   and `briefings` must itself be a folder, not a link to one, so that
+//!   nothing outside the archive is read; the archive path itself may be
+//!   a link.
 //! - for [`briefing`] of a briefing that has events, the records folder
 //!   `<archive>/analysis/events`, by the records reader ([`events::read`]),
 //!   whose resolution (`members`, `merged_into`) says which record holds a
@@ -26,9 +29,9 @@
 //!
 //! Text is returned as stored, with no Markdown rendering. Every text has
 //! passed [`body_text`]; a value that is one line by nature (a name, an
-//! alias, a date, a title) also has its whitespace runs as one space.
+//! alias, a date, a title) also has its whitespace runs as one space. The
+//! id and the name of a linked record are cleaned the same way.
 
-use crate::correction_lines::open_regular;
 use crate::event_seed::naming::{is_period, period_month};
 use crate::event_seed::refuse_parent_dir;
 use crate::event_seed::render::body_text;
@@ -161,7 +164,9 @@ impl std::error::Error for NoBriefing {}
 /// gives an error row and the others still list. Empty when the archive
 /// has no briefings folder. The records folder is not read.
 pub fn briefings(archive: &Path) -> Result<Vec<BriefingListing>> {
-    let dir = briefings_dir(archive)?;
+    let Some(dir) = briefings_dir(archive)? else {
+        return Ok(Vec::new());
+    };
     let rd = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -211,10 +216,9 @@ pub fn briefing(archive: &Path, period: &str) -> Result<Briefing> {
     if !is_period(period) {
         bail!("\"{period}\" is not a month (YYYY-MM) or a quarter (YYYY-Qn).");
     }
-    let dir = briefings_dir(archive)?;
-    let Some(mut b) = load(&dir, period)? else {
-        return Err(NoBriefing(period.to_string()).into());
-    };
+    let none = || NoBriefing(period.to_string());
+    let dir = briefings_dir(archive)?.ok_or_else(none)?;
+    let mut b = load(&dir, period)?.ok_or_else(none)?;
     if b.events.is_empty() {
         return Ok(b);
     }
@@ -224,8 +228,11 @@ pub fn briefing(archive: &Path, period: &str) -> Result<Briefing> {
             .resolve(&ev.monthly_id)
             .and_then(|last| set.records.get(&fold(last)))
             .map(|r| EventLink {
-                id: r.id.clone(),
-                name: r.name.clone(),
+                // The reader decodes YAML escapes after its look for
+                // control characters, so a name can hold one; an id is
+                // the file's name, which can too.
+                id: line(&r.id),
+                name: line(&r.name),
                 removed: r.removed.is_some(),
             });
     }
@@ -233,13 +240,34 @@ pub fn briefing(archive: &Path, period: &str) -> Result<Briefing> {
 }
 
 /// The briefings folder of `archive`, after the seed's checks of the
-/// archive path (no `..` component; a folder).
-fn briefings_dir(archive: &Path) -> Result<PathBuf> {
+/// archive path (no `..` component; a folder); `None` when the archive
+/// has none.
+///
+/// The archive path may be reached through a link: the caller chose it.
+/// Each folder below it on the way (`analysis`, `context`, `briefings`)
+/// must itself be a folder: a link there, even to a folder, would have
+/// files outside the archive read as its briefings, and is refused with
+/// the path named, as is a file. The first one that is not there means
+/// no briefings.
+fn briefings_dir(archive: &Path) -> Result<Option<PathBuf>> {
     refuse_parent_dir(archive, "the archive")?;
     if !archive.is_dir() {
         bail!("{}: the archive is not a folder", archive.display());
     }
-    Ok(archive.join(BRIEFINGS_DIR))
+    let mut dir = archive.to_path_buf();
+    for part in Path::new(BRIEFINGS_DIR).components() {
+        dir.push(part);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => bail!(
+                "{}: not a plain folder; the briefings were not read",
+                dir.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
+        }
+    }
+    Ok(Some(dir))
 }
 
 /// Where the briefing of a valid `period` is.
@@ -249,7 +277,9 @@ fn file_of(dir: &Path, period: &str) -> PathBuf {
 
 /// The records of the archive, every one of them read. A missing folder
 /// and a file the reader skips are errors here: either could hold the
-/// monthly id asked about.
+/// monthly id asked about. The folder is found and read by the records
+/// reader ([`events::read`]), under its own rules; the path joined here
+/// only names it in an error.
 fn records(archive: &Path) -> Result<EventSet> {
     let dir = archive.join(EVENTS_DIR);
     let Some(set) = events::read(archive)? else {
@@ -292,18 +322,68 @@ fn load(dir: &Path, period: &str) -> Result<Option<Briefing>> {
         .map_err(|why| anyhow!("{}: {why}", path.display()))
 }
 
+/// What [`open_plain`] says of a path that is not a plain file.
+const NOT_PLAIN: &str = "not a plain file";
+
+/// Open `path` for reading only when the entry itself is a regular file.
+///
+/// A link is not followed, whatever it leads to: the open carries
+/// `O_NOFOLLOW`, so a link at the path fails at the open itself, also one
+/// put there after the caller looked at the path. The opened file must
+/// then itself be a regular file. Either refusal is an `InvalidInput`
+/// error that says [`NOT_PLAIN`]. No other flag is added (no
+/// `O_NONBLOCK`): a regular file is opened exactly as it always was.
+///
+/// The one gap: another process that puts a FIFO at the path between the
+/// caller's look at it and this open can still make the open wait. The
+/// engine does not defend against a concurrent hostile writer in the
+/// user's own archive.
+#[cfg(unix)]
+fn open_plain(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let not_plain = || std::io::Error::new(std::io::ErrorKind::InvalidInput, NOT_PLAIN);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            // What an open with O_NOFOLLOW gives for a link (EMLINK on
+            // some BSDs).
+            Some(libc::ELOOP | libc::EMLINK) => not_plain(),
+            _ => e,
+        })?;
+    if !file.metadata()?.is_file() {
+        return Err(not_plain());
+    }
+    Ok(file)
+}
+
+/// Without `O_NOFOLLOW`: the shared open of a regular file, which follows
+/// a link put at the path after the caller looked at it.
+#[cfg(not(unix))]
+fn open_plain(path: &Path) -> std::io::Result<std::fs::File> {
+    crate::correction_lines::open_regular(path)
+}
+
 /// The bytes of the plain file at `path`; `None` when nothing is there.
 /// The entry itself must be a plain file (a link is not followed, as in
-/// the seed), it is opened by [`open_regular`], and its size is taken from
-/// the open file.
+/// the seed): it is looked at first, so that a folder or a special file
+/// already there is refused without being opened, then opened by
+/// [`open_plain`], and its size is taken from the open file.
 fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_file() => {}
-        Ok(_) => bail!("{}: not a plain file", path.display()),
+        Ok(_) => bail!("{}: {NOT_PLAIN}", path.display()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     }
-    let file = open_regular(path).with_context(|| format!("read {}", path.display()))?;
+    let file = match open_plain(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+            bail!("{}: {NOT_PLAIN}", path.display())
+        }
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
     let too_large = |bytes: String| {
         anyhow!(
             "{}: {bytes} bytes, larger than the limit of {MAX_BRIEFING_BYTES} bytes (4 MiB); it was not read",
@@ -500,6 +580,36 @@ mod tests {
         assert_eq!(b.debates[0].when, "mid-April");
         // The briefing's own item ids are not part of what is returned.
         assert!(!serde_json::to_string(&b).unwrap().contains("m0001"));
+    }
+
+    /// The open itself, with no look at the path before it (the look
+    /// `read_plain` takes first would refuse these on its own).
+    #[cfg(unix)]
+    #[test]
+    fn the_open_does_not_follow_a_link_and_opens_a_file_as_ever() {
+        use std::os::fd::AsRawFd;
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        let link = tmp.path().join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let e = open_plain(&link).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), NOT_PLAIN);
+        // A folder opens for reading; the opened handle is what is refused.
+        let e = open_plain(tmp.path()).unwrap_err();
+        assert_eq!(e.to_string(), NOT_PLAIN);
+        let e = open_plain(&tmp.path().join("none")).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+
+        let mut text = String::new();
+        let mut file = open_plain(&real).unwrap();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "{}");
+        // A blocking open, as a plain `File::open`.
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert_eq!(flags & libc::O_NONBLOCK, 0);
     }
 
     #[test]

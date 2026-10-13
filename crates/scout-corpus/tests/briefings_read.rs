@@ -472,6 +472,101 @@ fn a_symlink_a_folder_and_a_special_file_under_a_briefing_name_are_refused() {
     assert_eq!(entries(&dir), before);
 }
 
+/// `analysis`, `context` or `briefings` as a link to a folder outside the
+/// archive that holds a valid briefing: nothing there is read. The same
+/// for a file in a folder's place.
+#[cfg(unix)]
+#[test]
+fn a_link_in_place_of_a_folder_on_the_way_to_the_briefings_is_refused() {
+    use std::os::unix::fs::symlink;
+    let parts = ["analysis", "context", "briefings"];
+    for n in 0..parts.len() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("archive");
+        // Outside the archive: the folder the link leads to, with the rest
+        // of the way and a whole briefing under it.
+        let outside = tmp.path().join("outside");
+        let mut rest = parts[n + 1..].to_vec();
+        rest.push("2026-09-briefing.json");
+        put(
+            &outside,
+            &rest.join("/"),
+            &doc("2026-09", json!([])).to_string(),
+        );
+        let at = root.join(parts[..=n].join("/"));
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        let want = format!(
+            "{}: not a plain folder; the briefings were not read",
+            at.display()
+        );
+
+        symlink(&outside, &at).unwrap();
+        // The link does lead to a briefing.
+        assert!(root.join(DIR).join("2026-09-briefing.json").is_file());
+        assert_eq!(format!("{:#}", briefings(&root).unwrap_err()), want);
+        assert_eq!(refusal(&root, "2026-09"), want);
+
+        std::fs::remove_file(&at).unwrap();
+        std::fs::write(&at, "a file").unwrap();
+        assert_eq!(format!("{:#}", briefings(&root).unwrap_err()), want);
+        assert_eq!(refusal(&root, "2026-09"), want);
+
+        // Not there: no briefings, as before.
+        std::fs::remove_file(&at).unwrap();
+        assert!(briefings(&root).unwrap().is_empty());
+        assert_eq!(refusal(&root, "2026-09"), "No briefing for 2026-09.");
+    }
+}
+
+/// The archive path is the caller's choice, a link or not.
+#[cfg(unix)]
+#[test]
+fn an_archive_reached_through_a_link_is_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    put_doc(
+        &real,
+        "2026-09",
+        &doc("2026-09", json!([event("E01", "One")])),
+    );
+    record(&real, "2026-09-one", "members: [2026-09/E01]\n");
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    assert_eq!(periods(&briefings(&link).unwrap()), ["2026-09"]);
+    let b = briefing(&link, "2026-09").unwrap();
+    assert_eq!(b.events[0].record.as_ref().unwrap().id, "2026-09-one");
+}
+
+/// The records reader decodes a YAML escape after its look for control
+/// characters, so a record's name can hold one; the link's does not.
+#[test]
+fn a_linked_record_name_holds_no_control_characters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    put_doc(
+        root,
+        "2026-09",
+        &doc("2026-09", json!([event("E01", "One")])),
+    );
+    put(
+        root,
+        "analysis/events/2026-09-one.md",
+        "---\nid: 2026-09-one\nname: \"a\\0b \\e[31m c\\td\\Ne\"\nmembers: [2026-09/E01]\n---\n\nBody.\n",
+    );
+    // The reader does hand the characters on.
+    let set = event_seed_support::events::read(root).unwrap().unwrap();
+    assert!(set.refused.is_empty());
+    assert!(set.records.values().next().unwrap().name.contains('\0'));
+
+    let b = briefing(root, "2026-09").unwrap();
+    let link = b.events[0].record.as_ref().unwrap();
+    assert_eq!(link.id, "2026-09-one");
+    assert_eq!(link.name, "ab [31m c d e");
+    assert!(!link.name.chars().any(char::is_control));
+    assert!(!serde_json::to_string(&b).unwrap().contains("\\u0000"));
+}
+
 #[test]
 fn a_records_folder_that_cannot_answer_fails_the_read_instead_of_dropping_links() {
     let tmp = tempfile::tempdir().unwrap();
