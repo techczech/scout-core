@@ -539,12 +539,14 @@ fn row_9_lines_the_reader_passes_over_are_passed_over_as_the_index_build_does() 
     assert_eq!(w.total(&format!("event:{B} event:{C}")), 1);
 }
 
-/// Row 10: a large layer file, with a line over the reader's line bound
-/// in it. The file is streamed by the build's reader, so the long line
-/// is passed over (never held whole) by the preview as by the build.
-/// Prints the time one preview takes over 15,000 tag rows.
+/// Row 10: the counts over a large layer file with a line over the
+/// reader's line bound in it: the long line is a bad line to the preview
+/// as to the build, and the other rows count. (What the reader holds in
+/// memory, and that it reads regular files only, is not shown here: see
+/// `layer_files_regular_only.rs` and the tests below.) Prints the time
+/// one preview takes over 15,000 tag rows.
 #[test]
-fn row_10_a_large_layer_file_is_streamed_within_the_line_bound() {
+fn row_10_counts_over_a_large_layer_file_with_an_over_long_line() {
     const ROWS: usize = 15_000;
     let mut layer = String::new();
     // Works exist for the rows of A and B only; the rest are tag rows of
@@ -603,6 +605,120 @@ fn row_10_a_large_layer_file_is_streamed_within_the_line_bound() {
         counts(&p),
         (a_rows, a_rows / 2 + a_rows, a_rows / 2, 2 * a_rows)
     );
+}
+
+/// What is at each path under `root`, without opening anything that is
+/// not a regular file (a FIFO would wait): the kind, and for a regular
+/// file its bytes and time.
+#[cfg(unix)]
+fn shape(root: &Path) -> Vec<(PathBuf, String, Vec<u8>, Option<std::time::SystemTime>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let m = fs::symlink_metadata(&p).unwrap();
+            let kind = format!("{:?}", m.file_type());
+            if m.is_dir() {
+                stack.push(p.clone());
+                out.push((p, kind, vec![], None));
+            } else if m.is_file() {
+                let bytes = fs::read(&p).unwrap();
+                out.push((p, kind, bytes, m.modified().ok()));
+            } else {
+                out.push((p, kind, vec![], None));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A layer file that is not a regular file stops the preview with an
+/// error, at once, and nothing is written: a link to `/dev/zero` (bytes
+/// without end), a FIFO nobody writes to (a plain open waits), a
+/// directory. For the tag rows and for the corrections file. No count is
+/// given without a file that is there and was not read.
+#[cfg(unix)]
+#[test]
+fn a_layer_file_that_is_not_a_regular_file_stops_the_preview_and_nothing_is_written() {
+    use std::os::unix::fs::symlink;
+    /// Puts the thing at the path.
+    type Make = fn(&Path);
+    let bad: [(&str, Make); 3] = [
+        ("a link to /dev/zero", |p| symlink("/dev/zero", p).unwrap()),
+        ("a FIFO", |p| {
+            use std::os::unix::ffi::OsStrExt;
+            let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        }),
+        ("a directory", |p| fs::create_dir(p).unwrap()),
+    ];
+    for file in [topics::LAYER_FILE, topics::CORRECTIONS_FILE] {
+        for (what, make) in bad {
+            let w = World::of(
+                &records(),
+                &[row(1, A_M), row(2, B_M)],
+                &[fix(2, "event_add", A)],
+            );
+            let id = w.merge(A, B);
+            assert_eq!(
+                counts(&w.editor().unmerge_preview(&id).unwrap()),
+                (2, 1, 1, 2)
+            );
+            let path = w.root().join(file);
+            fs::remove_file(&path).unwrap();
+            make(&path);
+            let before = shape(w.root());
+
+            let (editor, log_id) = (w.editor(), id.clone());
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(
+                    editor
+                        .unmerge_preview(&log_id)
+                        .map_err(|e| format!("{e:#}")),
+                );
+            });
+            let answer = rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap_or_else(|_| panic!("{file} as {what}: the preview did not answer"));
+            let e = answer.expect_err(&format!("{file} as {what}"));
+            assert!(
+                e.contains("is not a regular file") && e.contains(&path.display().to_string()),
+                "{file} as {what}: {e}"
+            );
+            assert!(
+                shape(w.root()) == before,
+                "{file} as {what}: a preview wrote"
+            );
+        }
+    }
+}
+
+/// A layer file that is a link to a regular file is read through the
+/// link: the preview is the one over the files themselves.
+#[cfg(unix)]
+#[test]
+fn a_layer_file_that_links_to_a_regular_file_is_previewed_as_the_file() {
+    let w = World::of(
+        &records(),
+        &[row(1, A_M), row(2, B_M)],
+        &[fix(2, "event_add", A)],
+    );
+    let id = w.merge(A, B);
+    let plain = w.editor().unmerge_preview(&id).unwrap();
+    assert_eq!(counts(&plain), (2, 1, 1, 2));
+    let elsewhere = tempfile::tempdir().unwrap();
+    for (n, file) in [topics::LAYER_FILE, topics::CORRECTIONS_FILE]
+        .iter()
+        .enumerate()
+    {
+        let (at, target) = (w.root().join(file), elsewhere.path().join(n.to_string()));
+        fs::rename(&at, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &at).unwrap();
+        assert_eq!(w.editor().unmerge_preview(&id).unwrap(), plain, "{file}");
+    }
 }
 
 /// The preview writes nothing: the archive is byte for byte the same,

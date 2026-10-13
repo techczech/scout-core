@@ -62,3 +62,5 @@ Impact: scout-corpus `event_edit`; CLI JSON doc (`docs/cli-json.md`); version v0
 - Corrections are streamed twice (the existing reader's design: the first pass finds undo lines).
 - Row 4: a correction's id is resolved through the records as they are after the split. `event_remove: [B]` → the item is in A again; `event_remove: [A]` (or A's monthly id) → the item stays out of both.
 - Version: the engine's version is the tag and the `docs/cli-json.md` heading (manifests stay 0.1.0), as for v0.4.1.
+- The layer files (`current.jsonl`, `corrections.jsonl`) are read only when they are regular files: a link to a regular file is followed; a directory, a FIFO, a socket, a device, or a link to one of these is refused without being read (an error naming the path), by the preview and by the index build, through one function (`correction_lines::open_regular`: opened without blocking, checked on the opened handle).
+- Confinement of the layer files to the corpus root (a link that leaves the root) is not enforced, as in the index build; follow-up.

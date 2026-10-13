@@ -388,9 +388,68 @@ pub(crate) enum Opened {
     File(std::fs::File, u64),
 }
 
-/// Open the corrections file at `path` and measure it on the open file.
+/// Open `path` for reading only when it is a regular file: the one way a
+/// layer file (the tag rows, the corrections) is opened, by an index build
+/// and by every other reader of them.
+///
+/// A link to a regular file is followed (an archive can sit behind links).
+/// Anything else is refused with an error that says so: a directory, a
+/// FIFO, a socket, a device (`/dev/zero` would be read without end), or a
+/// link to one of these. The check is on the opened file, not on the path
+/// before it is opened, so nothing can be put there between the two; and
+/// the open does not wait for a writer on a FIFO (`O_NONBLOCK`, which
+/// changes nothing for a regular file). A path with nothing at it, or a
+/// dangling link, is the `NotFound` of a plain open.
+pub(crate) fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = open.open(path)?;
+    let kind = file.metadata()?.file_type();
+    if kind.is_file() {
+        return Ok(file);
+    }
+    let what = if kind.is_dir() {
+        "a directory"
+    } else {
+        special_kind(&kind)
+    };
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "{} is not a regular file ({what}); it was not read",
+            path.display()
+        ),
+    ))
+}
+
+#[cfg(unix)]
+fn special_kind(kind: &std::fs::FileType) -> &'static str {
+    use std::os::unix::fs::FileTypeExt;
+    if kind.is_fifo() {
+        "a FIFO"
+    } else if kind.is_socket() {
+        "a socket"
+    } else if kind.is_char_device() || kind.is_block_device() {
+        "a device"
+    } else {
+        "a special file"
+    }
+}
+
+#[cfg(not(unix))]
+fn special_kind(_: &std::fs::FileType) -> &'static str {
+    "a special file"
+}
+
+/// Open the corrections file at `path` ([`open_regular`]) and measure it
+/// on the open file.
 pub(crate) fn open(path: &Path, limit: u64) -> Result<Opened> {
-    let file = match std::fs::File::open(path) {
+    let file = match open_regular(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Opened::Missing),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),

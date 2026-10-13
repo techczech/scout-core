@@ -362,13 +362,16 @@ enum Line<'a> {
 /// every byte to `hash` and every non-blank line to `each`. A line over
 /// `cap` bytes is not kept in memory: it is drained and reported `Bad`, as
 /// is a line that is not valid UTF-8. `Ok(false)` when the file is missing.
+/// Only a regular file is read ([`correction_lines::open_regular`]):
+/// anything else at `path` is an error. There is no bound on the size of
+/// the file, only on a line.
 fn stream_lines(
     path: &Path,
     cap: usize,
     hash: &mut Sha1,
     each: impl FnMut(Line<'_>),
 ) -> Result<bool> {
-    let file = match std::fs::File::open(path) {
+    let file = match correction_lines::open_regular(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
