@@ -1,8 +1,8 @@
 //! The layer files (`analysis/topics/current.jsonl` and
 //! `corrections.jsonl`) are read only when they are regular files (review
 //! finding, 2026-10-13). A link to a regular file is followed; a link to a
-//! device, a FIFO or a directory at either name is an error that names the
-//! path, for the layer reader and for an index build alike, and at once:
+//! device, a FIFO, a socket or a directory at either name is an error that
+//! names the path, for the layer reader and for an index build alike, and at once:
 //! every read here runs under a time limit, so a reader that waits on a
 //! FIFO or reads `/dev/zero` without end fails its test instead of hanging
 //! the suite.
@@ -37,13 +37,16 @@ enum Bad {
     Directory,
     /// A link to a directory.
     LinkToDirectory,
+    /// A Unix-domain socket: it cannot be opened as a file at all.
+    Socket,
 }
 
-const BAD: [Bad; 4] = [
+const BAD: [Bad; 5] = [
     Bad::LinkToDevice,
     Bad::Fifo,
     Bad::Directory,
     Bad::LinkToDirectory,
+    Bad::Socket,
 ];
 
 /// Put `bad` at `path`, in place of whatever is there.
@@ -63,6 +66,19 @@ fn put_bad(path: &Path, bad: Bad) {
             let dir = path.with_extension("d");
             fs::create_dir_all(&dir).unwrap();
             std::os::unix::fs::symlink(&dir, path).unwrap();
+        }
+        Bad::Socket => {
+            // Bound under a short name (a socket's path has a small
+            // length limit) and moved into place: the name is the socket.
+            let short = tempfile::tempdir().unwrap();
+            let made = short.path().join("s");
+            drop(std::os::unix::net::UnixListener::bind(&made).unwrap());
+            let moved = path.with_extension("s");
+            // Into the archive's volume first when the two differ.
+            if fs::rename(&made, &moved).is_err() {
+                panic!("cannot move a socket to {}", moved.display());
+            }
+            fs::rename(&moved, path).unwrap();
         }
     }
 }
@@ -146,8 +162,14 @@ impl Fx {
 }
 
 /// Both readers refuse `file` when `bad` stands at its name, saying which
-/// path and that it is not a regular file.
+/// path, that it is not a regular file, and what it is.
 fn refused(file: &str, bad: Bad) {
+    let what = match bad {
+        Bad::LinkToDevice => "(a device)",
+        Bad::Fifo => "(a FIFO)",
+        Bad::Directory | Bad::LinkToDirectory => "(a directory)",
+        Bad::Socket => "(a socket)",
+    };
     let fx = Fx::new();
     let path = fx.root().join(file);
     put_bad(&path, bad);
@@ -156,7 +178,9 @@ fn refused(file: &str, bad: Bad) {
         ("build_index", fx.build().map(|_| ()).unwrap_err()),
     ] {
         assert!(
-            e.contains("is not a regular file") && e.contains(&path.display().to_string()),
+            e.contains("is not a regular file")
+                && e.contains(what)
+                && e.contains(&path.display().to_string()),
             "{who} over {file} as {bad:?}: {e}"
         );
     }
@@ -194,8 +218,17 @@ fn corrections_that_are_a_directory_or_a_link_to_one_are_refused() {
     refused(topics::CORRECTIONS_FILE, Bad::LinkToDirectory);
 }
 
+/// A socket is refused by the check before the open, with the same error
+/// as the rest (an open of it fails with an error of the system's own).
+#[test]
+fn a_socket_at_either_name_is_refused_as_not_a_regular_file() {
+    refused(topics::LAYER_FILE, Bad::Socket);
+    refused(topics::CORRECTIONS_FILE, Bad::Socket);
+}
+
 /// A refusal is not a missing file: the build does not go on without the
-/// layer it could not read, and an index built before keeps what it held.
+/// layer it could not read, and after an ordinary build (not forced, the
+/// configuration unchanged) an index built before keeps what it held.
 #[test]
 fn a_build_over_a_refused_file_fails_and_leaves_the_index_as_it_was() {
     for file in [topics::LAYER_FILE, topics::CORRECTIONS_FILE] {
@@ -211,6 +244,33 @@ fn a_build_over_a_refused_file_fails_and_leaves_the_index_as_it_was() {
             assert_eq!(after.unwrap().total_documents, 1, "{file} {bad:?}");
         }
     }
+}
+
+/// The index is left as it was only by an ordinary build. A forced
+/// rebuild deletes the old index before the layer files are looked at
+/// (as does a build after a change of configuration), so a refusal then
+/// leaves an index that holds no document, until a build succeeds. This
+/// is what the code does today, not a rule: the spec's follow-up is to
+/// check the layer files before the old index is deleted, and this test
+/// changes with it.
+#[test]
+fn a_forced_build_over_a_refused_file_does_not_keep_the_old_index() {
+    let fx = Fx::new();
+    assert_eq!(fx.build(), Ok(1));
+    let before = fx.corpus().search(&SearchRequest::new("proof"));
+    assert_eq!(before.unwrap().total_documents, 1);
+    put_bad(&fx.root().join(topics::CORRECTIONS_FILE), Bad::Directory);
+    let corpus = fx.corpus();
+    let e = within("build_index", move || {
+        corpus
+            .build_index(true)
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    })
+    .unwrap_err();
+    assert!(e.contains("is not a regular file"), "{e}");
+    let after = fx.corpus().search(&SearchRequest::new("proof"));
+    assert_eq!(after.unwrap().total_documents, 0);
 }
 
 /// A link to a regular file is followed, for each file and for both: the

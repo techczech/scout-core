@@ -395,36 +395,45 @@ pub(crate) enum Opened {
 /// A link to a regular file is followed (an archive can sit behind links).
 /// Anything else is refused with an error that says so: a directory, a
 /// FIFO, a socket, a device (`/dev/zero` would be read without end), or a
-/// link to one of these. The check is on the opened file, not on the path
-/// before it is opened, so nothing can be put there between the two; and
-/// the open does not wait for a writer on a FIFO (`O_NONBLOCK`, which
-/// changes nothing for a regular file). A path with nothing at it, or a
-/// dangling link, is the `NotFound` of a plain open.
+/// link to one of these. A path with nothing at it, or a dangling link, is
+/// `NotFound`.
+///
+/// Three steps. (1) The path is looked at, links followed, before
+/// anything is opened: what is not a regular file is refused there and
+/// never opened (an open of a FIFO waits for a writer, an open of a
+/// device can have effects of its own). (2) A plain `File::open`, with no
+/// flag of ours: a regular file is opened exactly as it always was. (3)
+/// The opened file must itself be a regular file, so a path changed
+/// between (1) and (2) is not read.
+///
+/// The one gap: another process that puts a FIFO at the path between (1)
+/// and (2) can still make the open wait. The engine does not defend
+/// against a concurrent hostile writer in the user's own archive.
 pub(crate) fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut open = std::fs::OpenOptions::new();
-    open.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = open.open(path)?;
-    let kind = file.metadata()?.file_type();
-    if kind.is_file() {
-        return Ok(file);
-    }
-    let what = if kind.is_dir() {
-        "a directory"
-    } else {
-        special_kind(&kind)
+    let refuse = |kind: std::fs::FileType| {
+        let what = if kind.is_dir() {
+            "a directory"
+        } else {
+            special_kind(&kind)
+        };
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not a regular file ({what}); it was not read",
+                path.display()
+            ),
+        )
     };
-    Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "{} is not a regular file ({what}); it was not read",
-            path.display()
-        ),
-    ))
+    let before = std::fs::metadata(path)?.file_type();
+    if !before.is_file() {
+        return Err(refuse(before));
+    }
+    let file = std::fs::File::open(path)?;
+    let opened = file.metadata()?.file_type();
+    if !opened.is_file() {
+        return Err(refuse(opened));
+    }
+    Ok(file)
 }
 
 #[cfg(unix)]
@@ -499,6 +508,30 @@ pub(crate) fn same_bytes(path: &Path, first: &Sha1, second: &Sha1) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A regular file is opened as a plain `File::open` opens it: the
+    /// status flags of the handle are those of a plain open, with no
+    /// `O_NONBLOCK` (which, set at the open, makes the open of a file
+    /// another process holds a lease on fail instead of wait).
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_file_is_opened_with_the_flags_of_a_plain_open() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        let flags = |f: &std::fs::File| unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETFL) };
+        let (ours, plain) = (
+            open_regular(&path).unwrap(),
+            std::fs::File::open(&path).unwrap(),
+        );
+        assert!(flags(&ours) >= 0);
+        assert_eq!(flags(&ours), flags(&plain));
+        assert_eq!(flags(&ours) & libc::O_NONBLOCK, 0);
+        let mut text = String::new();
+        (&ours).read_to_string(&mut text).unwrap();
+        assert_eq!(text, "{}\n");
+    }
 
     fn obj(v: Value) -> Object {
         v.as_object().unwrap().clone()
