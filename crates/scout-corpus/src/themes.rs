@@ -40,6 +40,21 @@ pub const THEMES_FILE: &str = "analysis/context/themes.json";
 /// The most the theme list may hold.
 pub const MAX_THEMES_BYTES: u64 = 16 << 20;
 
+/// The longest theme name, and the longest `id`, the read returns, in
+/// characters; a list with a longer one is refused.
+///
+/// Every name the read returns must be one `add_theme` can write, and a
+/// correction line is at most `topics::MAX_LINE_BYTES` (1 MiB =
+/// 1,048,576 bytes). 300 characters are at most 1,200 bytes of UTF-8
+/// (4 each); JSON escaping at most doubles a one-byte character (`"`,
+/// `\`) and leaves the others as they are, so the name takes at most
+/// 1,200 bytes of the line, about a thousandth of it. The tagger's names
+/// are a few words.
+pub const MAX_THEME_NAME_CHARS: usize = 300;
+/// The longest `definition` the read returns, in characters, its closing
+/// `…` counted; a longer one is cut. It is text to show, never a key.
+pub const MAX_THEME_DEFINITION_CHARS: usize = 2000;
+
 /// One theme of the list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ThemeEntry {
@@ -148,7 +163,8 @@ pub(crate) fn load(archive: &Path) -> Result<Option<Vec<Stored>>> {
 /// list, or with a theme whose `name` is not text; an `id` or
 /// `definition` that is not text; a `name` holding a control character
 /// (`add_theme` cannot be given it, and the read returns no altered
-/// name).
+/// name); a `name` or an `id` over [`MAX_THEME_NAME_CHARS`] characters.
+/// A `definition` over [`MAX_THEME_DEFINITION_CHARS`] is cut.
 ///
 /// A later name that is the same theme as an earlier one is left out:
 /// `add_theme` would write the earlier spelling for it.
@@ -171,6 +187,15 @@ pub fn themes_list(archive: &Path) -> Result<Vec<ThemeEntry>> {
         let n = i + 1;
         // The check `add_theme` makes of the theme it is given.
         let name = plain_text(&format!("{at}: theme {n}: `name`"), &t.name)?;
+        // Not echoed: the value is the over-long thing.
+        let too_long = |key: &str| {
+            anyhow::anyhow!(
+                "{at}: theme {n}: `{key}` is longer than {MAX_THEME_NAME_CHARS} characters (nothing was changed)"
+            )
+        };
+        if name.chars().count() > MAX_THEME_NAME_CHARS {
+            return Err(too_long("name"));
+        }
         let optional = |field: Field, key: &str| match field {
             Field::None => Ok(None),
             Field::Text(s) => Ok(Some(one_line(&body_text(&s))).filter(|s| !s.is_empty())),
@@ -179,7 +204,13 @@ pub fn themes_list(archive: &Path) -> Result<Vec<ThemeEntry>> {
             )),
         };
         let id = optional(t.id, "id")?;
-        let definition = optional(t.definition, "definition")?;
+        if id
+            .as_ref()
+            .is_some_and(|id| id.chars().count() > MAX_THEME_NAME_CHARS)
+        {
+            return Err(too_long("id"));
+        }
+        let definition = optional(t.definition, "definition")?.map(|d| cut(&d));
         if seen.insert(fold(&name)) {
             out.push(ThemeEntry {
                 name,
@@ -189,6 +220,21 @@ pub fn themes_list(archive: &Path) -> Result<Vec<ThemeEntry>> {
         }
     }
     Ok(out)
+}
+
+/// `s` in at most [`MAX_THEME_DEFINITION_CHARS`] characters: as it is
+/// when it fits, else its start with `…` in place of the rest.
+fn cut(s: &str) -> String {
+    match s.char_indices().nth(MAX_THEME_DEFINITION_CHARS) {
+        None => s.to_string(),
+        Some(_) => {
+            let keep = s
+                .char_indices()
+                .nth(MAX_THEME_DEFINITION_CHARS - 1)
+                .map_or(s.len(), |(i, _)| i);
+            format!("{}…", s[..keep].trim_end())
+        }
+    }
 }
 
 #[cfg(test)]

@@ -82,3 +82,11 @@ Where it lives: `crates/scout-corpus/src/themes.rs` (`themes_list`, `same_theme`
 - **JSON shape.** `id` and `definition` are always present, null when absent, as `items` is in a briefing row.
 - **`definition` is one line**: whitespace runs, line breaks included, as one space.
 - **No `fold` re-export.** `normalize::fold` and `topics::fold` were public already; `same_theme` is the one addition.
+
+### Changed after review (2026-10-13)
+
+One defect found in review, fixed in the read path of `crates/scout-corpus/src/themes.rs` (the loader and the writer are untouched), with tests in `crates/scout-corpus/tests/theme_list_read.rs` that fail without the fix:
+
+- **A name the writer cannot write was returned.** The read had no limit on a name's length, and `add_theme` fails on a name that takes a correction line over `topics::MAX_LINE_BYTES` (1 MiB), so the invariant "every name returned is accepted by `add_theme`" did not hold for a very long name. Now a `name` over `MAX_THEME_NAME_CHARS` = 300 characters refuses the list: `<file>: theme N: \`name\` is longer than 300 characters (nothing was changed)`, the name not echoed. 300 characters are at most 1,200 bytes of UTF-8, and JSON escaping at most doubles a one-byte character, so a name takes at most 1,200 bytes of a 1,048,576-byte line. A name of exactly 300 four-byte characters is returned, and `add_theme` writes it.
+- **`id` has the same limit** and the same refusal (`\`id\``), measured after cleaning.
+- **`definition` is cut** to `MAX_THEME_DEFINITION_CHARS` = 2,000 characters: a longer one is its first 1,999 characters (space at the cut trimmed) and `…`. It is text to show, not a key, so it is not a refusal.

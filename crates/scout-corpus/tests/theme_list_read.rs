@@ -7,7 +7,8 @@ mod event_seed_support;
 use event_seed_support::{json, put, tree, Path, Value};
 use scout_corpus::corrections::CorrectionEditor;
 use scout_corpus::themes::{
-    same_theme, themes_list, NoThemeList, ThemeEntry, MAX_THEMES_BYTES, THEMES_FILE,
+    same_theme, themes_list, NoThemeList, ThemeEntry, MAX_THEMES_BYTES, MAX_THEME_DEFINITION_CHARS,
+    MAX_THEME_NAME_CHARS, THEMES_FILE,
 };
 
 const MATHS: &str = "AI and mathematics";
@@ -362,4 +363,78 @@ fn the_list_is_read_in_an_archive_that_holds_nothing_else() {
     let before = tree(tmp.path());
     assert!(themes_list(tmp.path()).unwrap().is_empty());
     assert_eq!(tree(tmp.path()), before);
+}
+
+/// A name the read returns is one the writer can write: the longest one
+/// allowed is added in its spelling, and a longer one refuses the list
+/// (a name of a mebibyte would pass no correction line).
+#[test]
+fn a_name_or_an_id_over_the_limit_refuses_the_list_and_one_at_the_limit_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // Four bytes a character, the most a name can take of a line.
+    let fits = "𝒜".repeat(MAX_THEME_NAME_CHARS);
+    archive(
+        root,
+        &json!({"themes": [{"name": fits, "id": "i".repeat(MAX_THEME_NAME_CHARS)}]}),
+    );
+    assert_eq!(names(root), [fits.as_str()]);
+    let e = CorrectionEditor::open(root).unwrap();
+    assert_eq!(e.add_theme("x:1", &fits).unwrap().value, fits);
+    e.remove_theme("x:1", &fits).unwrap();
+
+    let at = root.join(THEMES_FILE);
+    for (list, key) in [
+        (
+            json!([{"name": MATHS}, {"name": format!("{fits}𝒜")}]),
+            "name",
+        ),
+        (
+            json!([{"name": MATHS}, {"name": "n".repeat(1 << 20)}]),
+            "name",
+        ),
+        (
+            json!([{"name": MATHS}, {"name": VIBE, "id": "i".repeat(MAX_THEME_NAME_CHARS + 1)}]),
+            "id",
+        ),
+    ] {
+        put(root, THEMES_FILE, &json!({"themes": list}).to_string());
+        let before = tree(root);
+        assert_eq!(
+            refusal(root),
+            format!(
+                "{}: theme 2: `{key}` is longer than 300 characters (nothing was changed)",
+                at.display()
+            )
+        );
+        assert_eq!(tree(root), before);
+    }
+}
+
+#[test]
+fn a_long_definition_is_cut_with_an_ellipsis() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let fits = "é".repeat(MAX_THEME_DEFINITION_CHARS);
+    archive(
+        root,
+        &json!({"themes": [
+            {"name": MATHS, "definition": fits},
+            {"name": VIBE, "definition": format!("{fits}é")},
+            {"name": READER, "definition": format!("{} {}", "d".repeat(MAX_THEME_DEFINITION_CHARS - 2), "word")},
+        ]}),
+    );
+    let got = themes_list(root).unwrap();
+    assert_eq!(got[0].definition.as_deref(), Some(fits.as_str()));
+    let cut = got[1].definition.clone().unwrap();
+    assert_eq!(cut.chars().count(), MAX_THEME_DEFINITION_CHARS);
+    assert_eq!(
+        cut,
+        format!("{}…", "é".repeat(MAX_THEME_DEFINITION_CHARS - 1))
+    );
+    // No space before the ellipsis.
+    assert_eq!(
+        got[2].definition.clone().unwrap(),
+        format!("{}…", "d".repeat(MAX_THEME_DEFINITION_CHARS - 2))
+    );
 }
