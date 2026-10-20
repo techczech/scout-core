@@ -290,6 +290,19 @@ impl Registry {
         Registry::load_from(&registry_path())
     }
 
+    /// Most specific registered root containing the real project path.
+    /// Component comparisons avoid prefix matches such as `notes` / `notes-old`.
+    pub fn containing(&self, path: &Path) -> Option<(&CorpusConfig, PathBuf)> {
+        let path = std::fs::canonicalize(path).ok()?;
+        self.corpora
+            .iter()
+            .filter_map(|c| {
+                let root = std::fs::canonicalize(c.root()).ok()?;
+                path.starts_with(&root).then_some((c, root))
+            })
+            .max_by_key(|(_, root)| root.components().count())
+    }
+
     pub fn get(&self, id: &str) -> Result<&CorpusConfig> {
         self.corpora.iter().find(|c| c.id == id).ok_or_else(|| {
             let ids: Vec<&str> = self.corpora.iter().map(|c| c.id.as_str()).collect();

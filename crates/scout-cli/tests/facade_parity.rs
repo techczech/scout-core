@@ -562,3 +562,76 @@ fn single_corpus_hybrid_engine_json_matches_main_golden() {
     assert_eq!(api::to_json(&reply.body).unwrap() + "\n", expected);
     assert!(reply.notes.is_empty());
 }
+
+#[test]
+fn capture_json_and_read_commands_have_exact_facade_parity_without_registry() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let p = project.to_str().unwrap();
+    let input = root.join("input.md");
+    fs::write(&input, "Exact input.\n").unwrap();
+    let engine = Engine::new(Registry::default(), root.join("data/indexes"));
+    let reply = engine
+        .capture(&CaptureQuery {
+            project: p.into(),
+            title: "Input".into(),
+            kind: "snippet".into(),
+            input: Some(input.to_str().unwrap().into()),
+            ..Default::default()
+        })
+        .unwrap();
+    fs::remove_dir_all(project.join("research")).unwrap();
+    let o = scout(
+        &root.join("corpora.toml"),
+        &root.join("data"),
+        &[
+            "capture",
+            "--project",
+            p,
+            "--title",
+            "Input",
+            "--kind",
+            "snippet",
+            "--json",
+            input.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success());
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        api::to_json(&reply.body).unwrap() + "\n"
+    );
+    assert_eq!(
+        String::from_utf8(o.stderr)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        reply.notes
+    );
+    let expected = engine.capture_list(p).unwrap();
+    let o = scout(
+        &root.join("corpora.toml"),
+        &root.join("data"),
+        &["capture", "--list", "--project", p, "--json"],
+    );
+    assert!(o.status.success());
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        api::to_json(&expected.body).unwrap() + "\n"
+    );
+    let expected = engine.capture_where_used("input.md").unwrap();
+    let o = scout(
+        &root.join("corpora.toml"),
+        &root.join("data"),
+        &["capture", "--where-used", "input.md", "--json"],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(o.stdout).unwrap(),
+        api::to_json(&expected.body).unwrap() + "\n"
+    );
+    assert_eq!(reply.body.corpus, None);
+    assert!(!reply.body.indexed);
+}

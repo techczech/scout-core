@@ -619,7 +619,11 @@ fn temp_name(path: &Path) -> String {
 pub fn write_atomic(path: &Path, text: &str, rename: RenameFn) -> Result<()> {
     let dir = parent_dir(path);
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    let tmp = dir.join(temp_name(path));
+    let tmp = dir.join(if file_name(path) == "_manifest.jsonl" {
+        format!(".manifest.{}.tmp", std::process::id())
+    } else {
+        temp_name(path)
+    });
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

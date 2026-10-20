@@ -9,7 +9,11 @@ spec: docs/specs/2026-09-27-corpus-engine-and-cli.md
 
 Values in the examples are illustrative. Every `--json` document is one pretty-printed JSON object with a top-level `schema_version` (integer). A field is added without a bump; a rename, removal or meaning change bumps that command's `schema_version`.
 
-## Changed in this version (0.4.4)
+## Changed in this version (0.4.5)
+
+`scout capture` adds the explicit engine write confined to `<project>/research/`, its receipt listing and where-used lookup. Every capture JSON reply uses `schema_version: 1`. Capture incrementally rebuilds the containing index and refreshes existing vectors, reusing unchanged text by hash. `indexed` and `passages` describe the new stub only. See “Research-folder contract” below.
+
+## Changed in 0.4.4
 
 Engine `scout-corpus/14`, unchanged: the index holds what it held and no index is rebuilt. One read is added; nothing is written by it.
 
@@ -1285,3 +1289,112 @@ Library: `scout_corpus::api::remove_corpus(id, keep_index) -> Result<Removed>`, 
 ## Registry writes
 
 `add`, `remove` and `init-defaults` write the registry atomically (a temp file in the same directory, then a rename); a failed write leaves the old file as it was. `add` appends the new `[[corpus]]` table and `remove` cuts the entry's lines, so the rest of the file, comments included, stays byte-for-byte; when a hand-edited layout cannot be edited that way, the file is regenerated with its leading comment block kept. `init-defaults` writes an empty registry whose comment explains `scout corpora add`. With no registry, every other command fails with `no corpus registry at <path>; add a folder with \`scout corpora add <folder>\`` (exit 3).
+
+
+## `scout capture` — research-folder contract
+
+```
+scout capture --project <folder> --kind <kind> --title "<title>"
+              [--prompt "<text>"] [--source <scout:id|url|file:path>]... [--artefact <path>]
+              [--slug <slug>] [--by <who>] [--json] (<file.md> | -)
+scout capture --list --project <folder> [--json]
+scout capture --where-used <file> [--json]
+```
+
+Capture deliberately writes source material: one reusable unit in
+`<project>/research/<UTC-yyyy-mm-dd>-<slug>.md`. It is the explicit exception to
+the read-only query/index contract. The project must already be a directory;
+`research/` is created when absent and must be a real directory, not a symlink.
+Slugs derive from the title (ASCII lower case, accents dropped, hyphens between
+words), capped at 60 characters at a hyphen boundary (or 60 characters for a single longer word). An explicit `--slug` must have that form and be at most 60 characters. Clashes get `-2`, `-3`, and so on;
+existing files are never overwritten.
+
+The required YAML fields are `title`, `kind`, `created` (UTC ISO 8601 seconds),
+and `project` (relative to the containing corpus, `.` at its root, otherwise an
+absolute path). Kinds are `evidence`, `table`, `visualisation`, `snippet`,
+`search`, `widget`. `prompt` and `sources` are optional. Markdown input may
+already have YAML frontmatter: unknown keys and existing sources are retained,
+required fields are set by capture, an explicit prompt replaces the old prompt,
+and `--source` entries are added. A leading BOM is preserved and recognised before
+`---`. User keys stay first in their original order; contract fields follow.
+Plain-string sources normalise `scout:` to a `scout` mapping, HTTP(S) to `url`,
+and other strings to `file`. The body is preserved. The YAML writer does not
+preserve comments or original scalar quoting; unquoted dates may be re-emitted
+as quoted text.
+
+Each `--source` becomes a mapping: `scout:<passage-id>` → `{"scout":"<passage-id>"}`,
+a bare HTTP(S) URL or `url:<url>` → `{"url":"<url>"}`, and `file:<path>` →
+`{"file":"<path>"}`. Scout passages must be captured with their passage ids.
+File references inside the project are project-relative, otherwise absolute.
+Provenance is record-only: paths are never resolved against the filesystem and
+need not exist; `..` is normalised lexically. `~` is expanded and relative paths
+use the project as their base. An empty `--source file:` is refused.
+
+An artefact must resolve to an existing file. An explicit `--artefact` inside
+the project stays in place. Outside the project it is copied beside the stub
+with the same date and slug and its extension; extensionless copies use `.bin`.
+Copied Markdown artefacts, or artefacts whose stem clashes with the stub,
+receive a `-file` stem suffix. Names are compared case-insensitively.
+Input-frontmatter `artefact` must resolve inside the project (including through
+symlinks), or capture is refused. In every case `artefact` is project-relative:
+a copied sibling is `research/<name>`; an existing in-project file keeps its
+project-relative path. App callers may pass artefacts only from their project
+or vault and must enforce that boundary before spawning capture.
+
+`research/_manifest.jsonl` is an append-only receipt, not search truth. Each
+line is staged in a synced temporary file, then appended under a file lock in
+one write; a partial append is rolled back. `by` defaults to `verb`, accepting
+`verb`, `agent`, `app:talkweaver`, `app:writeflex`. The lock is
+`research/.manifest.lock`; the synced staging file is `.manifest.<pid>.tmp`.
+The advisory lock file remains after capture: deleting it could allow concurrent
+callers to lock different inodes. The staging file is removed on completion.
+
+Capture JSON has the cross-app contract's six fields:
+
+```json
+{"schema_version":1,"file":"/absolute/project/research/2026-10-20-hebb.md","manifest":true,"corpus":"talks","indexed":true,"passages":12}
+```
+
+`file` is the absolute Markdown path. `manifest` says whether its receipt was
+appended. The most specific registered corpus containing the real project path
+is selected, including roots written with `~`. Its incremental build runs
+synchronously in process, with the usual index-target guards. `indexed` means
+the new stub is present in the index after that build; `passages` is that stub's
+own passage count, or zero when it is absent. Existing vectors are refreshed
+with the CLI's embedder, reusing unchanged vectors by text hash. Registry include/exclude and required-frontmatter
+rules still apply. Without a containing corpus (including no registry), the
+file and receipt are still written: `corpus: null`, `indexed: false`,
+`passages: 0`, with a note on stderr. A manifest or index failure after the file
+is saved also returns success, reports false for that stage and explains the
+failure on stderr. Capture exits non-zero only when no capture file was saved.
+A malformed existing registry is refused before writing.
+
+`--list` prints the project's manifest as JSONL in human mode, or as a JSON
+object with `--json` (`entries` is empty when the manifest is absent):
+
+```json
+{"schema_version":1,"project":"/absolute/project","entries":[{"file":"2026-10-20-hebb.md","kind":"evidence","title":"Hebb","created":"2026-10-20T19:05:00Z","by":"verb","sources":[{"scout":"highlights:readings/works/hebb-1949.md:12"}]}]}
+```
+
+`--where-used` searches only registered `markdown-folder` corpora, honouring
+include/exclude globs (including outlines and
+pieces that lack the corpus's required metadata) for the literal file name.
+Hidden folders and `research/` are skipped. Matches are de-duplicated across
+nested corpora, ordered by absolute file path and then one-based line number.
+Unreadable entries and non-UTF-8 files are skipped and counted in `skipped`;
+they do not abort the lookup. Human mode prints `file:line: text`; JSON is an
+object with `hits` empty when unused. No hits returns exit 1:
+
+```json
+{"schema_version":1,"file":"2026-10-20-hebb.md","hits":[{"file":"/absolute/vault/talk/talk-outline.md","line":12,"text":"See research/2026-10-20-hebb.md"}],"skipped":0}
+```
+
+Facade: `Engine::capture(&CaptureQuery)`, `Engine::capture_list(project)`,
+`Engine::capture_where_used(file)` return the usual `Reply`. Apps pass Markdown
+in `CaptureQuery.body` with `input: None`; CLI input paths and `-` are read
+inside the same module. `Engine::for_capture()` loads the user registry and
+index directory, accepting a missing registry as an empty one. The CLI attaches
+the same embedder as `index build`; library callers attach their embedder with
+`with_embedder` to refresh existing vectors. CLI parity for all
+three forms is exercised in `crates/scout-cli/tests/facade_parity.rs`; end-to-end
+stdin, indexing and command validation are in `crates/scout-cli/tests/capture.rs`.

@@ -5,6 +5,7 @@
 //! Exit codes: 0 ok, 1 no results, 2 usage, 3 index or registry missing.
 
 mod briefing_cmds;
+mod capture_cmd;
 mod correct_cmds;
 mod event_cmds;
 mod term;
@@ -47,6 +48,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// File reusable material in a project research folder, or read its receipts and usages.
+    Capture(capture_cmd::CaptureArgs),
     /// Manage the corpus registry (~/.config/scout/corpora.toml).
     Corpora {
         #[command(subcommand)]
@@ -545,6 +548,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     // Registry writes run before the engine loads: the registry may not
     // exist yet.
     let cli = match cli.cmd {
+        Cmd::Capture(args) => return capture_cmd::run(args),
         Cmd::Corpora { cmd } => match cmd {
             CorporaCmd::InitDefaults { force, preset } => {
                 let preset = match preset.as_deref() {
@@ -612,6 +616,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     };
     let engine = Engine::from_env()?.with_embedder(embedder()?);
     match cli.cmd {
+        Cmd::Capture(_) => unreachable!("handled above"),
         Cmd::Search {
             query,
             in_,

@@ -17,6 +17,7 @@
 pub mod adapter;
 pub mod api;
 pub mod briefings;
+mod capture;
 pub mod cite;
 pub mod clean;
 pub mod colloc;
