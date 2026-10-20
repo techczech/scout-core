@@ -268,3 +268,94 @@ fn init_defaults_is_generic_and_the_preset_is_hidden() {
         "{text}"
     );
 }
+
+#[test]
+fn maintainer_preset_registers_discovery_stores_and_excludes_generated_copies() {
+    let h = Home::new();
+    let o = h.scout(&["corpora", "init-defaults", "--preset", "dominik"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let registry = scout_corpus::registry::Registry::load_from(&h.registry()).unwrap();
+    for (id, path, excludes) in [
+        (
+            "learninglog",
+            "01_reading-research/_LEARNINGLOG",
+            vec!["**/sources/**"],
+        ),
+        (
+            "talks",
+            "03_presenting-teaching/dominiks-presentations-library",
+            vec![
+                "_SLIDE-VERSIONS/**",
+                "_PRESENTATIONS/**",
+                "z-old-powerpoint-imports/**",
+                "**/bundle/**",
+            ],
+        ),
+        (
+            "slide-versions",
+            "03_presenting-teaching/dominiks-presentations-library/_SLIDE-VERSIONS",
+            vec![],
+        ),
+        (
+            "abstracts-archive",
+            "03_presenting-teaching/dominiks-session-abstracts-archive",
+            vec!["cache/**"],
+        ),
+        (
+            "york-edit-pass",
+            "03_presenting-teaching/york-2026-edit-pass",
+            vec![],
+        ),
+        (
+            "ai-foundations-edit-pass",
+            "03_presenting-teaching/ai-foundations-2026-edit-pass",
+            vec![],
+        ),
+    ] {
+        let cfg = registry.get(id).unwrap();
+        assert_eq!(cfg.path, format!("~/gitrepos/{path}"));
+        assert_eq!(cfg.kind, scout_corpus::registry::CorpusKind::MarkdownFolder);
+        assert_eq!(cfg.include, vec!["**/*.md"]);
+        assert_eq!(cfg.exclude, excludes);
+        assert!(cfg.require_frontmatter.is_empty());
+        let root = h.home.join("fixtures").join(id);
+        let mut fixture = cfg.clone();
+        fixture.path = root.display().to_string();
+        write(&root, "kept.md", "A useful discovery passage.\n");
+        if id == "talks" {
+            for rel in [
+                "_SLIDE-VERSIONS/s/v.md",
+                "_PRESENTATIONS/run.md",
+                "z-old-powerpoint-imports/old.md",
+                "bundle/a.md",
+                "talk/bundle/b.md",
+            ] {
+                write(&root, rel, "A generated copy.\n");
+            }
+            write(&root, "talk/slides.md", "Another useful slide.\n");
+        } else if id == "learninglog" {
+            write(&root, "sources/2026/page.md", "A verbatim archived page.\n");
+            write(&root, "notes/lesson/sources/copy.md", "A nested archived page.\n");
+            write(&root, "notes/lesson.md", "A learning lesson.\n");
+        } else if id == "abstracts-archive" {
+            write(&root, "cache/copy.md", "A cached copy.\n");
+        }
+        let files = scout_corpus::markdown::discover(&fixture).unwrap();
+        let paths: Vec<_> = files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            if id == "talks" {
+                vec!["kept.md", "talk/slides.md"]
+            } else if id == "learninglog" {
+                vec!["kept.md", "notes/lesson.md"]
+            } else {
+                vec!["kept.md"]
+            }
+        );
+    }
+    assert!(registry
+        .get("writing")
+        .unwrap()
+        .exclude
+        .contains(&"tweets/**".into()));
+}
