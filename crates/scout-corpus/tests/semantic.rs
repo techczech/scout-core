@@ -388,3 +388,196 @@ fn fixture_registry(w: &Path) -> (Registry, ()) {
     .unwrap();
     (reg, ())
 }
+
+// Scores are deliberately far apart: every zeta document is a better
+// semantic match than alpha's best, despite alpha sorting first by name.
+fn cross_corpus_candidates() -> Vec<(scout_corpus::SearchResults, scout_corpus::SearchResults)> {
+    let tmp = tempfile::tempdir().unwrap();
+    let (e, _) = engine(tmp.path());
+    let template = search(&e, "machine", SearchMode::Semantic);
+    [
+        ("alpha", vec![("weak.md", 0.1)]),
+        ("zeta", vec![("strong.md", 0.9), ("medium.md", 0.6)]),
+    ]
+    .into_iter()
+    .map(|(corpus, docs)| {
+        let mut sem = template.clone();
+        sem.corpora = vec![corpus.into()];
+        sem.results = docs
+            .into_iter()
+            .map(|(path, score)| {
+                let mut d = template.results[0].clone();
+                d.corpus = corpus.into();
+                d.rel_path = path.into();
+                d.score = score;
+                d.rank = score / if corpus == "alpha" { 0.1 } else { 0.9 };
+                d.hits.truncate(1);
+                d.hits[0].passage_id = format!("{corpus}:{path}:1");
+                d.hits[0].score = score;
+                d.hits[0].semantic_score = Some(score);
+                d
+            })
+            .collect();
+        sem.total_documents = sem.results.len();
+        sem.total_passages = sem.results.len();
+        let mut fts = sem.clone();
+        fts.results.clear();
+        fts.total_documents = 0;
+        fts.total_passages = 0;
+        fts.mode = None;
+        (fts, sem)
+    })
+    .collect()
+}
+
+#[test]
+fn cross_corpus_hybrid_merge_ranks_by_match_strength() {
+    let r =
+        scout_corpus::semantic::merge_hybrid("machine", cross_corpus_candidates(), 20, 3).unwrap();
+    assert_eq!(paths(&r), ["strong.md", "medium.md", "weak.md"]);
+    assert!(r.results.windows(2).all(|w| w[0].score > w[1].score));
+    assert_eq!(r.results[0].rank, 1.0);
+    assert!(r.results[1].rank < 1.0);
+}
+
+#[test]
+fn cross_corpus_limit_does_not_reserve_a_place_for_each_corpus() {
+    let parts = cross_corpus_candidates();
+    // Reproduce the previous merge so this test explicitly guards its bias.
+    let old = scout_corpus::search::merge(
+        "machine",
+        parts
+            .clone()
+            .into_iter()
+            .map(|(f, s)| scout_corpus::semantic::fuse(f, s, 20, 3))
+            .collect(),
+        2,
+    )
+    .unwrap();
+    assert_eq!(paths(&old), ["weak.md", "strong.md"]);
+    let new = scout_corpus::semantic::merge_hybrid("machine", parts, 2, 3).unwrap();
+    assert_eq!(paths(&new), ["strong.md", "medium.md"]);
+}
+
+#[test]
+fn cross_corpus_word_votes_use_local_ranks_not_bm25_scales() {
+    let mut parts = cross_corpus_candidates();
+    parts[0].0 = parts[0].1.clone();
+    parts[0].0.results[0].score = 30.0;
+    // This extra alpha word match pushes strong to fourth place in pooled
+    // BM25, making weak strictly beat strong there rather than merely tie.
+    let mut word_only = parts[0].0.results[0].clone();
+    word_only.rel_path = "word-only.md".into();
+    word_only.hits[0].passage_id = "alpha:word-only.md:1".into();
+    word_only.score = 9.5;
+    parts[0].0.results.push(word_only);
+    parts[0].0.total_documents = 2;
+    parts[0].0.total_passages = 2;
+    parts[1].0 = parts[1].1.clone();
+    parts[1].0.results.reverse();
+    parts[1].0.results[0].score = 10.0; // medium: first local word match
+    parts[1].0.results[1].score = 9.0; // strong: second local word match
+    let merged = scout_corpus::semantic::merge_hybrid("machine", parts.clone(), 20, 3).unwrap();
+    assert_eq!(
+        paths(&merged),
+        ["medium.md", "strong.md", "weak.md", "word-only.md"]
+    );
+    assert!(merged.results[1].score > merged.results[2].score);
+    let top = scout_corpus::semantic::merge_hybrid("machine", parts.clone(), 2, 3).unwrap();
+    assert!(top.results.iter().all(|d| d.corpus == "zeta"));
+
+    // Scale alpha DOWN tenfold: pooled BM25 would move weak from first
+    // to third, flipping its order against strong. Local votes stay identical.
+    for d in &mut parts[0].0.results {
+        d.score /= 10.0;
+    }
+    let scaled = scout_corpus::semantic::merge_hybrid("machine", parts.clone(), 20, 3).unwrap();
+    assert_eq!(paths(&scaled), paths(&merged));
+    assert_eq!(
+        merged.results.iter().map(|d| d.score).collect::<Vec<_>>(),
+        scaled.results.iter().map(|d| d.score).collect::<Vec<_>>()
+    );
+
+    // Equal BM25 scores share a local rank: both zeta documents get 1/61.
+    parts[1].0.results[1].score = 10.0;
+    let tied = scout_corpus::semantic::merge_hybrid("machine", parts, 20, 3).unwrap();
+    assert_eq!(
+        paths(&tied),
+        ["strong.md", "medium.md", "weak.md", "word-only.md"]
+    );
+    assert_eq!(tied.results[0].score, 0.032787);
+}
+
+#[test]
+fn cross_corpus_hybrid_keeps_same_path_documents_distinct() {
+    let mut parts = cross_corpus_candidates();
+    parts[0].1.results[0].rel_path = "strong.md".into();
+    parts[0].1.results[0].hits[0].passage_id = "alpha:strong.md:1".into();
+    // Both modalities vote for zeta's strong document, not alpha's namesake.
+    parts[1].0 = parts[1].1.clone();
+    parts[1].0.results.truncate(1);
+    parts[1].0.results[0].score = 10.0;
+    parts[1].0.total_documents = 1;
+    let r = scout_corpus::semantic::merge_hybrid("machine", parts, 20, 3).unwrap();
+    assert_eq!(r.results.len(), 3);
+    assert_eq!(r.total_documents, 3);
+    assert_eq!(r.results[0].corpus, "zeta");
+    assert!(r.results[0].score > 1.0 / 61.0);
+    assert_eq!(r.results[2].corpus, "alpha");
+    assert_eq!(r.results[2].hits[0].semantic_score, Some(0.1));
+}
+
+#[test]
+fn engine_cross_corpus_search_uses_global_semantic_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let alpha = tmp.path().join("alpha");
+    let zeta = tmp.path().join("zeta");
+    write(
+        &alpha,
+        "weak.md",
+        "Tomato compost in the garden grows all summer.",
+    );
+    write(
+        &zeta,
+        "strong.md",
+        "The mind and brain carry every thought through life.",
+    );
+    write(
+        &zeta,
+        "medium.md",
+        "The mind enjoys tomato compost in the garden.",
+    );
+    let reg = Registry::parse(&format!(
+        "[[corpus]]\nid = \"alpha\"\nname = \"A\"\nkind = \"markdown-folder\"\npath = \"{}\"\n\n[[corpus]]\nid = \"zeta\"\nname = \"Z\"\nkind = \"markdown-folder\"\npath = \"{}\"\n",
+        alpha.display(), zeta.display()
+    )).unwrap();
+    let e = Engine::new(reg, tmp.path().join("indexes")).with_embedder(Arc::new(Concepts));
+    e.index_build(&IndexBuildQuery {
+        semantic: true,
+        ..Default::default()
+    })
+    .unwrap();
+    // Czech for mind: no lexical matches, so cosine must decide the order.
+    for mode in [SearchMode::Hybrid, SearchMode::Auto, SearchMode::Semantic] {
+        let r = search(&e, "mysl", mode);
+        assert_eq!(paths(&r), ["strong.md", "medium.md", "weak.md"]);
+        assert!(r.results[1].rank > r.results[2].rank);
+    }
+}
+
+#[test]
+fn cross_corpus_equal_evidence_has_equal_votes_and_stable_ties() {
+    let mut parts = cross_corpus_candidates();
+    parts[0].1.results[0].score = 0.9;
+    parts[0].1.results[0].hits[0].semantic_score = Some(0.9);
+    let a = scout_corpus::semantic::merge_hybrid("machine", parts.clone(), 20, 3).unwrap();
+    parts.reverse();
+    let b = scout_corpus::semantic::merge_hybrid("machine", parts, 20, 3).unwrap();
+    assert_eq!(a.results[0].corpus, "alpha");
+    assert_eq!(a.results[1].corpus, "zeta");
+    assert_eq!(a.results[0].score, a.results[1].score);
+    assert_eq!(
+        serde_json::to_string(&a.results).unwrap(),
+        serde_json::to_string(&b.results).unwrap()
+    );
+}

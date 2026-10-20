@@ -492,8 +492,9 @@ pub struct DocResult {
     /// The shown passage's score times the share of the query terms it holds
     /// itself, plus the title score when the title matches.
     pub score: f64,
-    /// `score` divided by the best score in the same corpus: the merge key
-    /// across corpora (BM25 scores of different corpora do not compare).
+    /// `score` divided by the best score: within one corpus for full text
+    /// and single-corpus search; across the candidate pool for multi-corpus
+    /// semantic and hybrid search.
     pub rank: f64,
     pub title_match: bool,
     pub passage_count: usize,
@@ -523,6 +524,24 @@ pub struct SearchResults {
     /// in relevance order (whose JSON is unchanged).
     #[serde(skip_serializing_if = "Sort::is_relevance")]
     pub sort: Sort,
+}
+
+impl SearchResults {
+    /// Empty evidence with the same query, corpus and sort metadata.
+    pub(crate) fn empty_like(&self) -> Self {
+        Self {
+            schema_version: self.schema_version,
+            query: self.query.clone(),
+            terms: self.terms.clone(),
+            plan: self.plan.clone(),
+            corpora: self.corpora.clone(),
+            total_documents: 0,
+            total_passages: 0,
+            results: Vec::new(),
+            mode: self.mode.clone(),
+            sort: self.sort,
+        }
+    }
 }
 
 fn round6(x: f64) -> f64 {
@@ -1136,6 +1155,40 @@ pub fn merge_sorted(
                 .then(a.corpus.cmp(&b.corpus))
                 .then(a.rel_path.cmp(&b.rel_path))
         });
+    }
+    out.results.truncate(limit);
+    Ok(out)
+}
+
+/// Shared ordering for comparable scores and final cross-corpus fusion.
+pub(crate) fn compare_scored(a: &DocResult, b: &DocResult) -> std::cmp::Ordering {
+    b.score
+        .total_cmp(&a.score)
+        .then(a.corpus.cmp(&b.corpus))
+        .then(
+            a.hits
+                .first()
+                .map(|h| &h.passage_id)
+                .cmp(&b.hits.first().map(|h| &h.passage_id)),
+        )
+        .then(a.rel_path.cmp(&b.rel_path))
+}
+
+/// Merge semantic candidates by their comparable cosine scores.
+pub(crate) fn merge_scored(
+    query: &str,
+    parts: Vec<SearchResults>,
+    limit: usize,
+) -> Result<SearchResults> {
+    let mut out = merge(query, parts, usize::MAX)?;
+    out.results.sort_by(compare_scored);
+    let top = out.results.first().map(|d| d.score).unwrap_or(0.0);
+    for d in &mut out.results {
+        d.rank = if top > 0.0 {
+            round6(d.score / top)
+        } else {
+            0.0
+        };
     }
     out.results.truncate(limit);
     Ok(out)

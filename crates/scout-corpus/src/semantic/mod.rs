@@ -205,26 +205,57 @@ pub fn fuse(
     limit: usize,
     hits_per_doc: usize,
 ) -> SearchResults {
-    let mut rrf: BTreeMap<String, f64> = BTreeMap::new();
-    for (i, d) in fts.results.iter().enumerate() {
-        *rrf.entry(d.rel_path.clone()).or_default() += 1.0 / (RRF_K + (i + 1) as f64);
-    }
-    for (i, d) in sem.results.iter().enumerate() {
-        *rrf.entry(d.rel_path.clone()).or_default() += 1.0 / (RRF_K + (i + 1) as f64);
+    fuse_rankings(fts, sem, limit, hits_per_doc, false)
+}
+
+fn fuse_rankings(
+    fts: SearchResults,
+    sem: SearchResults,
+    limit: usize,
+    hits_per_doc: usize,
+    shared_ranks: bool,
+) -> SearchResults {
+    let key = |d: &DocResult| (d.corpus.clone(), d.rel_path.clone());
+    let mut rrf: BTreeMap<(String, String), f64> = BTreeMap::new();
+    for (docs, local) in [(&fts.results, shared_ranks), (&sem.results, false)] {
+        let mut docs: Vec<_> = docs.iter().collect();
+        if local {
+            docs.sort_by(|a, b| a.corpus.cmp(&b.corpus).then(search::compare_scored(a, b)));
+        }
+        let mut per_corpus: HashMap<&str, (usize, usize, f64)> = HashMap::new();
+        let mut rank = 1;
+        for (i, d) in docs.iter().enumerate() {
+            if !shared_ranks || i == 0 || d.score != docs[i - 1].score {
+                rank = i + 1;
+            }
+            let vote_rank = if local {
+                let state = per_corpus.entry(&d.corpus).or_insert((0, 1, d.score));
+                state.0 += 1;
+                if state.2 != d.score {
+                    state.1 = state.0;
+                    state.2 = d.score;
+                }
+                state.1
+            } else {
+                rank
+            };
+            *rrf.entry(key(d)).or_default() += 1.0 / (RRF_K + vote_rank as f64);
+        }
     }
     let sem_only_total = sem
         .results
         .iter()
-        .filter(|d| !fts.results.iter().any(|f| f.rel_path == d.rel_path))
+        .filter(|d| {
+            !fts.results
+                .iter()
+                .any(|f| f.corpus == d.corpus && f.rel_path == d.rel_path)
+        })
         .count();
-    let mut sem_docs: HashMap<String, DocResult> = sem
-        .results
-        .into_iter()
-        .map(|d| (d.rel_path.clone(), d))
-        .collect();
+    let mut sem_docs: HashMap<(String, String), DocResult> =
+        sem.results.into_iter().map(|d| (key(&d), d)).collect();
     let mut merged: Vec<DocResult> = Vec::new();
     for mut d in fts.results {
-        if let Some(s) = sem_docs.remove(&d.rel_path) {
+        if let Some(s) = sem_docs.remove(&key(&d)) {
             let sem_scores: HashMap<&str, f64> = s
                 .hits
                 .iter()
@@ -246,11 +277,12 @@ pub fn fuse(
     }
     merged.extend(sem_docs.into_values());
     for d in merged.iter_mut() {
-        d.score = round6(rrf[&d.rel_path]);
+        d.score = round6(rrf[&key(d)]);
     }
     merged.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
+            .then(a.corpus.cmp(&b.corpus))
             .then(a.rel_path.cmp(&b.rel_path))
     });
     merged.truncate(limit);
@@ -284,4 +316,38 @@ pub fn hybrid_corpus(
     let fts = search::search_corpus(conn, cfg, &pool)?;
     let sem = semantic_corpus(conn, cfg, &pool, vectors, qvec)?;
     Ok(fuse(fts, sem, req.limit, req.hits_per_doc))
+}
+
+/// Keep each corpus's hybrid candidate pool, then fuse corpus-local word
+/// ranks with one global cosine ranking. Document identity includes corpus;
+/// single-corpus engine searches use `hybrid_corpus` instead.
+pub fn merge_hybrid(
+    query: &str,
+    parts: Vec<(SearchResults, SearchResults)>,
+    limit: usize,
+    hits_per_doc: usize,
+) -> Result<SearchResults> {
+    let mut full_text = Vec::new();
+    let mut semantic = Vec::new();
+    for (mut fts, mut sem) in parts {
+        let local = fuse(
+            fts.clone(),
+            sem.clone(),
+            HYBRID_POOL.max(limit),
+            hits_per_doc,
+        );
+        let keep: BTreeSet<_> = local.results.iter().map(|d| d.rel_path.as_str()).collect();
+        fts.results.retain(|d| keep.contains(d.rel_path.as_str()));
+        sem.results.retain(|d| keep.contains(d.rel_path.as_str()));
+        full_text.push(fts);
+        semantic.push(sem);
+    }
+    // BM25 is comparable only within an index. fuse_rankings orders and
+    // counts word ranks separately for each corpus.
+    let fts = search::merge(query, full_text, usize::MAX)?;
+    let sem = search::merge_scored(query, semantic, usize::MAX)?;
+    let mut out = fuse_rankings(fts, sem, usize::MAX, hits_per_doc, true);
+    out.results.sort_by(search::compare_scored);
+    out.results.truncate(limit);
+    Ok(out)
 }

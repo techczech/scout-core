@@ -953,15 +953,29 @@ impl Engine {
                     .join(" ")
             );
         }
-        let qvec = if any_vectors {
-            embedder.embed_query(&text)?
-        } else {
-            vec![]
-        };
+        if !any_vectors {
+            return search_all(corpora, req);
+        }
+        let qvec = embedder.embed_query(&text)?;
         let mut parts = Vec::new();
+        let mut hybrid_parts = Vec::new();
+        let cross_corpus = plan.len() > 1;
         let mut used = None;
         for (c, ranking) in &plan {
             let conn = index::open_existing(&c.config, c.index_path())?;
+            if cross_corpus && mode != SearchMode::Semantic {
+                let mut pool = req.clone();
+                pool.limit = semantic::HYBRID_POOL.max(req.limit);
+                let fts = search::search_corpus(&conn, &c.config, &pool)?;
+                let sem = if let Ranking::Hybrid(v) = ranking {
+                    used = Some("hybrid");
+                    semantic::semantic_corpus(&conn, &c.config, &pool, v, &qvec)?
+                } else {
+                    fts.empty_like()
+                };
+                hybrid_parts.push((fts, sem));
+                continue;
+            }
             let part = match ranking {
                 Ranking::Fts if mode == SearchMode::Semantic => continue,
                 Ranking::Fts => search::search_corpus(&conn, &c.config, req)?,
@@ -976,7 +990,13 @@ impl Engine {
             };
             parts.push(part);
         }
-        let mut body = search::merge(&req.query, parts, req.limit)?;
+        let mut body = if !hybrid_parts.is_empty() {
+            semantic::merge_hybrid(&req.query, hybrid_parts, req.limit, req.hits_per_doc)?
+        } else if cross_corpus && mode == SearchMode::Semantic {
+            search::merge_scored(&req.query, parts, req.limit)?
+        } else {
+            search::merge(&req.query, parts, req.limit)?
+        };
         body.mode = used.map(String::from);
         Ok(body)
     }
