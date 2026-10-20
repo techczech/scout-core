@@ -18,7 +18,7 @@ register: FOR AGENTS
 
 ## Invariants (must hold after every ticket)
 
-1. **Sources are never written.** Corpus folders are read-only to the engine. `git -C <source> status --porcelain` is unchanged after any command.
+1. **Sources are never written by query/index commands.** Capture is the one engine write to corpus folders, confined to `<project>/research/` for new research units and receipts. `git -C <source> status --porcelain` is unchanged after any query/index command.
 2. **Quotes are original text.** Normalisation feeds counting and matching only. Every hit, KWIC line, citation and verify result carries the ORIGINAL source text and a source line number, never the normalised form. Offsets map from the normalised copy back to the original (the estate lesson "offsets from a normalised copy").
 3. **Counts agree across views.** For the same word and filters, the KWIC line count = the n-gram count (n=1) = the word-profile frequency; a collocate row's count = the lines in its concordance link.
 4. **Indexes are derived and disposable.** They are never inside a source folder and never committed. Deleting an index and rebuilding it gives identical query results.
@@ -113,6 +113,9 @@ The six discovery corpora use `markdown-folder`, include `**/*.md` and require n
 scout corpora list|init-defaults|show <id>
 scout index build [<id>…] [--force]      # incremental by mtime+hash; prints docs/passages/tokens
 scout index status                        # per corpus: docs, passages, tokens, built-at, stale files
+scout capture --project <folder> --kind <kind> --title "<title>" [--prompt "<text>"] [--source <scout:id|url|file:path>]… [--artefact <path>] [--slug <slug>] [--by <who>] [--json] (<file.md> | -)
+scout capture --list --project <folder> [--json]
+scout capture --where-used <file> [--json]
 scout search <query> [--in a,b] [--limit 20] [--cite markdown|plain] [--json]
 scout kwic <term> [--in …] [--width 8] [--sort R1] [--limit 200] [filters] [--json]
 scout collocates <node> [--in …] [--window 5] [--score logdice|mi] [--min 5] [--top 30] [--compare <corpus>] [--json]
@@ -130,6 +133,18 @@ scout topics themes|entities|events|months [--month YYYY-MM] [--in …] [--top 0
 - `--json` output is a stable schema, documented in `docs/cli-json.md`, with a `schema_version`.
 - Exit codes: 0 ok, 1 no results, 2 usage, 3 index missing (the message names the `scout index build` command).
 - The `sync --status` line matches J9, for example: `readwise   732 new · last 2026-07-22 · off`. "N new" needs the Readwise API; if no token is readable without prompting, print `last <date>` only. **Never print secrets.**
+
+### Research capture (2026-10-20)
+
+`scout capture` is the explicit source-writing verb. The deep module behind
+`Engine::capture`, `capture_list` and `capture_where_used` owns input reading,
+project containment, frontmatter, collision-safe creation, artefact copying,
+manifest append and the containing corpus's in-process incremental build. The
+CLI only parses and formats. Indexes stay derived, disposable and outside
+source folders. Capture may succeed without a corpus or after an index failure;
+its JSON reports the saved file and the manifest/index outcomes. The full
+research folder, six-field JSON, listing and where-used contract is in
+`docs/cli-json.md`, “`scout capture` — research-folder contract”.
 
 ## Performance targets (Macek, warm index)
 

@@ -38,7 +38,7 @@ pub(crate) fn body_text(s: &str) -> String {
 /// non-ASCII characters stand as they are; `"`, `\`, every control
 /// character, every whitespace character but the plain space (line and
 /// paragraph separators among them) and the byte-order mark are escaped.
-fn quoted(s: &str) -> String {
+pub(crate) fn quoted(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

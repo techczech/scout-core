@@ -12,6 +12,9 @@
 //!   an `Engine` is `Send + Sync + Clone` and safe on any thread; there is no
 //!   global mutable state.
 
+pub use crate::capture::{
+    CaptureList, CaptureQuery, CaptureReceipt, CaptureResult, CaptureUsage, CaptureUsages,
+};
 use crate::clean::{self, CleanOptions, CleanReport};
 use crate::colloc::{self, CollocRequest, CollocResults, CompareResults};
 use crate::concord::{self, Distribution, KwicRequest, KwicResults, Near, Profile, ProfileOptions};
@@ -764,6 +767,30 @@ impl Engine {
     /// `SCOUT_CONFIG` and `SCOUT_DATA_DIR`), as the CLI uses them.
     pub fn from_env() -> Result<Engine> {
         Ok(Engine::new(Registry::load()?, index::index_dir()))
+    }
+
+    /// Capture also works before the first corpus is registered.
+    pub fn for_capture() -> Result<Engine> {
+        let registry = match Registry::load() {
+            Ok(r) => r,
+            Err(e) if e.downcast_ref::<registry::RegistryMissing>().is_some() => {
+                Registry::default()
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(Self::new(registry, index::index_dir()))
+    }
+
+    pub fn capture(&self, q: &CaptureQuery) -> Result<Reply<CaptureResult>> {
+        crate::capture::capture(self, q)
+    }
+
+    pub fn capture_list(&self, project: &str) -> Result<Reply<CaptureList>> {
+        crate::capture::list(project).map(Reply::new)
+    }
+
+    pub fn capture_where_used(&self, file: &str) -> Result<Reply<CaptureUsages>> {
+        crate::capture::where_used(self.registry(), file).map(Reply::new)
     }
 
     pub fn new(registry: Registry, index_dir: impl Into<PathBuf>) -> Engine {
@@ -1591,5 +1618,21 @@ impl Engine {
             preview_rules: q.rules.clone(),
         };
         Ok(Reply::new(clean::clean_report(cfg, &opts)?))
+    }
+}
+
+impl Outcome for CaptureResult {
+    fn has_results(&self) -> bool {
+        true
+    }
+}
+impl Outcome for CaptureList {
+    fn has_results(&self) -> bool {
+        true
+    }
+}
+impl Outcome for CaptureUsages {
+    fn has_results(&self) -> bool {
+        !self.hits.is_empty()
     }
 }
