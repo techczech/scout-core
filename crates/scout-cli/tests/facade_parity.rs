@@ -417,6 +417,8 @@ fn cli_semantic_json_equals_facade_response() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["reports"][0]["vectors"]["model"], "hash-64");
+    let o = run(&["index", "build", "notes", "--semantic", "--json"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 
     let e = Engine::new(Registry::load_from(&cfg).unwrap(), data.join("indexes"))
         .with_embedder(std::sync::Arc::new(scout_corpus::HashEmbedder::default()));
@@ -448,6 +450,18 @@ fn cli_semantic_json_equals_facade_response() {
             e.search(&q("metaphor", Fts)).unwrap(),
         ),
     ];
+    let mut cases = cases;
+    for (flag, mode) in [("--hybrid", Hybrid), ("--semantic", Semantic)] {
+        cases.push(case(
+            vec!["search", "metaphor model", flag, "--json"],
+            e.search(&SearchQuery {
+                query: "metaphor model".into(),
+                mode,
+                ..Default::default()
+            })
+            .unwrap(),
+        ));
+    }
     assert!(cases[1].json.contains("\"mode\": \"hybrid\""));
     assert!(!cases[2].json.contains("\"mode\""));
     for c in cases {
@@ -458,4 +472,93 @@ fn cli_semantic_json_equals_facade_response() {
         assert_eq!(err.lines().collect::<Vec<_>>(), c.notes, "{:?}", c.args);
     }
     assert_eq!(before, snapshot(&w), "sources are read-only");
+}
+
+/// Golden captured from main 0462e3c06d6e35a2983beb3707a2337abd27dbf8.
+/// Four identical documents tie in both BM25 and cosine; main's sequential
+/// ranks must differ from cross-corpus shared ranks. Sources are checked in at
+/// crates/scout-corpus/tests/fixtures/single-corpus-hybrid (never generated).
+/// Re-capture from this checkout's root (use fresh temporary directories):
+/// ```sh
+/// repo="$PWD"
+/// git worktree add --detach /tmp/scout-golden-main 0462e3c
+/// cargo build --manifest-path /tmp/scout-golden-main/Cargo.toml \
+///   --target-dir /tmp/scout-golden-target -p scout-cli
+/// mkdir -p /tmp/scout-round3-fixture
+/// cp -R crates/scout-corpus/tests/fixtures/single-corpus-hybrid /tmp/scout-round3-fixture/writing
+/// printf '[[corpus]]\nid = "writing"\nname = "W"\nkind = "markdown-folder"\npath = "/tmp/scout-round3-fixture/writing"\n' > /tmp/scout-round3-fixture/corpora.toml
+/// export SCOUT_CONFIG=/tmp/scout-round3-fixture/corpora.toml
+/// export SCOUT_DATA_DIR=/tmp/scout-round3-fixture/data SCOUT_EMBEDDER=hash
+/// /tmp/scout-golden-target/debug/scout index build writing --semantic --json
+/// /tmp/scout-golden-target/debug/scout search metaphor --in writing --hybrid --json \
+///   > "$repo/crates/scout-corpus/tests/fixtures/search-single-corpus-hybrid-main.json"
+/// ```
+#[test]
+fn single_corpus_hybrid_engine_json_matches_main_golden() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../scout-corpus/tests/fixtures/single-corpus-hybrid");
+    for path in walk(&source) {
+        write(
+            tmp.path(),
+            &format!("writing/{}", path.file_name().unwrap().to_str().unwrap()),
+            &fs::read_to_string(path).unwrap(),
+        );
+    }
+    let cfg = tmp.path().join("corpora.toml");
+    fs::write(
+        &cfg,
+        format!(
+        "[[corpus]]\nid = \"writing\"\nname = \"W\"\nkind = \"markdown-folder\"\npath = \"{}\"\n",
+        tmp.path().join("writing").display()
+    ),
+    )
+    .unwrap();
+    let data = tmp.path().join("data");
+    let engine = Engine::new(Registry::load_from(&cfg).unwrap(), data.join("indexes"))
+        .with_embedder(std::sync::Arc::new(scout_corpus::HashEmbedder::default()));
+    engine
+        .index_build(&IndexBuildQuery {
+            ids: vec!["writing".into()],
+            semantic: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let reply = engine
+        .search(&SearchQuery {
+            query: "metaphor".into(),
+            in_: vec!["writing".into()],
+            mode: scout_corpus::SearchMode::Hybrid,
+            ..Default::default()
+        })
+        .unwrap();
+    // Only relocate the captured fixture root and its URL encoding.
+    let expected =
+        include_str!("../../scout-corpus/tests/fixtures/search-single-corpus-hybrid-main.json")
+            .replace(
+                "/tmp/scout-round3-fixture",
+                &tmp.path().display().to_string(),
+            )
+            .replace(
+                "%2Ftmp%2Fscout-round3-fixture",
+                &scout_corpus::cite::render_link("{path}", tmp.path(), 1),
+            );
+    let golden: serde_json::Value = serde_json::from_str(&expected).unwrap();
+    assert_eq!(
+        reply
+            .body
+            .results
+            .iter()
+            .map(|d| d.score)
+            .collect::<Vec<_>>(),
+        golden["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["score"].as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        "single-corpus scores must retain main's sequential tie ranks"
+    );
+    assert_eq!(api::to_json(&reply.body).unwrap() + "\n", expected);
+    assert!(reply.notes.is_empty());
 }

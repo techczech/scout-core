@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "query": "metaphor",
+  "terms": [
+    {
+      "kind": "prefix",
+      "tokens": "metaphor"
+    }
+  ],
+  "plan": {
+    "any_of": [
+      [
+        {
+          "kind": "prefix",
+          "tokens": "metaphor"
+        }
+      ]
+    ],
+    "not": [],
+    "filters": {}
+  },
+  "corpora": [
+    "writing"
+  ],
+  "total_documents": 5,
+  "total_passages": 4,
+  "results": [
+    {
+      "corpus": "writing",
+      "rel_path": "tie-a.md",
+      "path": "/tmp/scout-round3-fixture/writing/tie-a.md",
+      "title": "Shared evidence",
+      "author": null,
+      "public_url": null,
+      "date": null,
+      "date_display": null,
+      "genre": null,
+      "lang": null,
+      "score": 0.032787,
+      "rank": 1.0,
+      "title_match": false,
+      "passage_count": 1,
+      "hits": [
+        {
+          "passage_id": "writing:tie-a.md:4",
+          "line_start": 4,
+          "line_end": 4,
+          "line": 4,
+          "quote": "A conceptual metaphor frames a model of thought.",
+          "score": 1e-6,
+          "link": null,
+          "semantic_score": 0.316228
+        }
+      ],
+      "citation": {
+        "markdown": "> A conceptual metaphor frames a model of thought.\n\n— *Shared evidence*\n",
+        "plain": "“A conceptual metaphor frames a model of thought.”\n— Shared evidence\n"
+      }
+    },
+    {
+      "corpus": "writing",
+      "rel_path": "tie-b.md",
+      "path": "/tmp/scout-round3-fixture/writing/tie-b.md",
+      "title": "Shared evidence",
+      "author": null,
+      "public_url": null,
+      "date": null,
+      "date_display": null,
+      "genre": null,
+      "lang": null,
+      "score": 0.032258,
+      "rank": 0.983866,
+      "title_match": false,
+      "passage_count": 1,
+      "hits": [
+        {
+          "passage_id": "writing:tie-b.md:4",
+          "line_start": 4,
+          "line_end": 4,
+          "line": 4,
+          "quote": "A conceptual metaphor frames a model of thought.",
+          "score": 1e-6,
+          "link": null,
+          "semantic_score": 0.316228
+        }
+      ],
+      "citation": {
+        "markdown": "> A conceptual metaphor frames a model of thought.\n\n— *Shared evidence*\n",
+        "plain": "“A conceptual metaphor frames a model of thought.”\n— Shared evidence\n"
+      }
+    },
+    {
+      "corpus": "writing",
+      "rel_path": "tie-c.md",
+      "path": "/tmp/scout-round3-fixture/writing/tie-c.md",
+      "title": "Shared evidence",
+      "author": null,
+      "public_url": null,
+      "date": null,
+      "date_display": null,
+      "genre": null,
+      "lang": null,
+      "score": 0.031746,
+      "rank": 0.96825,
+      "title_match": false,
+      "passage_count": 1,
+      "hits": [
+        {
+          "passage_id": "writing:tie-c.md:4",
+          "line_start": 4,
+          "line_end": 4,
+          "line": 4,
+          "quote": "A conceptual metaphor frames a model of thought.",
+          "score": 1e-6,
+          "link": null,
+          "semantic_score": 0.316228
+        }
+      ],
+      "citation": {
+        "markdown": "> A conceptual metaphor frames a model of thought.\n\n— *Shared evidence*\n",
+        "plain": "“A conceptual metaphor frames a model of thought.”\n— Shared evidence\n"
+      }
+    },
+    {
+      "corpus": "writing",
+      "rel_path": "tie-d.md",
+      "path": "/tmp/scout-round3-fixture/writing/tie-d.md",
+      "title": "Shared evidence",
+      "author": null,
+      "public_url": null,
+      "date": null,
+      "date_display": null,
+      "genre": null,
+      "lang": null,
+      "score": 0.03125,
+      "rank": 0.953122,
+      "title_match": false,
+      "passage_count": 1,
+      "hits": [
+        {
+          "passage_id": "writing:tie-d.md:4",
+          "line_start": 4,
+          "line_end": 4,
+          "line": 4,
+          "quote": "A conceptual metaphor frames a model of thought.",
+          "score": 1e-6,
+          "link": null,
+          "semantic_score": 0.316228
+        }
+      ],
+      "citation": {
+        "markdown": "> A conceptual metaphor frames a model of thought.\n\n— *Shared evidence*\n",
+        "plain": "“A conceptual metaphor frames a model of thought.”\n— Shared evidence\n"
+      }
+    },
+    {
+      "corpus": "writing",
+      "rel_path": "different.md",
+      "path": "/tmp/scout-round3-fixture/writing/different.md",
+      "title": "Garden",
+      "author": null,
+      "public_url": null,
+      "date": null,
+      "date_display": null,
+      "genre": null,
+      "lang": null,
+      "score": 0.015385,
+      "rank": 0.469241,
+      "title_match": false,
+      "passage_count": 1,
+      "hits": [
+        {
+          "passage_id": "writing:different.md:4",
+          "line_start": 4,
+          "line_end": 4,
+          "line": 4,
+          "quote": "Tomatoes grow in garden compost all summer.",
+          "score": 0.0,
+          "link": null,
+          "semantic_score": 0.0
+        }
+      ],
+      "citation": {
+        "markdown": "> Tomatoes grow in garden compost all summer.\n\n— *Garden*\n",
+        "plain": "“Tomatoes grow in garden compost all summer.”\n— Garden\n"
+      }
+    }
+  ],
+  "mode": "hybrid"
+}
