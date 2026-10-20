@@ -45,10 +45,18 @@ Registry entry fields:
 - `boilerplate`: regexes
 - `link`: a template, see below
 
-The initial registry is written by `scout corpora init-defaults` with three entries:
+The public `scout corpora init-defaults` command writes an empty registry. The maintainer preset (`scout corpora init-defaults --preset dominik`) writes these entries:
 - `writing` = `~/gitrepos/02_writing-creation/writing`, requiring `genre`, excluding `cache/**`, `_sources/**`, `indexes/**`, `docs/**` and `tweets/**`; default author "Dominik Lukeš".
 - `tweets` = the same repo's `tweets/`.
 - `highlights` = the archive path read from `~/.config/highlight-scout/config.toml`.
+- `learninglog` = `~/gitrepos/01_reading-research/_LEARNINGLOG`.
+- `talks` = `~/gitrepos/03_presenting-teaching/dominiks-presentations-library`, excluding `_SLIDE-VERSIONS/**`, `_PRESENTATIONS/**`, `z-old-powerpoint-imports/**` and `**/bundle/**`.
+- `slide-versions` = the presentations library's `_SLIDE-VERSIONS/`, as a separate corpus.
+- `abstracts-archive` = `~/gitrepos/03_presenting-teaching/dominiks-session-abstracts-archive`, excluding `cache/**`.
+- `york-edit-pass` = `~/gitrepos/03_presenting-teaching/york-2026-edit-pass`.
+- `ai-foundations-edit-pass` = `~/gitrepos/03_presenting-teaching/ai-foundations-2026-edit-pass`.
+
+The six discovery corpora use `markdown-folder`, include `**/*.md` and require no frontmatter. Existing registries are left untouched unless `--force` is supplied; register additions with `scout corpora add` on an already configured machine. Exclusions use the existing glob list, matched against corpus-relative paths. `**/bundle/**` excludes both root and nested bundle folders. Hidden path components are always skipped.
 
 ## Crate layout (scout-core workspace)
 

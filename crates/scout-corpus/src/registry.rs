@@ -361,7 +361,7 @@ impl Preset {
 }
 
 // ---- `--preset dominik` -------------------------------------------------
-// The maintainer's own three corpora, written only by
+// The maintainer's own corpora, written only by
 // `scout corpora init-defaults --preset dominik` (a hidden flag, deliberately
 // absent from `--help` and from every error message). `highlights` is
 // included only when the Highlight Scout config names an archive path.
@@ -411,6 +411,64 @@ fn maintainer_preset() -> Registry {
             document_unit: DocumentUnit::Tweet,
         },
     ];
+    for (id, name, path, exclude) in [
+        (
+            "learninglog",
+            "Learning Log",
+            "01_reading-research/_LEARNINGLOG",
+            vec!["**/sources/**"],
+        ),
+        (
+            "talks",
+            "Talks",
+            "03_presenting-teaching/dominiks-presentations-library",
+            vec![
+                "_SLIDE-VERSIONS/**",
+                "_PRESENTATIONS/**",
+                "z-old-powerpoint-imports/**",
+                "**/bundle/**",
+            ],
+        ),
+        (
+            "slide-versions",
+            "Slide versions",
+            "03_presenting-teaching/dominiks-presentations-library/_SLIDE-VERSIONS",
+            vec![],
+        ),
+        (
+            "abstracts-archive",
+            "Abstracts archive",
+            "03_presenting-teaching/dominiks-session-abstracts-archive",
+            vec!["cache/**"],
+        ),
+        (
+            "york-edit-pass",
+            "York edit pass",
+            "03_presenting-teaching/york-2026-edit-pass",
+            vec![],
+        ),
+        (
+            "ai-foundations-edit-pass",
+            "AI foundations edit pass",
+            "03_presenting-teaching/ai-foundations-2026-edit-pass",
+            vec![],
+        ),
+    ] {
+        corpora.push(CorpusConfig {
+            id: id.into(),
+            name: name.into(),
+            kind: CorpusKind::MarkdownFolder,
+            path: format!("~/gitrepos/{path}"),
+            include: vec!["**/*.md".into()],
+            exclude: exclude.into_iter().map(String::from).collect(),
+            require_frontmatter: vec![],
+            field_map: FieldMap::default(),
+            default_author: None,
+            boilerplate: vec![],
+            link: None,
+            document_unit: DocumentUnit::File,
+        });
+    }
     if let Some(archive) = highlight_scout_archive_path() {
         corpora.push(CorpusConfig {
             id: "highlights".into(),
