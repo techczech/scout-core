@@ -229,10 +229,15 @@ fn list_and_where_used_read_receipts_and_outline_mentions() {
     )
     .unwrap();
     let hits = e.capture_where_used(&r.file).unwrap().body.hits;
-    assert_eq!(hits.len(), 3);
+    // The bare-name mention in vault/piece.md sits outside the talk project,
+    // so only the qualified mention there still counts.
+    assert_eq!(hits.len(), 2);
     assert!(hits
         .iter()
         .any(|h| h.line == 3 && h.file.ends_with("talk-outline.md")));
+    assert!(hits
+        .iter()
+        .any(|h| h.line == 2 && h.file.ends_with("vault/piece.md")));
     assert!(e
         .capture_where_used("absent.png")
         .unwrap()
@@ -821,6 +826,35 @@ fn missing_lookup_does_not_match_another_project_by_suffix() {
         .body
         .hits
         .is_empty());
+}
+
+#[test]
+fn bare_name_mentions_count_only_from_the_same_project() {
+    let t = tempfile::tempdir().unwrap();
+    let e = Engine::new(
+        Registry::parse(&format!(
+            "[[corpus]]\nid='projects'\nname='Projects'\nkind='markdown-folder'\npath={:?}\n",
+            t.path().to_str().unwrap()
+        ))
+        .unwrap(),
+        t.path().join("indexes"),
+    );
+    for project in ["p1", "p2", "p3"] {
+        fs::create_dir_all(t.path().join(project).join("research")).unwrap();
+        fs::create_dir_all(t.path().join(project).join("notes")).unwrap();
+    }
+    fs::write(t.path().join("p1/research/flat.md"), "capture").unwrap();
+    fs::write(t.path().join("p2/notes/o.md"), "see flat.md\n").unwrap();
+    fs::write(t.path().join("p3/notes/n.md"), "see flat.md\n").unwrap();
+    fs::write(t.path().join("p1/notes/a.md"), "see flat.md\n").unwrap();
+    let file = t.path().join("p1/research/flat.md");
+    let hits = e
+        .capture_where_used(file.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].file.ends_with("p1/notes/a.md"), "{hits:?}");
 }
 
 #[test]

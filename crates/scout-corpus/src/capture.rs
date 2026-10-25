@@ -887,10 +887,13 @@ impl ResearchIdentity {
             if link || candidate.is_absolute() {
                 return false;
             }
+            let within_project = parent.starts_with(self.root.parent().unwrap_or(&self.root));
             if candidate.components().count() == 1 {
-                return self.unique_basename && candidate.file_name() == self.target.file_name();
+                return within_project
+                    && self.unique_basename
+                    && candidate.file_name() == self.target.file_name();
             }
-            parent.starts_with(self.root.parent().unwrap_or(&self.root))
+            within_project
                 && (candidate == self.relative
                     || candidate.strip_prefix("research").ok() == Some(self.relative.as_path()))
         })
