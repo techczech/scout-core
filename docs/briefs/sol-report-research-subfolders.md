@@ -40,3 +40,22 @@ Spec conflicts: none.
 Follow-ups: the driver should handle the existing Unix-socket fixture path limit and the root Vitest/Node-runner collection mismatch separately. Neither was changed under this parcel.
 
 All work and build files stayed inside the specified worktree. The writing repository was read only. Scratch logs and temporary test directories were deleted. No commits or `.git` operations were performed. The implementation is ready for the driver's review; repository-wide validation is not green.
+
+## Fix round r1
+
+No action needed. The research-subfolder review fixes are implemented, and all Rust workspace tests pass.
+
+- F-1: Where-used recognises sentence punctuation, bold markup and parenthesised research-relative paths. Restored the legacy `Reuse {file}` fixture alongside its path form.
+- F-2: Bare prose names require exactly one matching research basename in the project. Markdown destinations resolve relative to their referencing file; links to other files cannot fall back to basename or suffix matching. Missing targets cannot match another project's research suffix. Absolute requests derive their research-relative identity from the enclosing research root rather than the first ancestor named research.
+- F-3: Existing destination components use their on-disk spelling. A completed case-only rename can update its receipt even when OLD still resolves on a case-insensitive filesystem. The local regression exercised that filesystem behaviour and case-insensitive link resolution.
+- F-4: Move destinations refuse the manifest, hidden components, absolute paths and parent traversal; existing symlink refusals remain covered.
+- F-5: Destination validation rejects hidden, dot and empty components before creating subfolders. Creation follows collision checks and Markdown rendering; failed writes remove newly created empty subfolders.
+- S-1/S-2: Replaced the overlapping splitters with one tokenizer and one delimiter constant, with identity matching in `ResearchIdentity`. CLI argument extraction and receipt serialisation now return errors instead of using panicking unwraps or positional indexing.
+
+Changed in this round: `crates/scout-corpus/src/capture.rs`, `crates/scout-corpus/tests/capture.rs`, `crates/scout-cli/src/capture_cmd.rs`, and this report. Added seven regression tests covering F-1 through F-5; retained and restored legacy coverage. The lookup/glob fixture now includes the research file whose basename it mentions.
+
+Validation: the seven new regressions failed before the fixes. Focused corpus capture suite: 30 passed. CLI capture suite: 5 passed. Facade parity suite: 4 passed. All exited 0. Formatting checks passed for the three changed Rust files. Ran `cargo test --workspace` exactly once after the fixes: exit 0, 499 passed, 0 failed, 3 ignored across 59 test-result summaries, including doc tests. Every test command used `TMPDIR=/tmp` and the worktree-local `target/` directory. No package code changed; TypeScript tests were not rerun.
+
+Decision: distinguish prose shorthand from Markdown destinations so legacy prose remains discoverable without treating a link to another file as a usage. Decision: normalise existing paths through the filesystem so receipts retain disk spelling and case-only moves remain explicit.
+
+No commits or `.git` operations. Removed the scratch test log; temporary test fixtures use automatic cleanup. No changes outside the specified worktree, apart from the authorised short-path temporary test fixtures. Independent re-review remains with the parent session.

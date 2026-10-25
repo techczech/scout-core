@@ -103,7 +103,9 @@ fn safe_research(project: &Path, create: bool) -> Result<PathBuf> {
 // refusing symlinks also refuses dangling links and aliases within the tree.
 fn research_relative(raw: &str) -> Result<&Path> {
     let path = Path::new(raw);
-    if raw.is_empty()
+    if raw
+        .split(std::path::MAIN_SEPARATOR)
+        .any(|part| part.is_empty() || part.starts_with('.'))
         || path
             .components()
             .any(|c| !matches!(c, std::path::Component::Normal(_)))
@@ -113,9 +115,10 @@ fn research_relative(raw: &str) -> Result<&Path> {
     Ok(path)
 }
 
-fn research_path(root: &Path, relative: &Path, create_dirs: bool) -> Result<PathBuf> {
+fn research_path(root: &Path, relative: &Path) -> Result<PathBuf> {
     let mut path = root.to_path_buf();
-    for component in relative.components() {
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
         path.push(component);
         match fs::symlink_metadata(&path) {
             Ok(meta) => {
@@ -125,19 +128,27 @@ fn research_path(root: &Path, relative: &Path, create_dirs: bool) -> Result<Path
                         path.display()
                     );
                 }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if create_dirs {
-                    fs::create_dir(&path)?;
+                if components.peek().is_some() && !meta.is_dir() {
+                    bail!("capture destination must be a directory");
                 }
+                // canonicalize returns the directory entry spelling on APFS.
+                path = fs::canonicalize(&path)?;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
-        }
-        if create_dirs && !path.is_dir() {
-            bail!("capture destination must be a directory");
         }
     }
     Ok(path)
+}
+
+struct EmptyDirectories(Vec<PathBuf>);
+
+impl Drop for EmptyDirectories {
+    fn drop(&mut self) {
+        for path in self.0.iter().rev() {
+            let _ = fs::remove_dir(path);
+        }
+    }
 }
 
 fn path_text(path: &Path) -> Result<String> {
@@ -390,13 +401,20 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
         }
         set(&mut front, "sources", Yaml::Array(values));
     }
+    let research = safe_research(&project, false)?;
+    if let Some(relative) = into {
+        research_path(&research, relative)?;
+    }
     let research = safe_research(&project, true)?;
     let manifest = research.join("_manifest.jsonl");
     let _lock = crate::register::lock_registry(&research.join("manifest"))?;
     let destination = match into {
-        Some(path) => research_path(&research, path, true)?,
+        Some(path) => research_path(&research, path)?,
         None => research.clone(),
     };
+    if destination.exists() && !destination.is_dir() {
+        bail!("capture destination must be a directory");
+    }
     let base = format!(
         "{}-{}",
         &created[..10],
@@ -453,6 +471,21 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
     };
     let markdown = format!("{bom}{}{body}", render_frontmatter(&front)?);
     let mut notes = vec![];
+    // Delay creation until validation, collision checks and rendering succeed.
+    // Remove only newly created empty directories if the write later fails.
+    let mut directories = EmptyDirectories(Vec::new());
+    let mut missing = Vec::new();
+    let mut parent = destination.as_path();
+    while !parent.exists() {
+        missing.push(parent.to_path_buf());
+        parent = parent
+            .parent()
+            .context("capture destination has no parent")?;
+    }
+    for path in missing.into_iter().rev() {
+        fs::create_dir(&path)?;
+        directories.0.push(path);
+    }
     if let (Some(source), Some(target)) = (&artefact, &artefact_target) {
         let mut input = fs::File::open(source)?;
         let mut output = OpenOptions::new()
@@ -677,14 +710,25 @@ fn receipts(project: &str) -> Result<Vec<CaptureReceipt>> {
 pub(crate) fn moved(project: &str, old: &str, new: &str) -> Result<CaptureList> {
     let old = research_relative(old)?;
     let new = research_relative(new)?;
+    if new
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("_manifest.jsonl"))
+    {
+        bail!("new capture must not be the manifest");
+    }
     let research = safe_research(&project_dir(project)?, false)?;
     if !research.is_dir() {
         bail!("research directory must exist");
     }
     let _lock = crate::register::lock_registry(&research.join("manifest"))?;
-    let old_path = research_path(&research, old, false)?;
-    let new_path = research_path(&research, new, false)?;
-    if fs::symlink_metadata(&old_path).is_ok() {
+    let old_path = research_path(&research, old)?;
+    let new_path = research_path(&research, new)?;
+    // A completed case-only rename still resolves through OLD on APFS.
+    let case_only_move = old != new
+        && path_text(old)?.eq_ignore_ascii_case(&path_text(new)?)
+        && old_path == new_path
+        && new_path.strip_prefix(&research)? == new;
+    if fs::symlink_metadata(&old_path).is_ok() && !case_only_move {
         bail!("old capture still exists; move the file before updating its receipt");
     }
     if !new_path.is_file() {
@@ -703,7 +747,7 @@ pub(crate) fn moved(project: &str, old: &str, new: &str) -> Result<CaptureList> 
         }
     }
     let old = path_text(old)?;
-    let new = path_text(new)?;
+    let new = path_text(new_path.strip_prefix(&research)?)?;
     let text = fs::read_to_string(&manifest)?;
     let mut found = false;
     let mut updated = String::new();
@@ -735,60 +779,122 @@ pub(crate) fn moved(project: &str, old: &str, new: &str) -> Result<CaptureList> 
     list(project)
 }
 
-fn research_suffix(path: &Path) -> Option<PathBuf> {
-    // Keep all subfolders below the research root in the identity.
-    let mut suffix = None;
-    let mut tail = PathBuf::new();
-    for part in path.components() {
-        if suffix.is_none() && part.as_os_str() == "research" {
-            tail.clear();
-            suffix = Some(PathBuf::new());
-        } else if suffix.is_some() {
-            tail.push(part);
-            suffix = Some(tail.clone());
+// One tokenizer for prose and Markdown destinations. Dots stay inside paths;
+// only sentence-final dots are removed, so .md.bak never becomes .md.
+const MENTION_DELIMITERS: &str = "\"'`()[]<>{},;=|*:!?";
+
+fn links_in(line: &str) -> Vec<(&str, bool)> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut enclosed = None;
+    let mut previous = None;
+    for (offset, ch) in line.char_indices() {
+        if let Some(end) = enclosed {
+            if ch == end {
+                tokens.push((line[start..offset].trim(), true));
+                start = offset + ch.len_utf8();
+                enclosed = None;
+            }
+        } else if ch == '<' || (ch == '(' && previous == Some(']')) {
+            if start < offset {
+                tokens.push((&line[start..offset], false));
+            }
+            enclosed = Some(if ch == '<' { '>' } else { ')' });
+            start = offset + ch.len_utf8();
+        } else if ch.is_whitespace() || MENTION_DELIMITERS.contains(ch) {
+            if start < offset {
+                tokens.push((&line[start..offset], false));
+            }
+            start = offset + ch.len_utf8();
         }
+        previous = Some(ch);
     }
-    suffix
+    if start < line.len() {
+        tokens.push((&line[start..], enclosed.is_some()));
+    }
+    tokens
 }
 
-fn mentions_research(line: &str, referencing: &Path, requested: &Path) -> bool {
-    let absolute = requested.is_absolute();
-    let identity = if absolute {
-        research_suffix(requested)
-    } else {
-        Some(
+struct ResearchIdentity {
+    root: PathBuf,
+    relative: PathBuf,
+    target: PathBuf,
+    unique_basename: bool,
+}
+
+impl ResearchIdentity {
+    fn for_reference(requested: &Path, referencing: &Path) -> Option<Self> {
+        let root = if requested.is_absolute() {
+            requested
+                .ancestors()
+                .find(|p| p.file_name().is_some_and(|n| n == "research"))?
+                .to_path_buf()
+        } else {
+            referencing
+                .parent()?
+                .ancestors()
+                .map(|p| p.join("research"))
+                .find(|p| p.is_dir())?
+        };
+        let relative = if requested.is_absolute() {
+            requested.strip_prefix(&root).ok()?.to_path_buf()
+        } else {
             requested
                 .strip_prefix("research")
                 .unwrap_or(requested)
-                .to_path_buf(),
-        )
-    };
-    // Enclosed Markdown destinations may contain spaces; ordinary prose paths
-    // are also considered as individual tokens.
-    line.split(|c: char| "\"'`()[]<>{},;=|".contains(c))
-        .map(str::trim)
-        .chain(line.split(|c: char| c.is_whitespace() || "\"'`()[]<>{},;=|".contains(c)))
-        .filter(|s| !s.is_empty())
-        .any(|token| {
-            let token = token.split(['#', '?']).next().unwrap();
+                .to_path_buf()
+        };
+        let target = root.join(&relative);
+        let target = fs::canonicalize(&target).unwrap_or(target);
+        let basename = target.file_name()?;
+        let mut names = walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'))
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file() && e.file_name() == basename);
+        let unique_basename = names.next().is_some() && names.next().is_none();
+        Some(Self {
+            root,
+            relative,
+            target,
+            unique_basename,
+        })
+    }
+
+    fn mentioned(&self, line: &str, referencing: &Path) -> bool {
+        let Some(parent) = referencing.parent() else {
+            return false;
+        };
+        links_in(line).into_iter().any(|(token, link)| {
+            let token = token.trim_matches(['<', '>']);
+            let token = token
+                .split(['#', '?'])
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('.');
             let decoded = percent_encoding::percent_decode_str(token).decode_utf8_lossy();
             let candidate = Path::new(decoded.as_ref());
-            let resolved = source_path(decoded.as_ref(), referencing.parent().unwrap()).ok();
-            if absolute && resolved.as_deref() == Some(requested) {
-                return true;
-            }
-            let Some(identity) = identity.as_deref() else {
+            let Ok(resolved) = source_path(decoded.as_ref(), parent) else {
                 return false;
             };
-            // Research-relative shorthand is exact, never a basename substring.
-            if !candidate.is_absolute()
-                && (candidate == identity
-                    || candidate.strip_prefix("research").ok() == Some(identity))
-            {
+            let resolved = fs::canonicalize(&resolved).unwrap_or(resolved);
+            if resolved == self.target {
                 return true;
             }
-            !absolute && resolved.as_deref().and_then(research_suffix).as_deref() == Some(identity)
+            // Link destinations are paths relative to their referencing file.
+            // Never reinterpret a link to a different file as prose shorthand.
+            if link || candidate.is_absolute() {
+                return false;
+            }
+            if candidate.components().count() == 1 {
+                return self.unique_basename && candidate.file_name() == self.target.file_name();
+            }
+            parent.starts_with(self.root.parent().unwrap_or(&self.root))
+                && (candidate == self.relative
+                    || candidate.strip_prefix("research").ok() == Some(self.relative.as_path()))
         })
+    }
 }
 
 pub(crate) fn where_used(registry: &Registry, file: &str) -> Result<CaptureUsages> {
@@ -856,8 +962,11 @@ pub(crate) fn where_used(registry: &Registry, file: &str) -> Result<CaptureUsage
                     continue;
                 }
             };
+            let Some(identity) = ResearchIdentity::for_reference(&normal, Path::new(&path)) else {
+                continue;
+            };
             for (i, line) in text.lines().enumerate() {
-                if mentions_research(line, Path::new(&path), &normal) {
+                if identity.mentioned(line, Path::new(&path)) {
                     hits.insert(
                         (path.clone(), i + 1),
                         CaptureUsage {
@@ -879,8 +988,16 @@ pub(crate) fn where_used(registry: &Registry, file: &str) -> Result<CaptureUsage
 }
 
 fn case_exists(path: &Path) -> Result<bool> {
-    let name = path.file_name().unwrap().to_string_lossy();
-    for entry in fs::read_dir(path.parent().unwrap())? {
+    let name = path
+        .file_name()
+        .context("capture file needs a name")?
+        .to_string_lossy();
+    let entries = match fs::read_dir(path.parent().context("capture file needs a parent")?) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
         if entry?
             .file_name()
             .to_string_lossy()

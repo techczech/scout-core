@@ -1,6 +1,6 @@
 //! Argument parsing and presentation only; capture is owned by the facade.
 use crate::{out, term};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use scout_corpus::api::{CaptureQuery, Engine};
 use std::process::ExitCode;
@@ -53,31 +53,27 @@ pub struct CaptureArgs {
 
 pub fn run(args: CaptureArgs) -> Result<ExitCode> {
     let engine = Engine::for_capture()?.with_embedder(crate::embedder()?);
-    if !args.moved.is_empty() {
-        return out(
-            engine.capture_moved(
-                args.project.as_deref().unwrap(),
-                &args.moved[0],
-                &args.moved[1],
-            ),
-            args.json,
-            |rows| {
-                for row in &rows.entries {
-                    println!("{}", term::safe(&serde_json::to_string(row).unwrap()));
-                }
-            },
-        );
-    }
-    if args.list {
-        return out(
-            engine.capture_list(args.project.as_deref().unwrap()),
-            args.json,
-            |rows| {
-                for row in &rows.entries {
-                    println!("{}", term::safe(&serde_json::to_string(row).unwrap()));
-                }
-            },
-        );
+    if !args.moved.is_empty() || args.list {
+        let project = args.project.as_deref().context("--project is required")?;
+        let reply = if args.list {
+            engine.capture_list(project)?
+        } else {
+            let [old, new] = args.moved.as_slice() else {
+                anyhow::bail!("--moved requires OLD and NEW");
+            };
+            engine.capture_moved(project, old, new)?
+        };
+        let lines = reply
+            .body
+            .entries
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        return out(Ok(reply), args.json, |_| {
+            for line in lines {
+                println!("{}", term::safe(&line));
+            }
+        });
     }
     if let Some(file) = args.where_used {
         return out(engine.capture_where_used(&file), args.json, |rows| {
@@ -93,10 +89,10 @@ pub fn run(args: CaptureArgs) -> Result<ExitCode> {
     }
     out(
         engine.capture(&CaptureQuery {
-            project: args.project.unwrap(),
+            project: args.project.context("--project is required")?,
             into: args.into,
-            kind: args.kind.unwrap(),
-            title: args.title.unwrap(),
+            kind: args.kind.context("--kind is required")?,
+            title: args.title.context("--title is required")?,
             prompt: args.prompt,
             sources: args.sources,
             artefact: args.artefact,
