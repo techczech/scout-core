@@ -223,12 +223,21 @@ fn list_and_where_used_read_receipts_and_outline_mentions() {
         format!("# Talk\n\nSee research/{file}\n"),
     )
     .unwrap();
-    fs::write(t.path().join("vault/piece.md"), format!("Reuse {file}\n")).unwrap();
+    fs::write(
+        t.path().join("vault/piece.md"),
+        format!("Reuse {file}\nReuse talk/research/{file}\n"),
+    )
+    .unwrap();
     let hits = e.capture_where_used(&r.file).unwrap().body.hits;
+    // The bare-name mention in vault/piece.md sits outside the talk project,
+    // so only the qualified mention there still counts.
     assert_eq!(hits.len(), 2);
     assert!(hits
         .iter()
         .any(|h| h.line == 3 && h.file.ends_with("talk-outline.md")));
+    assert!(hits
+        .iter()
+        .any(|h| h.line == 2 && h.file.ends_with("vault/piece.md")));
     assert!(e
         .capture_where_used("absent.png")
         .unwrap()
@@ -489,6 +498,7 @@ fn where_used_honours_kind_globs_research_exclusion_and_skips_bad_files() {
     ] {
         fs::write(root.join(file), "mention needle.md\n").unwrap();
     }
+    fs::write(root.join("research/needle.md"), "capture").unwrap();
     fs::write(root.join("included/bad.md"), [255, 254]).unwrap();
     #[cfg(unix)]
     {
@@ -547,4 +557,429 @@ fn artefact_stem_and_stub_clashes_are_case_insensitive() {
         .unwrap()
         .ends_with("-case-2-file.Md"));
     assert_eq!(fs::read_to_string(planted).unwrap(), "untouched");
+}
+
+#[test]
+fn nested_capture_receipts_and_artefacts_share_one_root_manifest() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let mut value = serde_json::to_value(request(&project)).unwrap();
+    value["into"] = "literature/deep".into();
+    let external = t.path().join("widget.html");
+    fs::write(&external, "widget").unwrap();
+    value["artefact"] = external.to_str().unwrap().into();
+    let q: CaptureQuery = serde_json::from_value(value).unwrap();
+    let r = e.capture(&q).unwrap().body;
+    assert_eq!(
+        Path::new(&r.file).parent().unwrap(),
+        project
+            .canonicalize()
+            .unwrap()
+            .join("research/literature/deep")
+    );
+    assert!(r.manifest && r.indexed);
+    assert!(Path::new(&r.file).with_extension("html").exists());
+    let entries = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(
+        entries[0].file,
+        Path::new(&r.file)
+            .strip_prefix(project.canonicalize().unwrap().join("research"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(!project
+        .join("research/literature/deep/_manifest.jsonl")
+        .exists());
+    let flat = e.capture(&request(&project)).unwrap().body;
+    let entries = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[1].file,
+        Path::new(&flat.file).file_name().unwrap().to_str().unwrap()
+    );
+}
+
+#[test]
+fn nested_capture_refuses_parent_absolute_and_symlink_paths() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    for into in ["../escape", "ok/../../escape", "/absolute", "ok/../escape"] {
+        let mut value = serde_json::to_value(request(&project)).unwrap();
+        value["into"] = into.into();
+        assert!(
+            e.capture(&serde_json::from_value(value).unwrap()).is_err(),
+            "{into}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(project.join("research")).unwrap();
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("research/link")).unwrap();
+        let mut value = serde_json::to_value(request(&project)).unwrap();
+        value["into"] = "link/deep".into();
+        assert!(e.capture(&serde_json::from_value(value).unwrap()).is_err());
+        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn where_used_distinguishes_nested_names_and_relative_links() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    for folder in ["a", "b"] {
+        fs::create_dir_all(project.join("research").join(folder)).unwrap();
+        fs::write(
+            project.join(format!("research/{folder}/same.md")),
+            "capture",
+        )
+        .unwrap();
+    }
+    fs::create_dir(project.join("chapters")).unwrap();
+    fs::write(project.join("chapters/one.md"), "[A](../research/a/same.md)\nresearch/b/same.md\na/same.md\nsame.md\nresearch/a/same.md.bak\nother/a/same.md\n").unwrap();
+    fs::write(project.join("research/self.md"), "a/same.md").unwrap();
+    let a = project.join("research/a/same.md");
+    let hits = e.capture_where_used(a.to_str().unwrap()).unwrap().body.hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![1, 3]);
+    let hits = e.capture_where_used("b/same.md").unwrap().body.hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![2]);
+}
+
+#[test]
+fn moved_updates_only_the_matching_receipt_and_never_repairs_on_read() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let q = request(&project);
+    let first = e.capture(&q).unwrap().body;
+    e.capture(&q).unwrap();
+    let research = project.canonicalize().unwrap().join("research");
+    let old = Path::new(&first.file)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    fs::create_dir_all(research.join("a/b")).unwrap();
+    fs::rename(&first.file, research.join("a/b/moved.md")).unwrap();
+    let before = fs::read_to_string(research.join("_manifest.jsonl")).unwrap();
+    let rows = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(rows[0].file, old);
+    assert_eq!(
+        fs::read_to_string(research.join("_manifest.jsonl")).unwrap(),
+        before
+    );
+    let after = e
+        .capture_moved(&q.project, old, "a/b/moved.md")
+        .unwrap()
+        .body
+        .entries;
+    let mut expected = rows.clone();
+    expected[0].file = "a/b/moved.md".into();
+    assert_eq!(after, expected);
+    assert_eq!(
+        fs::read_to_string(research.join("_manifest.jsonl"))
+            .unwrap()
+            .lines()
+            .nth(1),
+        before.lines().nth(1)
+    );
+    let before = fs::read(research.join("_manifest.jsonl")).unwrap();
+    for (old, new) in [
+        ("a/b/moved.md", "a/b/moved.md"),
+        ("../bad.md", "a/b/moved.md"),
+        ("missing.md", "/escape.md"),
+        ("missing.md", "a/b/moved.md"),
+    ] {
+        assert!(e.capture_moved(&q.project, old, new).is_err());
+        assert_eq!(fs::read(research.join("_manifest.jsonl")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn moved_refuses_symlink_destinations_and_manifests() {
+    use std::os::unix::fs::symlink;
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let q = request(&project);
+    let r = e.capture(&q).unwrap().body;
+    let research = project.join("research");
+    let old = Path::new(&r.file).file_name().unwrap().to_str().unwrap();
+    fs::rename(&r.file, research.join("moved.md")).unwrap();
+    symlink(research.join("moved.md"), research.join("link.md")).unwrap();
+    symlink(&research, research.join("alias")).unwrap();
+    let manifest = research.join("_manifest.jsonl");
+    let before = fs::read(&manifest).unwrap();
+    for new in ["link.md", "alias/moved.md"] {
+        assert!(e.capture_moved(&q.project, old, new).is_err());
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+    }
+    let saved = t.path().join("saved-manifest");
+    fs::rename(&manifest, &saved).unwrap();
+    symlink(&saved, &manifest).unwrap();
+    assert!(e.capture_moved(&q.project, old, "moved.md").is_err());
+    assert_eq!(fs::read(saved).unwrap(), before);
+}
+
+#[test]
+fn where_used_accepts_markdown_paths_with_spaces_and_encoded_links() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/with spaces")).unwrap();
+    let file = project.join("research/with spaces/note.md");
+    fs::write(&file, "capture").unwrap();
+    fs::write(
+        project.join("use.md"),
+        "[Note](<research/with spaces/note.md>)\n[Note](research/with%20spaces/note.md#section)\n",
+    )
+    .unwrap();
+    let hits = e
+        .capture_where_used(file.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![1, 2]);
+}
+
+#[test]
+fn prose_punctuation_and_markup_are_usages() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/literature")).unwrap();
+    fs::write(project.join("research/flat.md"), "capture").unwrap();
+    fs::write(project.join("research/literature/a.md"), "capture").unwrap();
+    fs::write(
+        project.join("use.md"),
+        "flat.md.\n**flat.md**\nflat.md: yes\n(literature/a.md)\nliterature/a.md,\nflat.md.bak\n",
+    )
+    .unwrap();
+    for (name, lines) in [("flat.md", vec![1, 2, 3]), ("literature/a.md", vec![4, 5])] {
+        let hits = e
+            .capture_where_used(project.join("research").join(name).to_str().unwrap())
+            .unwrap()
+            .body
+            .hits;
+        assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), lines);
+    }
+}
+
+#[test]
+fn lookup_rejects_ambiguous_names_and_links_to_other_files() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/sub")).unwrap();
+    fs::create_dir_all(project.join("notes/deep")).unwrap();
+    fs::write(project.join("research/flat.md"), "capture").unwrap();
+    fs::write(project.join("notes/deep/flat.md"), "other").unwrap();
+    fs::write(
+        project.join("notes/deep/use.md"),
+        "[wrong](flat.md)\nReuse flat.md\n[correct](../../research/flat.md)\n",
+    )
+    .unwrap();
+    let target = project.join("research/flat.md");
+    let hits = e
+        .capture_where_used(target.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![2, 3]);
+    fs::write(project.join("research/sub/flat.md"), "second").unwrap();
+    let hits = e
+        .capture_where_used(target.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![3]);
+}
+
+#[test]
+fn missing_lookup_does_not_match_another_project_by_suffix() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/sub2")).unwrap();
+    fs::create_dir_all(t.path().join("vault/other/research/sub2")).unwrap();
+    fs::write(t.path().join("vault/other/research/sub2/a.md"), "other").unwrap();
+    fs::write(
+        project.join("use.md"),
+        "[other](../other/research/sub2/a.md)\n",
+    )
+    .unwrap();
+    assert!(e
+        .capture_where_used("research/sub2/a.md")
+        .unwrap()
+        .body
+        .hits
+        .is_empty());
+    assert!(e
+        .capture_where_used(project.join("research/sub2/a.md").to_str().unwrap())
+        .unwrap()
+        .body
+        .hits
+        .is_empty());
+}
+
+#[test]
+fn bare_name_mentions_count_only_from_the_same_project() {
+    let t = tempfile::tempdir().unwrap();
+    let e = Engine::new(
+        Registry::parse(&format!(
+            "[[corpus]]\nid='projects'\nname='Projects'\nkind='markdown-folder'\npath={:?}\n",
+            t.path().to_str().unwrap()
+        ))
+        .unwrap(),
+        t.path().join("indexes"),
+    );
+    for project in ["p1", "p2", "p3"] {
+        fs::create_dir_all(t.path().join(project).join("research")).unwrap();
+        fs::create_dir_all(t.path().join(project).join("notes")).unwrap();
+    }
+    fs::write(t.path().join("p1/research/flat.md"), "capture").unwrap();
+    fs::write(t.path().join("p2/notes/o.md"), "see flat.md\n").unwrap();
+    fs::write(t.path().join("p3/notes/n.md"), "see flat.md\n").unwrap();
+    fs::write(t.path().join("p1/notes/a.md"), "see flat.md\n").unwrap();
+    let file = t.path().join("p1/research/flat.md");
+    let hits = e
+        .capture_where_used(file.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].file.ends_with("p1/notes/a.md"), "{hits:?}");
+}
+
+#[test]
+fn lookup_uses_project_research_root_below_research_ancestor() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("research");
+    let e = engine(&root);
+    let project = root.join("vault/talk");
+    fs::create_dir_all(project.join("research/literature")).unwrap();
+    let file = project.join("research/literature/a.md");
+    fs::write(&file, "capture").unwrap();
+    fs::write(project.join("use.md"), "literature/a.md\n").unwrap();
+    assert_eq!(
+        e.capture_where_used(file.to_str().unwrap())
+            .unwrap()
+            .body
+            .hits
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn into_rejects_hidden_empty_and_dot_components_without_creating_directories() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    for into in [".hid", "a/.hid", "a/./b", "a//b", "a/", ".", ""] {
+        let mut q = request(&project);
+        q.into = Some(into.into());
+        assert!(e.capture(&q).is_err(), "accepted {into:?}");
+        assert!(
+            !project.join("research").exists(),
+            "created directories for {into:?}"
+        );
+    }
+    fs::create_dir_all(project.join("research/existing")).unwrap();
+    fs::write(project.join("research/existing/file"), "block").unwrap();
+    let mut q = request(&project);
+    q.into = Some("existing/file/new".into());
+    assert!(e.capture(&q).is_err());
+    assert!(!project.join("research/existing/file/new").exists());
+}
+
+#[test]
+fn moved_refuses_manifest_hidden_and_outside_destinations() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let q = request(&project);
+    let result = e.capture(&q).unwrap().body;
+    let old = Path::new(&result.file)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    fs::remove_file(&result.file).unwrap();
+    fs::create_dir(project.join("research/.hidden")).unwrap();
+    for name in [".hidden/a.md", ".file.md"] {
+        fs::write(project.join("research").join(name), "hidden").unwrap();
+    }
+    fs::write(project.join("outside.md"), "outside").unwrap();
+    let manifest = project.join("research/_manifest.jsonl");
+    let before = fs::read(&manifest).unwrap();
+    for new in [
+        "_manifest.jsonl",
+        ".hidden/a.md",
+        ".file.md",
+        "../outside.md",
+    ] {
+        assert!(
+            e.capture_moved(&q.project, old, new).is_err(),
+            "accepted {new}"
+        );
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+    }
+}
+
+#[test]
+fn capture_records_disk_case_and_moved_allows_completed_case_only_rename() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/literature")).unwrap();
+    // Only exercise alias spelling on a filesystem that resolves it.
+    let insensitive = project.join("research/Literature").exists();
+    let mut q = request(&project);
+    q.into = Some(
+        if insensitive {
+            "Literature"
+        } else {
+            "literature"
+        }
+        .into(),
+    );
+    let r = e.capture(&q).unwrap().body;
+    let research = project.canonicalize().unwrap().join("research");
+    let old = Path::new(&r.file)
+        .strip_prefix(&research)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(old.starts_with("literature/"));
+    assert_eq!(
+        e.capture_list(&q.project).unwrap().body.entries[0].file,
+        old
+    );
+    let new = old.to_uppercase();
+    // Rename just the filename, retaining the directory's disk spelling.
+    let new = format!(
+        "literature/{}",
+        Path::new(&new).file_name().unwrap().to_str().unwrap()
+    );
+    fs::rename(research.join(old), research.join(&new)).unwrap();
+    let rows = e.capture_moved(&q.project, old, &new).unwrap().body.entries;
+    assert_eq!(rows[0].file, new);
+    fs::write(
+        project.join("use.md"),
+        format!("[capture](research/{old})\n"),
+    )
+    .unwrap();
+    let hits = e
+        .capture_where_used(research.join(&new).to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.len(), usize::from(insensitive));
 }

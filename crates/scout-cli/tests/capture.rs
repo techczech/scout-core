@@ -224,3 +224,78 @@ fn where_used_json_empty_has_schema_skipped_and_exit_one() {
         json!({"schema_version":1,"project":project.to_str().unwrap(),"entries":[]})
     );
 }
+
+#[test]
+fn nested_capture_and_explicit_moved_receipt_end_to_end() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let p = project.to_str().unwrap();
+    let r = json_output(run(
+        root,
+        &[
+            "capture",
+            "--project",
+            p,
+            "--into",
+            "literature/deep",
+            "--kind",
+            "evidence",
+            "--title",
+            "Nested",
+            "--json",
+            "-",
+        ],
+        Some("Body\n"),
+    ));
+    let file = Path::new(r["file"].as_str().unwrap());
+    let research = project.canonicalize().unwrap().join("research");
+    let old = file.strip_prefix(&research).unwrap().to_str().unwrap();
+    fs::create_dir(research.join("moved")).unwrap();
+    fs::rename(file, research.join("moved/nested.md")).unwrap();
+    let before = json_output(run(
+        root,
+        &["capture", "--project", p, "--list", "--json"],
+        None,
+    ));
+    assert_eq!(before["entries"][0]["file"], old);
+    let changed = json_output(run(
+        root,
+        &[
+            "capture",
+            "--project",
+            p,
+            "--moved",
+            old,
+            "moved/nested.md",
+            "--json",
+        ],
+        None,
+    ));
+    assert_eq!(changed["entries"][0]["file"], "moved/nested.md");
+    let after = json_output(run(
+        root,
+        &["capture", "--project", p, "--list", "--json"],
+        None,
+    ));
+    assert_eq!(after, changed);
+    let manifest = fs::read(research.join("_manifest.jsonl")).unwrap();
+    for (old, new) in [
+        ("moved/nested.md", "../escape.md"),
+        ("missing.md", "moved/nested.md"),
+        ("moved/nested.md", "absent.md"),
+    ] {
+        assert!(!run(
+            root,
+            &["capture", "--project", p, "--moved", old, new],
+            None
+        )
+        .status
+        .success());
+        assert_eq!(
+            fs::read(research.join("_manifest.jsonl")).unwrap(),
+            manifest
+        );
+    }
+}
