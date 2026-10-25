@@ -15,6 +15,8 @@ use yaml_rust2::{Yaml, YamlEmitter, YamlLoader};
 #[serde(default)]
 pub struct CaptureQuery {
     pub project: String,
+    /// Optional destination relative to research/.
+    pub into: Option<String>,
     pub kind: String,
     pub title: String,
     pub prompt: Option<String>,
@@ -93,6 +95,47 @@ fn safe_research(project: &Path, create: bool) -> Result<PathBuf> {
             Err(e) => return Err(e.into()),
         }
         return safe_research(project, false);
+    }
+    Ok(path)
+}
+
+// Validate before creating any directory. All components remain below research/;
+// refusing symlinks also refuses dangling links and aliases within the tree.
+fn research_relative(raw: &str) -> Result<&Path> {
+    let path = Path::new(raw);
+    if raw.is_empty()
+        || path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        bail!("research path must be relative, without . or .. components");
+    }
+    Ok(path)
+}
+
+fn research_path(root: &Path, relative: &Path, create_dirs: bool) -> Result<PathBuf> {
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    bail!(
+                        "research path must not contain symlinks: {}",
+                        path.display()
+                    );
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if create_dirs {
+                    fs::create_dir(&path)?;
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+        if create_dirs && !path.is_dir() {
+            bail!("capture destination must be a directory");
+        }
     }
     Ok(path)
 }
@@ -263,6 +306,7 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
             bail!("slug must be lower-case ASCII words separated by hyphens");
         }
     }
+    let into = q.into.as_deref().map(research_relative).transpose()?;
     let project = project_dir(&q.project)?;
     let provenance_project = source_path(&q.project, &std::env::current_dir()?)?;
     let content = match q.input.as_deref() {
@@ -349,6 +393,10 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
     let research = safe_research(&project, true)?;
     let manifest = research.join("_manifest.jsonl");
     let _lock = crate::register::lock_registry(&research.join("manifest"))?;
+    let destination = match into {
+        Some(path) => research_path(&research, path, true)?,
+        None => research.clone(),
+    };
     let base = format!(
         "{}-{}",
         &created[..10],
@@ -361,7 +409,7 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
         } else {
             format!("{base}-{n}")
         };
-        let file = research.join(format!("{name}.md"));
+        let file = destination.join(format!("{name}.md"));
         let copied = artefact
             .as_ref()
             .filter(|p| !p.starts_with(&project))
@@ -375,7 +423,7 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
                 } else {
                     ""
                 };
-                research.join(format!("{name}{suffix}.{ext}"))
+                destination.join(format!("{name}{suffix}.{ext}"))
             });
         let copy_free = match &copied {
             Some(path) => {
@@ -418,7 +466,7 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
         }
     }
     let name = file.file_name().unwrap().to_str().unwrap();
-    match crate::event_seed::create_exclusive(&research, name, |f| {
+    match crate::event_seed::create_exclusive(&destination, name, |f| {
         f.write_all(markdown.as_bytes())?;
         f.sync_all()
     }) {
@@ -432,7 +480,7 @@ pub(crate) fn capture(engine: &Engine, q: &CaptureQuery) -> Result<Reply<Capture
         }
     }
     let receipt = CaptureReceipt {
-        file: path_text(Path::new(name))?,
+        file: path_text(file.strip_prefix(&research)?)?,
         kind: q.kind.clone(),
         title: q.title.clone(),
         created,
@@ -625,13 +673,137 @@ fn receipts(project: &str) -> Result<Vec<CaptureReceipt>> {
         .collect()
 }
 
+/// Record an already completed move. Reads never repair the manifest implicitly.
+pub(crate) fn moved(project: &str, old: &str, new: &str) -> Result<CaptureList> {
+    let old = research_relative(old)?;
+    let new = research_relative(new)?;
+    let research = safe_research(&project_dir(project)?, false)?;
+    if !research.is_dir() {
+        bail!("research directory must exist");
+    }
+    let _lock = crate::register::lock_registry(&research.join("manifest"))?;
+    let old_path = research_path(&research, old, false)?;
+    let new_path = research_path(&research, new, false)?;
+    if fs::symlink_metadata(&old_path).is_ok() {
+        bail!("old capture still exists; move the file before updating its receipt");
+    }
+    if !new_path.is_file() {
+        bail!("new capture must exist and be a file");
+    }
+    let manifest = research.join("_manifest.jsonl");
+    let meta = fs::symlink_metadata(&manifest)?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        bail!("manifest must be a regular file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() != 1 {
+            bail!("manifest must not have hard links");
+        }
+    }
+    let old = path_text(old)?;
+    let new = path_text(new)?;
+    let text = fs::read_to_string(&manifest)?;
+    let mut found = false;
+    let mut updated = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            updated.push_str(line);
+        } else {
+            let mut row: CaptureReceipt = serde_json::from_str(line)?;
+            if row.file == new {
+                bail!("new path already has a receipt");
+            }
+            if row.file == old {
+                if found {
+                    bail!("old path has multiple receipts");
+                }
+                row.file = new.clone();
+                updated.push_str(&serde_json::to_string(&row)?);
+                found = true;
+            } else {
+                updated.push_str(line);
+            }
+        }
+        updated.push('\n');
+    }
+    if !found {
+        bail!("old path has no receipt");
+    }
+    crate::register::write_atomic(&manifest, &updated, |from, to| fs::rename(from, to))?;
+    list(project)
+}
+
+fn research_suffix(path: &Path) -> Option<PathBuf> {
+    // Keep all subfolders below the research root in the identity.
+    let mut suffix = None;
+    let mut tail = PathBuf::new();
+    for part in path.components() {
+        if suffix.is_none() && part.as_os_str() == "research" {
+            tail.clear();
+            suffix = Some(PathBuf::new());
+        } else if suffix.is_some() {
+            tail.push(part);
+            suffix = Some(tail.clone());
+        }
+    }
+    suffix
+}
+
+fn mentions_research(line: &str, referencing: &Path, requested: &Path) -> bool {
+    let absolute = requested.is_absolute();
+    let identity = if absolute {
+        research_suffix(requested)
+    } else {
+        Some(
+            requested
+                .strip_prefix("research")
+                .unwrap_or(requested)
+                .to_path_buf(),
+        )
+    };
+    // Enclosed Markdown destinations may contain spaces; ordinary prose paths
+    // are also considered as individual tokens.
+    line.split(|c: char| "\"'`()[]<>{},;=|".contains(c))
+        .map(str::trim)
+        .chain(line.split(|c: char| c.is_whitespace() || "\"'`()[]<>{},;=|".contains(c)))
+        .filter(|s| !s.is_empty())
+        .any(|token| {
+            let token = token.split(['#', '?']).next().unwrap();
+            let decoded = percent_encoding::percent_decode_str(token).decode_utf8_lossy();
+            let candidate = Path::new(decoded.as_ref());
+            let resolved = source_path(decoded.as_ref(), referencing.parent().unwrap()).ok();
+            if absolute && resolved.as_deref() == Some(requested) {
+                return true;
+            }
+            let Some(identity) = identity.as_deref() else {
+                return false;
+            };
+            // Research-relative shorthand is exact, never a basename substring.
+            if !candidate.is_absolute()
+                && (candidate == identity
+                    || candidate.strip_prefix("research").ok() == Some(identity))
+            {
+                return true;
+            }
+            !absolute && resolved.as_deref().and_then(research_suffix).as_deref() == Some(identity)
+        })
+}
+
 pub(crate) fn where_used(registry: &Registry, file: &str) -> Result<CaptureUsages> {
     let requested = file.to_owned();
-    let file = Path::new(file)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .context("where-used needs a file name")?;
+    let file = Path::new(file);
+    if file.file_name().is_none() {
+        bail!("where-used needs a file path");
+    }
+    let normal = if file.exists() {
+        fs::canonicalize(file)?
+    } else if file.is_absolute() {
+        source_path(&requested, Path::new("/"))?
+    } else {
+        research_relative(&requested)?.to_path_buf()
+    };
     let mut hits = BTreeMap::new();
     let mut skipped = std::collections::BTreeSet::new();
     for corpus in registry
@@ -685,7 +857,7 @@ pub(crate) fn where_used(registry: &Registry, file: &str) -> Result<CaptureUsage
                 }
             };
             for (i, line) in text.lines().enumerate() {
-                if line.contains(file) {
+                if mentions_research(line, Path::new(&path), &normal) {
                     hits.insert(
                         (path.clone(), i + 1),
                         CaptureUsage {

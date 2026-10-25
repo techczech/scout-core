@@ -1296,15 +1296,22 @@ Library: `scout_corpus::api::remove_corpus(id, keep_index) -> Result<Removed>`, 
 ```
 scout capture --project <folder> --kind <kind> --title "<title>"
               [--prompt "<text>"] [--source <scout:id|url|file:path>]... [--artefact <path>]
-              [--slug <slug>] [--by <who>] [--json] (<file.md> | -)
+              [--into <subpath>] [--slug <slug>] [--by <who>] [--json] (<file.md> | -)
 scout capture --list --project <folder> [--json]
 scout capture --where-used <file> [--json]
+scout capture --project <folder> --moved <old> <new> [--json]
 ```
 
 Capture deliberately writes source material: one reusable unit in
 `<project>/research/<UTC-yyyy-mm-dd>-<slug>.md`. It is the explicit exception to
 the read-only query/index contract. The project must already be a directory;
 `research/` is created when absent and must be a real directory, not a symlink.
+`--into <subpath>` creates a destination below `research/`, for example
+`--into literature/notes`. Absolute paths, `..` components and symlink components
+(including dangling links) are refused. External artefacts are copied beside
+the nested stub. There is still only one root manifest and lock; each receipt's
+`file` is relative to `research/`, such as `literature/notes/<name>.md`.
+Old flat receipt paths need no migration.
 Slugs derive from the title (ASCII lower case, accents dropped, hyphens between
 words), capped at 60 characters at a hyphen boundary (or 60 characters for a single longer word). An explicit `--slug` must have that form and be at most 60 characters. Clashes get `-2`, `-3`, and so on;
 existing files are never overwritten.
@@ -1341,7 +1348,8 @@ a copied sibling is `research/<name>`; an existing in-project file keeps its
 project-relative path. App callers may pass artefacts only from their project
 or vault and must enforce that boundary before spawning capture.
 
-`research/_manifest.jsonl` is an append-only receipt, not search truth. Each
+`research/_manifest.jsonl` records receipts, not search truth. Capture appends;
+only the explicit `--moved` command rewrites an existing path. Each
 line is staged in a synced temporary file, then appended under a file lock in
 one write; a partial append is rolled back. `by` defaults to `verb`, accepting
 `verb`, `agent`, `app:talkweaver`, `app:writeflex`. The lock is
@@ -1378,7 +1386,12 @@ object with `--json` (`entries` is empty when the manifest is absent):
 
 `--where-used` searches only registered `markdown-folder` corpora, honouring
 include/exclude globs (including outlines and
-pieces that lack the corpus's required metadata) for the literal file name.
+pieces that lack the corpus's required metadata). The input is an existing
+file path (absolute or relative to the current directory), or a research-relative
+path such as `literature/notes/example.md`. Matches use complete path tokens,
+including Markdown links and percent-encoded destinations, resolved relative to
+the referencing file or to `research/`. A nested capture never matches its bare
+basename; `a/example.md` and `b/example.md` stay distinct.
 Hidden folders and `research/` are skipped. Matches are de-duplicated across
 nested corpora, ordered by absolute file path and then one-based line number.
 Unreadable entries and non-UTF-8 files are skipped and counted in `skipped`;
@@ -1389,8 +1402,19 @@ object with `hits` empty when unused. No hits returns exit 1:
 {"schema_version":1,"file":"2026-10-20-hebb.md","hits":[{"file":"/absolute/vault/talk/talk-outline.md","line":12,"text":"See research/2026-10-20-hebb.md"}],"skipped":0}
 ```
 
+After a manual move within `research/`, `--moved <old> <new>` updates the matching
+receipt's `file`. Both arguments are research-relative paths with the same path
+and symlink guards as capture destinations. The old file must be absent, the new
+file must exist, and exactly one old receipt must exist with no receipt already
+using the new path. A symlinked or hard-linked manifest is refused. The rewrite
+is staged, synced and atomically replaced under the root manifest lock; other
+receipt lines are preserved. JSON returns the same `CaptureList` shape as
+`--list`; human output prints its receipts as JSONL. This command does not move
+files, alter provenance or links, or rebuild indexes. Listing never repairs
+paths automatically.
+
 Facade: `Engine::capture(&CaptureQuery)`, `Engine::capture_list(project)`,
-`Engine::capture_where_used(file)` return the usual `Reply`. Apps pass Markdown
+`Engine::capture_where_used(file)` and `Engine::capture_moved(project, old, new)` return the usual `Reply`. Apps pass Markdown
 in `CaptureQuery.body` with `input: None`; CLI input paths and `-` are read
 inside the same module. `Engine::for_capture()` loads the user registry and
 index directory, accepting a missing registry as an empty one. The CLI attaches

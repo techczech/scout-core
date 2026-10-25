@@ -789,6 +789,10 @@ impl Engine {
         crate::capture::list(project).map(Reply::new)
     }
 
+    pub fn capture_moved(&self, project: &str, old: &str, new: &str) -> Result<Reply<CaptureList>> {
+        crate::capture::moved(project, old, new).map(Reply::new)
+    }
+
     pub fn capture_where_used(&self, file: &str) -> Result<Reply<CaptureUsages>> {
         crate::capture::where_used(self.registry(), file).map(Reply::new)
     }

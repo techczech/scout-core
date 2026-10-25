@@ -223,7 +223,11 @@ fn list_and_where_used_read_receipts_and_outline_mentions() {
         format!("# Talk\n\nSee research/{file}\n"),
     )
     .unwrap();
-    fs::write(t.path().join("vault/piece.md"), format!("Reuse {file}\n")).unwrap();
+    fs::write(
+        t.path().join("vault/piece.md"),
+        format!("Reuse talk/research/{file}\n"),
+    )
+    .unwrap();
     let hits = e.capture_where_used(&r.file).unwrap().body.hits;
     assert_eq!(hits.len(), 2);
     assert!(hits
@@ -547,4 +551,193 @@ fn artefact_stem_and_stub_clashes_are_case_insensitive() {
         .unwrap()
         .ends_with("-case-2-file.Md"));
     assert_eq!(fs::read_to_string(planted).unwrap(), "untouched");
+}
+
+#[test]
+fn nested_capture_receipts_and_artefacts_share_one_root_manifest() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let mut value = serde_json::to_value(request(&project)).unwrap();
+    value["into"] = "literature/deep".into();
+    let external = t.path().join("widget.html");
+    fs::write(&external, "widget").unwrap();
+    value["artefact"] = external.to_str().unwrap().into();
+    let q: CaptureQuery = serde_json::from_value(value).unwrap();
+    let r = e.capture(&q).unwrap().body;
+    assert_eq!(
+        Path::new(&r.file).parent().unwrap(),
+        project
+            .canonicalize()
+            .unwrap()
+            .join("research/literature/deep")
+    );
+    assert!(r.manifest && r.indexed);
+    assert!(Path::new(&r.file).with_extension("html").exists());
+    let entries = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(
+        entries[0].file,
+        Path::new(&r.file)
+            .strip_prefix(project.canonicalize().unwrap().join("research"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(!project
+        .join("research/literature/deep/_manifest.jsonl")
+        .exists());
+    let flat = e.capture(&request(&project)).unwrap().body;
+    let entries = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[1].file,
+        Path::new(&flat.file).file_name().unwrap().to_str().unwrap()
+    );
+}
+
+#[test]
+fn nested_capture_refuses_parent_absolute_and_symlink_paths() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    for into in ["../escape", "ok/../../escape", "/absolute", "ok/../escape"] {
+        let mut value = serde_json::to_value(request(&project)).unwrap();
+        value["into"] = into.into();
+        assert!(
+            e.capture(&serde_json::from_value(value).unwrap()).is_err(),
+            "{into}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(project.join("research")).unwrap();
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("research/link")).unwrap();
+        let mut value = serde_json::to_value(request(&project)).unwrap();
+        value["into"] = "link/deep".into();
+        assert!(e.capture(&serde_json::from_value(value).unwrap()).is_err());
+        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn where_used_distinguishes_nested_names_and_relative_links() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    for folder in ["a", "b"] {
+        fs::create_dir_all(project.join("research").join(folder)).unwrap();
+        fs::write(
+            project.join(format!("research/{folder}/same.md")),
+            "capture",
+        )
+        .unwrap();
+    }
+    fs::create_dir(project.join("chapters")).unwrap();
+    fs::write(project.join("chapters/one.md"), "[A](../research/a/same.md)\nresearch/b/same.md\na/same.md\nsame.md\nresearch/a/same.md.bak\nother/a/same.md\n").unwrap();
+    fs::write(project.join("research/self.md"), "a/same.md").unwrap();
+    let a = project.join("research/a/same.md");
+    let hits = e.capture_where_used(a.to_str().unwrap()).unwrap().body.hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![1, 3]);
+    let hits = e.capture_where_used("b/same.md").unwrap().body.hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![2]);
+}
+
+#[test]
+fn moved_updates_only_the_matching_receipt_and_never_repairs_on_read() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let q = request(&project);
+    let first = e.capture(&q).unwrap().body;
+    e.capture(&q).unwrap();
+    let research = project.canonicalize().unwrap().join("research");
+    let old = Path::new(&first.file)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    fs::create_dir_all(research.join("a/b")).unwrap();
+    fs::rename(&first.file, research.join("a/b/moved.md")).unwrap();
+    let before = fs::read_to_string(research.join("_manifest.jsonl")).unwrap();
+    let rows = e.capture_list(&q.project).unwrap().body.entries;
+    assert_eq!(rows[0].file, old);
+    assert_eq!(
+        fs::read_to_string(research.join("_manifest.jsonl")).unwrap(),
+        before
+    );
+    let after = e
+        .capture_moved(&q.project, old, "a/b/moved.md")
+        .unwrap()
+        .body
+        .entries;
+    let mut expected = rows.clone();
+    expected[0].file = "a/b/moved.md".into();
+    assert_eq!(after, expected);
+    assert_eq!(
+        fs::read_to_string(research.join("_manifest.jsonl"))
+            .unwrap()
+            .lines()
+            .nth(1),
+        before.lines().nth(1)
+    );
+    let before = fs::read(research.join("_manifest.jsonl")).unwrap();
+    for (old, new) in [
+        ("a/b/moved.md", "a/b/moved.md"),
+        ("../bad.md", "a/b/moved.md"),
+        ("missing.md", "/escape.md"),
+        ("missing.md", "a/b/moved.md"),
+    ] {
+        assert!(e.capture_moved(&q.project, old, new).is_err());
+        assert_eq!(fs::read(research.join("_manifest.jsonl")).unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn moved_refuses_symlink_destinations_and_manifests() {
+    use std::os::unix::fs::symlink;
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    let q = request(&project);
+    let r = e.capture(&q).unwrap().body;
+    let research = project.join("research");
+    let old = Path::new(&r.file).file_name().unwrap().to_str().unwrap();
+    fs::rename(&r.file, research.join("moved.md")).unwrap();
+    symlink(research.join("moved.md"), research.join("link.md")).unwrap();
+    symlink(&research, research.join("alias")).unwrap();
+    let manifest = research.join("_manifest.jsonl");
+    let before = fs::read(&manifest).unwrap();
+    for new in ["link.md", "alias/moved.md"] {
+        assert!(e.capture_moved(&q.project, old, new).is_err());
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+    }
+    let saved = t.path().join("saved-manifest");
+    fs::rename(&manifest, &saved).unwrap();
+    symlink(&saved, &manifest).unwrap();
+    assert!(e.capture_moved(&q.project, old, "moved.md").is_err());
+    assert_eq!(fs::read(saved).unwrap(), before);
+}
+
+#[test]
+fn where_used_accepts_markdown_paths_with_spaces_and_encoded_links() {
+    let t = tempfile::tempdir().unwrap();
+    let e = engine(t.path());
+    let project = t.path().join("vault/talk");
+    fs::create_dir_all(project.join("research/with spaces")).unwrap();
+    let file = project.join("research/with spaces/note.md");
+    fs::write(&file, "capture").unwrap();
+    fs::write(
+        project.join("use.md"),
+        "[Note](<research/with spaces/note.md>)\n[Note](research/with%20spaces/note.md#section)\n",
+    )
+    .unwrap();
+    let hits = e
+        .capture_where_used(file.to_str().unwrap())
+        .unwrap()
+        .body
+        .hits;
+    assert_eq!(hits.iter().map(|h| h.line).collect::<Vec<_>>(), vec![1, 2]);
 }
